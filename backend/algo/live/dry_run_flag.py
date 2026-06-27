@@ -73,30 +73,42 @@ async def is_armed(user_id: UUID, redis_client: Any) -> bool:
 
 
 async def arm(user_id: UUID, redis_client: Any) -> bool:
-    """Set the per-user dry-run flag to true. Returns the new state."""
+    """Set the per-user dry-run flag to true. Returns the new state.
+
+    Raises the underlying exception on a Redis write failure so the
+    calling route returns 5xx — the caller must never silently succeed
+    when the flag did not persist.
+    """
     if redis_client is None:
         return _env_default()
     try:
         await redis_client.set(_key(user_id), "1")
-    except Exception as exc:  # noqa: BLE001
-        _logger.warning(
-            "dry_run_flag: arm failed user=%s: %s",
-            user_id, exc,
+    except Exception as exc:
+        _logger.error(
+            "dry_run_flag: arm write failed user=%s",
+            user_id,
+            exc_info=True,
         )
-        return _env_default()
+        raise
     return True
 
 
 async def disarm(user_id: UUID, redis_client: Any) -> bool:
-    """Set the per-user dry-run flag to false. Returns False."""
+    """Set the per-user dry-run flag to false. Returns False.
+
+    Raises the underlying exception on a Redis write failure so the
+    calling route returns 5xx — the caller must never silently succeed
+    when the flag did not persist.
+    """
     if redis_client is None:
         return _env_default()
     try:
         await redis_client.set(_key(user_id), "0")
-    except Exception as exc:  # noqa: BLE001
-        _logger.warning(
-            "dry_run_flag: disarm failed user=%s: %s",
-            user_id, exc,
+    except Exception as exc:
+        _logger.error(
+            "dry_run_flag: disarm write failed user=%s",
+            user_id,
+            exc_info=True,
         )
-        return _env_default()
+        raise
     return False

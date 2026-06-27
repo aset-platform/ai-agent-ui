@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+# Minimum annualised realized vol (5%). Sub-5% vol is clamped to this
+# floor so that near-zero vol does not blow up notional sizing.
+_MIN_REALIZED_VOL = Decimal("0.05")
+
 
 def _is_invalid(d: Decimal) -> bool:
     return d.is_nan() or d <= 0
@@ -25,15 +29,16 @@ def vol_target_qty(
     """Return integer share qty.
 
     Inputs:
-      * ``target_portfolio_vol_pct`` — e.g. ``Decimal("1.5")`` for 1.5%
-      * ``nav`` — total portfolio NAV in INR
-      * ``stock_price`` — current price
-      * ``stock_realized_vol_annual`` — annualised realized vol e.g.
+      * ``target_portfolio_vol_pct`` -- e.g. ``Decimal("1.5")`` for 1.5%
+      * ``nav`` -- total portfolio NAV in INR
+      * ``stock_price`` -- current price
+      * ``stock_realized_vol_annual`` -- annualised realized vol e.g.
         ``Decimal("0.30")`` for 30%
-      * ``n_positions_target`` — diversification target (≥ 1)
+      * ``n_positions_target`` -- diversification target (>= 1)
 
-    Returns 0 on any invalid input (NaN, zero, negative) — sizer
-    treats this as "skip the trade".
+    Returns 0 on any invalid input (NaN, zero, negative) -- sizer
+    treats this as "skip the trade". Sub-5% vol is clamped to
+    ``_MIN_REALIZED_VOL`` to prevent oversized positions.
     """
     if (
         n_positions_target <= 0
@@ -43,10 +48,9 @@ def vol_target_qty(
         or _is_invalid(stock_realized_vol_annual)
     ):
         return 0
+    # Vol floor: clamp sub-5% vol to prevent notional blow-up.
+    vol = max(stock_realized_vol_annual, _MIN_REALIZED_VOL)
     sqrt_n = Decimal(n_positions_target).sqrt()
     per_pos_vol_budget = target_portfolio_vol_pct / sqrt_n
-    notional = (
-        (per_pos_vol_budget / Decimal("100") * nav)
-        / stock_realized_vol_annual
-    )
+    notional = (per_pos_vol_budget / Decimal("100") * nav) / vol
     return int(notional / stock_price)

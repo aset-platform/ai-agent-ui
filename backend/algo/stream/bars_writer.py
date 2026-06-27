@@ -1,21 +1,32 @@
-"""Append-only writer for ``algo.intraday_bars``.
+"""Idempotent writer for ``algo.intraday_bars``.
 
-Single Iceberg commit on flush. Mirrors the pattern from
-``backend/algo/backtest/event_writer.py``.
+Each flush does a scoped pre-delete of exactly the
+(ticker, interval_sec, bar_open_ts_ns) triplets in the batch,
+then appends, all under ``retry_iceberg_op``.  Re-flushing the
+same batch (late tick, crash-replay, sweep re-trigger) therefore
+yields no duplicate rows.
+
+SAFETY: the delete predicate is built as an OR of per-triplet
+And(EqualTo, EqualTo, EqualTo) — never a cross-product
+In(tickers) x In(opens), which would silently delete rows NOT in
+this batch when multiple tickers share the same bar_open_ts_ns
+bucket.
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from functools import reduce
 from typing import Any
 
 import pyarrow as pa
+from pyiceberg.expressions import And, EqualTo, Or
 
 from backend.algo.stream.types import Bar
-from stocks.repository import StockRepository
 
 _logger = logging.getLogger(__name__)
 
+_ALGO_INTRADAY_BARS_TABLE = "algo.intraday_bars"
 
 # Explicit PyArrow schema with ``nullable=`` mirroring the Iceberg
 # ``required`` flags in :func:`backend.algo.iceberg_init
@@ -61,16 +72,68 @@ def _row(bar: Bar) -> dict[str, Any]:
     }
 
 
+def _dedup_predicate(bars: list[Bar]):
+    """Build an exact OR-of-Ands predicate for the distinct
+    (ticker, interval_sec, bar_open_ts_ns) triplets in *bars*.
+
+    Returns ``None`` when *bars* is empty (caller should skip the
+    delete).  Each term is an exact three-column conjunction —
+    never a cross-product In() that could match rows outside the
+    batch.
+    """
+    keys = sorted(
+        {(b.ticker, b.interval_sec, b.bar_open_ts_ns) for b in bars},
+    )
+    if not keys:
+        return None
+    terms = [
+        And(
+            EqualTo("ticker", t),
+            And(
+                EqualTo("interval_sec", i),
+                EqualTo("bar_open_ts_ns", b),
+            ),
+        )
+        for (t, i, b) in keys
+    ]
+    return reduce(Or, terms)
+
+
 def flush_bars(bars: list[Bar]) -> None:
-    """Single Iceberg commit. No-op on empty list."""
+    """Idempotent Iceberg commit.  No-op on empty list.
+
+    Scoped pre-delete of exactly the incoming triplets, then
+    append, all wrapped in ``retry_iceberg_op`` for commit-conflict
+    resilience.
+    """
     if not bars:
         return
-    repo = StockRepository()
+
+    from backend.algo._iceberg_retry import retry_iceberg_op
+    from backend.db.duckdb_engine import invalidate_metadata
+
     arrow = pa.Table.from_pylist(
         [_row(b) for b in bars],
         schema=_INTRADAY_BARS_ARROW_SCHEMA,
     )
-    repo._retry_commit(  # noqa: SLF001
-        "algo.intraday_bars", "append", arrow,
-    )
+    predicate = _dedup_predicate(bars)
+
+    def _do_upsert() -> None:
+        from stocks.create_tables import _get_catalog
+
+        cat = _get_catalog()
+        tbl = cat.load_table(_ALGO_INTRADAY_BARS_TABLE)
+        if predicate is None:
+            tbl.append(arrow)
+            return
+        try:
+            tbl.delete(predicate)
+        except Exception as exc:  # first run on empty table is fine
+            _logger.debug(
+                "intraday_bars pre-delete skipped: %s", exc,
+            )
+        tbl.append(arrow)
+
+    retry_iceberg_op(_ALGO_INTRADAY_BARS_TABLE, _do_upsert)
+    invalidate_metadata(_ALGO_INTRADAY_BARS_TABLE)
     _logger.info("flushed %d intraday_bars rows", len(bars))

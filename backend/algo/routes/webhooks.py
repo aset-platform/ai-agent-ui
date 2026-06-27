@@ -323,22 +323,23 @@ async def kite_postback(request: Request) -> dict:
     # surface the outcome. Without this the user sees the order
     # submission but no resolution, even after Kite confirms.
     status = str(payload.get("status", "")).upper()
+    matched_strategy_id: Any = None
+    _side = str(payload.get("transaction_type", "")).upper()
+    _sym = str(payload.get("tradingsymbol", ""))
+    _qty = int(payload.get("filled_quantity", 0) or 0)
+    _avg = float(payload.get("average_price", 0) or 0)
     if status in ("COMPLETE", "REJECTED", "CANCELLED") and (
         our_user_id is not None
     ):
         try:
-            await _reconcile_terminal_with_in_flight(
+            matched_strategy_id = await _reconcile_terminal_with_in_flight(
                 user_id=our_user_id,
                 status=status,
                 kite_order_id=str(payload.get("order_id", "")),
-                tradingsymbol=str(
-                    payload.get("tradingsymbol", ""),
-                ),
-                side=str(payload.get("transaction_type", "")),
-                qty=int(payload.get("filled_quantity", 0) or 0),
-                avg_price=float(
-                    payload.get("average_price", 0) or 0,
-                ),
+                tradingsymbol=_sym,
+                side=_side,
+                qty=_qty,
+                avg_price=_avg,
                 status_message=str(
                     payload.get("status_message")
                     or payload.get("status_message_raw")
@@ -352,6 +353,66 @@ async def kite_postback(request: Request) -> dict:
                 "order_id=%s status=%s: %s",
                 payload.get("order_id", ""), status, exc,
                 exc_info=True,
+            )
+
+    # Trailing stop: on COMPLETE BUY, initialise manager + place GTT.
+    if (
+        status == "COMPLETE"
+        and _side == "BUY"
+        and our_user_id is not None
+        and matched_strategy_id is not None
+        and _qty > 0
+        and _avg > 0
+    ):
+        try:
+            from backend.algo.paper.supervisor import get_supervisor
+            rt = get_supervisor().get_live_runtime(
+                user_id=our_user_id,
+                strategy_id=matched_strategy_id,
+            )
+            if rt is not None:
+                # Ticker in Kite postbacks is bare (e.g. "INFY").
+                # LiveRuntime uses ".NS" suffix — reconstruct it.
+                _ticker = _sym + ".NS" if "." not in _sym else _sym
+                rt.on_buy_fill_trailing(
+                    ticker=_ticker,
+                    fill_price=_avg,
+                    qty=_qty,
+                )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "kite postback: trailing GTT init failed for "
+                "%s: %s",
+                _sym, exc, exc_info=True,
+            )
+
+    # Trailing stop: on COMPLETE SELL, clear trailing state.
+    if (
+        status == "COMPLETE"
+        and _side == "SELL"
+        and our_user_id is not None
+        and matched_strategy_id is not None
+    ):
+        try:
+            from backend.algo.paper.supervisor import get_supervisor
+            rt = get_supervisor().get_live_runtime(
+                user_id=our_user_id,
+                strategy_id=matched_strategy_id,
+            )
+            if rt is not None:
+                _ticker = _sym + ".NS" if "." not in _sym else _sym
+                _sell_reason = (
+                    matched_entry.get("reason")
+                    if matched_entry else None
+                )
+                rt._on_sell_fill_trailing(
+                    _ticker, reason=_sell_reason
+                )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "kite postback: trailing SELL cleanup failed "
+                "for %s: %s",
+                _sym, exc, exc_info=True,
             )
 
     await asyncio.to_thread(flush_events, rows_to_persist)
@@ -385,7 +446,7 @@ async def _reconcile_terminal_with_in_flight(
     avg_price: float,
     status_message: str,
     rows_to_persist: list[dict],
-) -> None:
+) -> UUID | None:
     """Find the matching in-flight order across this user's
     live runs, transition it to the terminal status, and append
     the matching derived event to ``rows_to_persist``.
@@ -549,6 +610,7 @@ async def _reconcile_terminal_with_in_flight(
             "(panic-close or out-of-band order)",
             kite_order_id, status, tradingsymbol, qty,
         )
+    return matched_strategy_id
 
 
 def create_webhooks_router() -> APIRouter:

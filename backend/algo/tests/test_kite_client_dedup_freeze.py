@@ -173,15 +173,24 @@ class TestPreSubmitDedup:
     def test_within_minute_duplicate_blocked(
         self, kite_client, events_buffer,
     ):
-        """Same params inside the same minute → second call raises."""
+        """Same (symbol, side) twice in the same minute → blocked.
+
+        Task 1.4 (content-addressed key): dedup is keyed on
+        (user, strategy, symbol, side, minute_bucket) — NOT on
+        internal_order_id and NOT on qty. The second submission in
+        the same minute hits the same key even though each call
+        generates a fresh internal_order_id.
+        """
         client, mock_kc = kite_client
         mock_kc.place_order.return_value = {"order_id": "K1"}
-        # First call succeeds.
-        _call_place(client, events_buffer)
-        mock_kc.place_order.assert_called_once()
-        # Second call (same minute, same params) blocked.
-        with pytest.raises(DuplicateOrderError):
+        # Pin the clock so both calls land in the same minute bucket.
+        with patch("time.time", return_value=1_700_000_000.0):
+            # First call succeeds.
             _call_place(client, events_buffer)
+            mock_kc.place_order.assert_called_once()
+            # Second call (same symbol/side, same minute) → blocked.
+            with pytest.raises(DuplicateOrderError):
+                _call_place(client, events_buffer)
         # SDK only called once total (no second submission).
         assert mock_kc.place_order.call_count == 1
         # order_duplicate_blocked event present.
@@ -195,23 +204,21 @@ class TestPreSubmitDedup:
         assert p["side"] == "BUY"
         assert p["qty"] == 8
 
-    def test_cross_minute_same_params_both_succeed(
+    def test_different_minute_both_succeed(
         self, kite_client, events_buffer,
     ):
-        """Bumping the minute_bucket lets the second call through."""
+        """Same (symbol, side) across a minute boundary → both pass.
+
+        Task 1.4 (content-addressed key): the minute_bucket differs
+        across the boundary, so the two submissions resolve to
+        different keys and both go through. internal_order_id is
+        irrelevant to the key.
+        """
         client, mock_kc = kite_client
         mock_kc.place_order.return_value = {"order_id": "K1"}
-        # First call at t0.
-        with patch(
-            "backend.algo.broker.redis_keys.time.time",
-            return_value=1_700_000_000.0,
-        ):
+        with patch("time.time", return_value=1_700_000_000.0):
             _call_place(client, events_buffer)
-        # Second call 70s later → different minute bucket.
-        with patch(
-            "backend.algo.broker.redis_keys.time.time",
-            return_value=1_700_000_070.0,
-        ):
+        with patch("time.time", return_value=1_700_000_060.0):
             _call_place(client, events_buffer)
         assert mock_kc.place_order.call_count == 2
 

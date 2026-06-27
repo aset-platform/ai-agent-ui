@@ -47,6 +47,26 @@ class PaperSupervisor:
     def __init__(self) -> None:
         self._runs: dict[tuple[UUID, UUID], dict[str, Any]] = {}
 
+    def _guard_key(
+        self, key: tuple[UUID, UUID], strategy_id: UUID,
+    ) -> None:
+        """Raise RuntimeError if the key maps to a still-active run.
+
+        If an entry exists but its task is done (completed/failed/
+        cancelled), it is a stale terminal entry — pop it so the
+        caller can re-arm the (user, strategy).
+        """
+        entry = self._runs.get(key)
+        if entry is None:
+            return
+        task: asyncio.Task = entry["task"]
+        if not task.done():
+            raise RuntimeError(
+                f"Run already active for strategy {strategy_id}",
+            )
+        # Stale terminal entry — reap it so start_run can proceed.
+        self._runs.pop(key, None)
+
     async def start_run(
         self,
         *,
@@ -57,13 +77,11 @@ class PaperSupervisor:
         kill_switch_active: bool = False,
     ) -> dict[str, Any]:
         """Spawn a PaperRuntime task. Idempotent — if the same
-        (user, strategy) is already running, raises RuntimeError.
+        (user, strategy) is actively running, raises RuntimeError.
+        A completed or crashed run may be re-armed.
         """
         key = (user_id, strategy.id)
-        if key in self._runs:
-            raise RuntimeError(
-                f"Run already active for strategy {strategy.id}",
-            )
+        self._guard_key(key, strategy.id)
 
         runtime = PaperRuntime(
             strategy=strategy,
@@ -89,6 +107,9 @@ class PaperSupervisor:
                         "user=%s strat=%s",
                         _uid_tag, _sid_tag,
                     )
+                    entry = self._runs.get(key)
+                    if entry is not None and entry["task"] is t:
+                        entry["terminal_status"] = "cancelled"
                     return
                 exc = t.exception()
                 if exc is not None:
@@ -97,6 +118,9 @@ class PaperSupervisor:
                         "user=%s strat=%s",
                         _uid_tag, _sid_tag, exc_info=exc,
                     )
+                    entry = self._runs.get(key)
+                    if entry is not None and entry["task"] is t:
+                        entry["terminal_status"] = "failed"
                     return
                 fills = t.result()
                 _logger.info(
@@ -104,6 +128,9 @@ class PaperSupervisor:
                     "user=%s strat=%s fills=%s",
                     _uid_tag, _sid_tag, fills,
                 )
+                entry = self._runs.get(key)
+                if entry is not None and entry["task"] is t:
+                    entry["terminal_status"] = "completed"
             except Exception:  # noqa: BLE001
                 _logger.warning(
                     "PaperSupervisor: done callback failed",
@@ -152,10 +179,7 @@ class PaperSupervisor:
         from backend.algo.live.runtime import LiveRuntime
 
         key = (user_id, strategy.id)
-        if key in self._runs:
-            raise RuntimeError(
-                f"Run already active for strategy {strategy.id}",
-            )
+        self._guard_key(key, strategy.id)
 
         runtime = LiveRuntime(
             strategy=strategy,
@@ -170,6 +194,49 @@ class PaperSupervisor:
             ticker_to_token=ticker_to_token,
         )
         task = asyncio.create_task(runtime.run(source))
+
+        _uid_tag = str(user_id)
+        _sid_tag = str(strategy.id)
+
+        def _on_done(t: asyncio.Task) -> None:
+            try:
+                if t.cancelled():
+                    _logger.info(
+                        "PaperSupervisor: LIVE run cancelled "
+                        "user=%s strat=%s",
+                        _uid_tag, _sid_tag,
+                    )
+                    entry = self._runs.get(key)
+                    if entry is not None and entry["task"] is t:
+                        entry["terminal_status"] = "cancelled"
+                    return
+                exc = t.exception()
+                if exc is not None:
+                    _logger.error(
+                        "PaperSupervisor: LIVE run raised "
+                        "user=%s strat=%s",
+                        _uid_tag, _sid_tag, exc_info=exc,
+                    )
+                    entry = self._runs.get(key)
+                    if entry is not None and entry["task"] is t:
+                        entry["terminal_status"] = "failed"
+                    return
+                fills = t.result()
+                _logger.info(
+                    "PaperSupervisor: LIVE run completed "
+                    "user=%s strat=%s fills=%s",
+                    _uid_tag, _sid_tag, fills,
+                )
+                entry = self._runs.get(key)
+                if entry is not None and entry["task"] is t:
+                    entry["terminal_status"] = "completed"
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "PaperSupervisor: LIVE done callback failed",
+                    exc_info=True,
+                )
+
+        task.add_done_callback(_on_done)
         self._runs[key] = {
             "user_id": user_id,
             "strategy_id": strategy.id,
@@ -215,27 +282,57 @@ class PaperSupervisor:
     def list_active(
         self, *, user_id: UUID,
     ) -> list[dict[str, Any]]:
-        """Return active runs for *user_id* as plain dicts."""
-        # Reap any task that completed since last call.
-        for key, entry in list(self._runs.items()):
-            task: asyncio.Task = entry["task"]
-            if task.done():
-                self._runs.pop(key, None)
-        return [
+        """Return runs for *user_id* as plain dicts.
+
+        Terminal runs (done) are reported with their final status on
+        this call, then reaped so subsequent calls don't see them.
+        This guarantees at least one GET /runs surfaces the terminal
+        status before the entry disappears.
+        """
+        # Build result rows FIRST (report), then reap done entries.
+        rows = [
             self._public_row(entry)
             for (uid, _sid), entry in self._runs.items()
             if uid == user_id
         ]
+        for key, entry in list(self._runs.items()):
+            task: asyncio.Task = entry["task"]
+            if task.done():
+                self._runs.pop(key, None)
+        return rows
+
+    def get_live_runtime(
+        self, *, user_id: UUID, strategy_id: UUID,
+    ) -> Any | None:
+        """Return the active LiveRuntime for (user, strategy), or None.
+
+        Returns None when: no run exists, the run is not live mode,
+        or the asyncio task has already completed.
+        """
+        key = (user_id, strategy_id)
+        entry = self._runs.get(key)
+        if entry is None:
+            return None
+        task: asyncio.Task = entry["task"]
+        if task.done():
+            return None
+        if entry.get("mode") != "live":
+            return None
+        return entry.get("runtime")
 
     @staticmethod
     def _public_row(entry: dict[str, Any]) -> dict[str, Any]:
         task: asyncio.Task = entry["task"]
+        if task.done():
+            status = entry.get("terminal_status", "completed")
+        else:
+            status = "running"
         return {
             "user_id": str(entry["user_id"]),
             "strategy_id": str(entry["strategy_id"]),
             "strategy_name": entry["strategy_name"],
             "started_at": entry["started_at"].isoformat(),
-            "status": "running" if not task.done() else "completed",
+            "status": status,
             "mode": entry.get("mode", "paper"),
             "dry_run": bool(entry.get("dry_run", False)),
         }

@@ -21,6 +21,7 @@ export interface LiveCaps {
   last_walkforward_run_id: string | null;
   cumulative_inr_today: number;
   orders_count_today: number;
+  gtt_limit_headroom_pct: number;
 }
 
 export interface UpsertCapsPayload {
@@ -28,6 +29,7 @@ export interface UpsertCapsPayload {
   max_orders_per_day: number;
   allowed_tickers: string[];
   last_walkforward_run_id?: string | null;
+  gtt_limit_headroom_pct?: number;
 }
 
 function capsKey(strategyId: string): string {

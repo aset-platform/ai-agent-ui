@@ -382,9 +382,16 @@ export interface WatchlistStockRow {
   sma_200: number | null;
   sma_50: number | null;
   sma_20: number | null;
+  current_sma_200: number | null;
+  current_sma_50: number | null;
+  current_sma_20: number | null;
   sharpe_ratio: number | null;
   atr_pct: number | null;
   rs_6m: number | null;
+  rs_3m: number | null;
+  return_3m: number | null;
+  blended_rs: number | null;
+  mdd_6m: number | null;
   dist_sma200: number | null;
   score: number | null;
 }

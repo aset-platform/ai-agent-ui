@@ -155,8 +155,9 @@ async def rebuild_all() -> dict[str, Any]:
                 await session.commit()
                 count += 1
             except Exception as exc:
-                _logger.warning(
-                    "rebuild_all: skipped user %s: %s", uid, exc,
+                _logger.error(
+                    "rebuild_all: skipped user %s: %s",
+                    uid, exc, exc_info=True,
                 )
 
     _logger.info(

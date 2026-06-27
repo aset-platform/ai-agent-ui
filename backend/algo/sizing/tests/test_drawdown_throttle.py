@@ -51,3 +51,29 @@ def test_compute_dd_below_peak() -> None:
 
 def test_compute_dd_empty_returns_zero() -> None:
     assert compute_dd_pct([]) == Decimal("0")
+
+
+# Guard 4 — peak <= 0 halt tests
+def test_compute_dd_zero_peak_returns_100() -> None:
+    """A curve whose peak is zero must return 100 (not 0) so that
+    dd_multiplier maps it to 0x (halt), not 1x (full size)."""
+    curve = [(date(2026, 5, 1), Decimal("0"))]
+    dd = compute_dd_pct(curve)
+    assert dd == Decimal("100")
+
+
+def test_compute_dd_negative_peak_returns_100() -> None:
+    """Negative peak NAV -> 100% DD -> halt."""
+    curve = [
+        (date(2026, 5, 1), Decimal("-5000")),
+        (date(2026, 5, 2), Decimal("-3000")),
+    ]
+    dd = compute_dd_pct(curve)
+    assert dd == Decimal("100")
+
+
+def test_zero_peak_halts_multiplier() -> None:
+    """End-to-end: zero-peak curve -> dd_multiplier == 0 (halt)."""
+    curve = [(date(2026, 5, 1), Decimal("0"))]
+    mult = dd_multiplier(compute_dd_pct(curve))
+    assert mult == Decimal("0")

@@ -16,7 +16,7 @@ from backend.algo.sizing.drawdown_throttle import (
     compute_dd_pct,
     dd_multiplier,
 )
-from backend.algo.sizing.vol_target import vol_target_qty
+from backend.algo.sizing.vol_target import _MIN_REALIZED_VOL, vol_target_qty
 
 _logger = logging.getLogger(__name__)
 
@@ -70,6 +70,8 @@ def _resolve_base_qty(
         vol = ctx.realized_vol_annual
         if vol.is_nan() or vol <= 0:
             return 0
+        # Vol floor: clamp sub-5% vol to prevent f_star blow-up.
+        vol = max(vol, _MIN_REALIZED_VOL)
         f_star = edge / (vol * vol)
         capital = (
             f_star
@@ -112,4 +114,13 @@ def compose_qty(qty_spec: dict, ctx: SizingContext) -> int:
     mult = dd_multiplier(compute_dd_pct(ctx.equity_curve))
     if mult == Decimal("0"):
         return 0
-    return int(Decimal(capped) * mult)
+    result = int(Decimal(capped) * mult)
+    if mult > Decimal("0") and capped > 0 and result == 0:
+        _logger.warning(
+            "sizing: %s DD-throttle rounded qty to 0"
+            " (capped=%d mult=%s) -- entry skipped",
+            ctx.ticker,
+            capped,
+            mult,
+        )
+    return result

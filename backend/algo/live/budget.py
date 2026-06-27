@@ -20,8 +20,10 @@ from uuid import UUID, uuid4
 
 from backend.algo.live.budget_repo import BudgetRepo
 from backend.algo.live.budget_types import (
+    TERMINAL_STATES,
     BudgetReservation,
     ReservationState,
+    TerminalStateError,
     UserBudget,
 )
 
@@ -31,10 +33,17 @@ _CACHE_TTL_S = 5
 
 
 def _session_factory():
-    """Lazy import — avoid circular dep with db.engine."""
-    from backend.db.engine import get_session_factory
+    """Return a loop-independent session factory.
 
-    return get_session_factory()
+    Uses disposable_pg_session (NullPool) so budget functions work
+    from both the uvicorn event loop (live runtime, FastAPI routes)
+    AND from the scheduler's asyncio.run() loop.  get_session_factory()
+    is bound to the uvicorn loop and raises "Future attached to a
+    different loop" when called from asyncio.run().
+    """
+    from backend.db.engine import disposable_pg_session
+
+    return disposable_pg_session
 
 
 def _cache_keys(user_id: UUID) -> tuple[str, str, str]:
@@ -52,6 +61,11 @@ def _invalidate_cache(user_id: UUID) -> None:
         c = get_cache()
         if c:
             c.invalidate_exact(*_cache_keys(user_id))
+            # Per-strategy active-reservation keys live under the
+            # same per-user prefix but carry a strategy_id we don't
+            # have here; glob-sweep them so a fresh reservation
+            # never reads a stale strategy total.
+            c.invalidate(f"cache:budget:user:{user_id}:strat_active:*")
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
             "budget cache invalidate failed: %s",
@@ -176,11 +190,55 @@ async def sum_active_reservations(
     return total
 
 
+async def sum_active_reservations_for_strategy(
+    user_id: UUID,
+    strategy_id: UUID,
+) -> Decimal:
+    """Active BUY reservation total for one strategy.
+
+    Feeds the runtime's deployed-capital calc (deployed = filled
+    positions + in-flight reservations) so two BUYs in one tick
+    can't both size against the same remaining max_inr (Critical
+    C4). Cache: 5s per (user, strategy); invalidated on every
+    reservation insert via ``_invalidate_cache`` (the key shares
+    the ``cache:budget:user:<uid>:`` prefix swept there).
+    """
+    from backend.cache import get_cache
+
+    c = get_cache()
+    key = (
+        f"cache:budget:user:{user_id}"
+        f":strat_active:{strategy_id}"
+    )
+    if c:
+        cached = c.get(key)
+        if cached is not None:
+            return Decimal(cached)
+
+    repo = BudgetRepo()
+    factory = _session_factory()
+    async with factory() as session:
+        total = await repo.sum_active_reservations_for_strategy(
+            session,
+            user_id=user_id,
+            strategy_id=strategy_id,
+        )
+    if c:
+        c.set(key, str(total), ttl=_CACHE_TTL_S)
+    return total
+
+
 async def fetch_kite_available_cash(
     user_id: UUID,
 ) -> Decimal:
-    """kite.margins.equity.available.cash; Decimal('inf')
-    on Kite error (fail-open)."""
+    """kite.margins.equity.available.cash; Decimal('0') on
+    Kite error (fail-closed — blocks new live orders until the
+    broker connection is restored).
+
+    Dry-run bypass lives at the call site in safety.py and is
+    unaffected: dry_run paths return Decimal('Infinity') there
+    so this function is never called for dry-run.
+    """
     from backend.cache import get_cache
 
     c = get_cache()
@@ -193,22 +251,28 @@ async def fetch_kite_available_cash(
     try:
         margins = await _kite_margins_for_user(user_id)
         # kc.margins("equity") returns the equity segment directly —
-        # no nested "equity" key. Use live_balance (consistent with the
-        # algo header CASH stat) — it includes intraday payin from sells
-        # and matches what Kite allows for new CNC orders. available.cash
-        # deducts CNC blocks separately which would double-count against
-        # our own open_pos_cost tracking.
+        # no nested "equity" key. Use live_balance (consistent with
+        # the algo header CASH stat) — it includes intraday payin
+        # from sells and matches what Kite allows for new CNC orders.
+        # available.cash deducts CNC blocks separately which would
+        # double-count against our own open_pos_cost tracking.
+        #
+        # Explicit None check so a legitimate zero live_balance is
+        # honored and not masked by the cash fallback (the old `or`
+        # treated 0 as falsy and silently fell through to cash).
         avail = margins.get("available", {})
-        cash = avail.get("live_balance") or avail.get("cash", 0)
-        out = Decimal(str(cash))
+        lb = avail.get("live_balance")
+        raw = lb if lb is not None else avail.get("cash", 0)
+        out = Decimal(str(raw))
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
-            "kite margins fetch failed for user=%s: %s",
+            "kite margins fetch failed for user=%s: %s — "
+            "broker-cash cap set to 0 (fail-closed)",
             user_id,
             exc,
             exc_info=True,
         )
-        return Decimal("inf")
+        return Decimal("0")
 
     if c:
         c.set(key, str(out), ttl=_CACHE_TTL_S)
@@ -250,6 +314,50 @@ async def reserve(
     return reservation_id
 
 
+async def reserve_if_headroom(
+    *,
+    user_id: UUID,
+    strategy_id: UUID,
+    ticker: str,
+    side: str,
+    qty: int,
+    reserved_inr: Decimal,
+    allocated_inr: Decimal,
+    metadata: dict[str, Any] | None = None,
+) -> UUID | None:
+    """Atomic, uncached, headroom-aware reservation wrapper.
+
+    Opens ONE NullPool session, delegates to
+    ``BudgetRepo.reserve_if_headroom`` (``SELECT ... FOR UPDATE``
+    on ``algo.user_budget`` + uncached headroom recompute +
+    conditional PENDING insert), then commits — holding the per-
+    user lock for the whole txn so concurrent reservers serialize.
+
+    Returns the new ``reservation_id`` on success, else ``None``
+    when ``headroom < reserved_inr``. This is the atomic primitive
+    that supersedes the non-atomic check-then-reserve flow; the
+    runtime/safety rewire to call it lands in Task 2.2.
+    """
+    repo = BudgetRepo()
+    factory = _session_factory()
+    async with factory() as session:
+        reservation_id = await repo.reserve_if_headroom(
+            session,
+            user_id=user_id,
+            strategy_id=strategy_id,
+            ticker=ticker,
+            side=side,
+            qty=qty,
+            reserved_inr=reserved_inr,
+            allocated_inr=allocated_inr,
+            metadata=metadata,
+        )
+        await session.commit()
+    if reservation_id is not None:
+        _invalidate_cache(user_id)
+    return reservation_id
+
+
 async def transition(
     *,
     reservation_id: UUID,
@@ -278,6 +386,18 @@ async def transition(
                 reservation_id,
             )
             return
+        if prev.state in TERMINAL_STATES:
+            err = TerminalStateError(
+                reservation_id=reservation_id,
+                current_state=prev.state,
+                requested_state=new_state,
+            )
+            _logger.error(
+                "transition refused: %s",
+                err,
+                exc_info=True,
+            )
+            raise err
         row = BudgetReservation(
             reservation_id=reservation_id,
             user_id=prev.user_id,

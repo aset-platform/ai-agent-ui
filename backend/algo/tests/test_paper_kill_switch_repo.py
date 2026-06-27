@@ -91,12 +91,14 @@ async def test_is_active_reads_redis_only():
 
 
 @pytest.mark.asyncio
-async def test_is_active_returns_false_on_redis_error():
+async def test_is_active_fails_closed_on_redis_error():
+    # Fail-closed safety gate: Redis error without a PG fallback
+    # must return True (armed) so a halted strategy cannot resume.
     redis = AsyncMock()
     redis.get = AsyncMock(side_effect=RuntimeError("boom"))
     repo = KillSwitchRepo(redis_client=redis)
     user_id = uuid4()
-    assert await repo.is_active(user_id) is False
+    assert await repo.is_active(user_id) is True
 
 
 @pytest.mark.asyncio

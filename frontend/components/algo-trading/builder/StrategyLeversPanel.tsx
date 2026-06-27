@@ -82,6 +82,11 @@ type RiskPerTrade = {
   max_qty: number;
   max_holding_days?: number | null;
   cooldown_after_failed_exit_days?: number | null;
+  // v5 GTT trailing stop fields
+  phase1_ratchet_trigger_pct?: number | null;
+  phase1_ratchet_new_stop_pct?: number | null;
+  trailing_trigger_pct?: number | null;
+  trailing_atr_multiplier?: number | null;
 };
 // ConditionNode shape used by mid_trade_regime_check. The schema
 // is recursive — at TS level we treat it as Record<string,unknown>
@@ -372,6 +377,57 @@ export function StrategyLeversPanel({ ast, onChange }: Props) {
               step={1}
               testId="lever-risk-cooldown-days"
               hint="Skip new entries on tickers with a recent stop_loss / time_stop / regime_exit within N days. Blank disables. Sweet spot 7–14 days for RSI(2) v3."
+            />
+          </Group>
+
+          <Group title="Risk · GTT trailing stop (v5)">
+            <OptionalNumberField
+              label="Phase 1 ratchet trigger %"
+              value={risk.per_trade.phase1_ratchet_trigger_pct ?? null}
+              onChange={(v) =>
+                patchRisk("per_trade", { phase1_ratchet_trigger_pct: v })
+              }
+              min={0.1}
+              max={50}
+              step={0.5}
+              testId="lever-risk-phase1-ratchet-trigger-pct"
+              hint="When gain from entry reaches this %, move the GTT stop up once (one-time ratchet). Pair with Phase 1 new-stop %. Blank = no ratchet."
+            />
+            <OptionalNumberField
+              label="Phase 1 new-stop %"
+              value={risk.per_trade.phase1_ratchet_new_stop_pct ?? null}
+              onChange={(v) =>
+                patchRisk("per_trade", { phase1_ratchet_new_stop_pct: v })
+              }
+              min={0}
+              max={50}
+              step={0.5}
+              testId="lever-risk-phase1-ratchet-new-stop-pct"
+              hint="After ratchet: new GTT stop = entry − this %. E.g. 1 locks in breakeven (entry −1%). Lower than stop_loss_pct = tighter stop after ratchet."
+            />
+            <OptionalNumberField
+              label="ATR trail trigger %"
+              value={risk.per_trade.trailing_trigger_pct ?? null}
+              onChange={(v) =>
+                patchRisk("per_trade", { trailing_trigger_pct: v })
+              }
+              min={0.1}
+              max={100}
+              step={0.5}
+              testId="lever-risk-trailing-trigger-pct"
+              hint="When gain reaches this %, switch the GTT to an ATR-based trailing stop. Must be > ratchet trigger. Blank = no ATR trail (stays on flat/ratcheted stop)."
+            />
+            <OptionalNumberField
+              label="ATR multiplier"
+              value={risk.per_trade.trailing_atr_multiplier ?? null}
+              onChange={(v) =>
+                patchRisk("per_trade", { trailing_atr_multiplier: v })
+              }
+              min={0.1}
+              max={10}
+              step={0.1}
+              testId="lever-risk-trailing-atr-multiplier"
+              hint="Trail width = ATR × multiplier below the high-water mark. E.g. 1.5 with ATR ₹20 → stop trails 30 below peak. Requires ATR trail trigger %."
             />
           </Group>
 

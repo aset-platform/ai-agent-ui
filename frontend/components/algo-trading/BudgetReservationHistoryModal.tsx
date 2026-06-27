@@ -6,6 +6,7 @@ import { API_URL } from "@/lib/config";
 
 interface Props {
   onClose: () => void;
+  mode?: string;
 }
 
 const fetcher = async (url: string) => {
@@ -15,13 +16,14 @@ const fetcher = async (url: string) => {
 };
 
 export function BudgetReservationHistoryModal(
-  { onClose }: Props,
+  { onClose, mode }: Props,
 ) {
+  const modeParam = mode ? `&mode=${encodeURIComponent(mode)}` : "";
   const { data, isLoading } = useSWR<{
     reservations: Record<string, string>[];
   }>(
     `${API_URL}/algo/budget/reservations`
-    + `?include_history=true`,
+    + `?include_history=true${modeParam}`,
     fetcher,
     { revalidateOnFocus: false },
   );

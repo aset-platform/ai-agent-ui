@@ -4,8 +4,16 @@
 Three key families live here:
 
 1. ``algo:placeorder:dedup:{user_id}:{strategy_id}:{symbol}:{side}:
-   {qty}:{minute_bucket}`` — pre-submit duplicate guard (PR #4 §3.4).
-   ``minute_bucket = floor(time.time() / 60)``. SETNX with 60s TTL.
+   {minute_bucket}`` — pre-submit duplicate guard (PR #4 §3.4,
+   hardened in PR #5 Task 1.4). Content-addressed on
+   ``(user, strategy, symbol, side, minute_bucket)`` — deliberately
+   WITHOUT qty — so that (a) a retry that recomputes a different qty
+   in the same minute collides with the original, and (b) the same
+   signal firing twice in the same minute collides (cross-call
+   duplicate guard). A legitimate same-symbol/side scale-in within
+   the same minute is intentionally deduped (accepted tradeoff —
+   safer default for real-money orders). SETNX with
+   ``ALGO_DEDUP_TTL_S`` TTL (default 60 s).
 
 2. ``kite:freeze:{date_ist}`` — once-per-day Redis hash of
    ``tradingsymbol -> freeze_qty`` (PR #4 §3.5). Used by
@@ -27,7 +35,7 @@ from datetime import datetime, timezone, timedelta
 
 _DEDUP_KEY_FMT = (
     "algo:placeorder:dedup:{user_id}:{strategy_id}:"
-    "{symbol}:{side}:{qty}:{minute_bucket}"
+    "{symbol}:{side}:{minute_bucket}"
 )
 _FREEZE_HASH_KEY_FMT = "kite:freeze:{date_ist}"
 _FREEZE_FALLBACK_FLAG_FMT = (
@@ -57,15 +65,32 @@ def build_dedup_key(
     strategy_id: object,
     symbol: str,
     side: str,
-    qty: int,
     now_unix: float | None = None,
 ) -> str:
     """Build the Redis SETNX key for the pre-submit duplicate guard.
 
     ``user_id`` / ``strategy_id`` are coerced via ``str(...)`` so
-    UUID, str, and None all serialise predictably. Same-minute
-    repeats produce the SAME key; cross-minute repeats produce
-    different keys (different ``minute_bucket``).
+    UUID, str, and None all serialise predictably.
+
+    Content-addressed on ``(user, strategy, symbol, side,
+    minute_bucket)`` where ``minute_bucket = int(now_unix // 60)``.
+    qty is deliberately NOT part of the key. This means:
+
+    - A retry that recomputes a different qty for the same
+      symbol/side in the same minute → same key → second SETNX
+      returns False → blocked (the finding #19 goal).
+    - The same signal firing twice in the same minute → same key →
+      blocked (the cross-call duplicate guard restored).
+    - A legitimate same-symbol/side scale-in within the same minute
+      is ALSO deduped. This is an intentional, accepted tradeoff —
+      the safer default is to suppress a possibly-duplicate
+      real-money order rather than risk a double fill. A scale-in
+      that genuinely needs to fire in the same minute can be split
+      across minute boundaries or use a distinct strategy_id.
+
+    The minute_bucket reuses ``_minute_bucket`` so callers can pass a
+    deterministic ``now_unix`` in tests and the live path supplies
+    the current wall-clock time.
     """
     return _DEDUP_KEY_FMT.format(
         user_id=str(user_id) if user_id is not None else "anon",
@@ -75,7 +100,6 @@ def build_dedup_key(
         ),
         symbol=symbol,
         side=side,
-        qty=int(qty),
         minute_bucket=_minute_bucket(now_unix),
     )
 

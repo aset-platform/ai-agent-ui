@@ -42,6 +42,10 @@ from backend.algo.backtest.stop_loss_monitor import (
 from backend.algo.backtest.time_stop_monitor import (
     check_time_stop_triggers,
 )
+from backend.algo.backtest.trailing_stop_manager import (
+    TrailingStopManager,
+)
+from backend.algo.features.primitives import wilder_atr as _wilder_atr
 from backend.algo.backtest.types import (
     BacktestRequest,
     BacktestSummary,
@@ -421,6 +425,14 @@ def run_backtest(
                 ns_chosen = max(entries, key=lambda x: x[0])[0]
             day_end_keys.add((bd, ns_chosen))
 
+    # v5 trailing stop — disabled when both ATR-trail fields are None.
+    _trailing_enabled = (
+        strategy.risk.per_trade.trailing_trigger_pct is not None
+        and strategy.risk.per_trade.trailing_atr_multiplier is not None
+    )
+    # ticker → TrailingStopManager; created on confirmed BUY fill.
+    _trailing_managers: dict[str, TrailingStopManager] = {}
+
     for bar_date, ts_ns in timeline:
         # Warmup-only bars feed the indicator engine but never
         # see strategy evaluation — the user asked to backtest
@@ -441,6 +453,8 @@ def run_backtest(
         # this loop translates triggers into SELL OrderIntents.
         open_pos_now = pt.open_positions()
         closes_this_bar: dict[str, Decimal] = {}
+        lows_this_bar: dict[str, Decimal] = {}
+        highs_this_bar: dict[str, Decimal] = {}
         for _t, _blist in bars.items():
             if is_intraday:
                 _cur = bars_by_ts.get(_t, {}).get(ts_ns)
@@ -451,73 +465,166 @@ def run_backtest(
                 )
             if _cur is not None:
                 closes_this_bar[_t] = _cur.close
-        stop_triggers = check_stop_loss_triggers(
-            open_positions={
-                t: {"qty": p.qty, "avg_price": p.avg_price}
-                for t, p in open_pos_now.items()
-            },
-            current_closes=closes_this_bar,
-            stop_loss_pct=float(
-                strategy.risk.per_trade.stop_loss_pct
-            ),
-        )
+                lows_this_bar[_t] = _cur.low
+                highs_this_bar[_t] = _cur.high
         stop_loss_skip: set[str] = set()
-        for trig in stop_triggers:
-            existing = open_pos_now.get(trig.ticker)
-            if existing is None or existing.qty <= 0:
-                continue
-            sl_intent = OrderIntent(
-                ticker=trig.ticker,
-                side="SELL",
-                qty=existing.qty,
-                intent_emitted_at=bar_date,
-                intent_emitted_ts_ns=ts_ns,
-                exit_reason="stop_loss",
+        if not _trailing_enabled:
+            # Flat %-stop (v1/v2/v3 unchanged).
+            stop_triggers = check_stop_loss_triggers(
+                open_positions={
+                    t: {"qty": p.qty, "avg_price": p.avg_price}
+                    for t, p in open_pos_now.items()
+                },
+                current_closes=closes_this_bar,
+                stop_loss_pct=float(
+                    strategy.risk.per_trade.stop_loss_pct
+                ),
             )
-            try:
-                sl_fill = sim.execute(sl_intent)
-            except NoBarAvailableError:
-                sl_fill = None
-            if sl_fill is None:
-                continue
-            # SimBroker.execute() forwards intent.exit_reason onto
-            # the Fill, so sl_fill already carries
-            # exit_reason="stop_loss" for the UI badge +
-            # trade_list filter.
-            pt.apply_fill(sl_fill)
-            total_fees += sl_fill.fees_inr
-            fee_rates_version = sl_fill.fee_rates_version
-            events.append(
-                event_row(
-                    session_id=session_id,
-                    user_id=user_id,
-                    strategy_id=strategy.id,
-                    mode="backtest",
-                    type_="order_filled",
-                    payload={
-                        "ticker": sl_fill.ticker,
-                        "side": sl_fill.side,
-                        "qty": sl_fill.qty,
-                        "fill_price": str(sl_fill.fill_price),
-                        "fill_date": sl_fill.fill_date.isoformat(),
-                        "fees_inr": str(sl_fill.fees_inr),
-                        "fee_rates_version": (
-                            sl_fill.fee_rates_version
-                        ),
-                        "exit_reason": "stop_loss",
-                    },
+            for trig in stop_triggers:
+                existing = open_pos_now.get(trig.ticker)
+                if existing is None or existing.qty <= 0:
+                    continue
+                sl_intent = OrderIntent(
+                    ticker=trig.ticker,
+                    side="SELL",
+                    qty=existing.qty,
+                    intent_emitted_at=bar_date,
+                    intent_emitted_ts_ns=ts_ns,
+                    exit_reason="stop_loss",
                 )
-            )
-            stop_loss_skip.add(trig.ticker)
-            _logger.debug(
-                "stop_loss trigger %s avg=%.4f close=%.4f "
-                "loss=%.2f%% stop=%.2f%%",
-                trig.ticker,
-                float(trig.avg_price),
-                float(trig.current_close),
-                float(trig.loss_pct),
-                float(trig.stop_loss_pct),
-            )
+                try:
+                    sl_fill = sim.execute(sl_intent)
+                except NoBarAvailableError:
+                    sl_fill = None
+                if sl_fill is None:
+                    continue
+                pt.apply_fill(sl_fill)
+                total_fees += sl_fill.fees_inr
+                fee_rates_version = sl_fill.fee_rates_version
+                events.append(
+                    event_row(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy.id,
+                        mode="backtest",
+                        type_="order_filled",
+                        payload={
+                            "ticker": sl_fill.ticker,
+                            "side": sl_fill.side,
+                            "qty": sl_fill.qty,
+                            "fill_price": str(sl_fill.fill_price),
+                            "fill_date": (
+                                sl_fill.fill_date.isoformat()
+                            ),
+                            "fees_inr": str(sl_fill.fees_inr),
+                            "fee_rates_version": (
+                                sl_fill.fee_rates_version
+                            ),
+                            "exit_reason": "stop_loss",
+                        },
+                    )
+                )
+                stop_loss_skip.add(trig.ticker)
+                _logger.debug(
+                    "stop_loss trigger %s avg=%.4f close=%.4f "
+                    "loss=%.2f%% stop=%.2f%%",
+                    trig.ticker,
+                    float(trig.avg_price),
+                    float(trig.current_close),
+                    float(trig.loss_pct),
+                    float(trig.stop_loss_pct),
+                )
+        else:
+            # v5 trailing stop evaluation.
+            # Conservative daily ordering: LOW first (stop-hit
+            # check), then update HWM with HIGH.
+            for _t, _mgr in list(_trailing_managers.items()):
+                _pos = open_pos_now.get(_t)
+                if _pos is None or _pos.qty <= 0:
+                    del _trailing_managers[_t]
+                    continue
+                _bar_low = lows_this_bar.get(_t)
+                _bar_high = highs_this_bar.get(_t)
+                if _bar_low is None or _bar_high is None:
+                    continue
+                # Check stop-hit via LOW first.
+                if float(_bar_low) <= _mgr.current_stop:
+                    _stop_ev = _mgr.on_price_update(float(_bar_low))
+                    if (
+                        _stop_ev is None
+                        or _stop_ev.event_type != "STOP_HIT"
+                    ):
+                        # Ratchet updated stop but gap didn't clear;
+                        # update HWM from HIGH and continue.
+                        _mgr.on_price_update(float(_bar_high))
+                        continue
+                else:
+                    # No stop hit — advance HWM with bar HIGH.
+                    _mgr.on_price_update(float(_bar_high))
+                    continue
+                # Map phase → exit_reason.
+                _exit_reason = (
+                    "trail_stop"
+                    if _stop_ev.phase.value == 2
+                    else "phase1_ratchet"
+                    if _stop_ev.phase.value == 15
+                    else "phase1_stop"
+                )
+                _tr_intent = OrderIntent(
+                    ticker=_t,
+                    side="SELL",
+                    qty=_pos.qty,
+                    intent_emitted_at=bar_date,
+                    intent_emitted_ts_ns=ts_ns,
+                    exit_reason=_exit_reason,
+                )
+                try:
+                    _tr_fill = sim.execute(_tr_intent)
+                except NoBarAvailableError:
+                    _tr_fill = None
+                if _tr_fill is None:
+                    continue
+                pt.apply_fill(_tr_fill)
+                total_fees += _tr_fill.fees_inr
+                fee_rates_version = _tr_fill.fee_rates_version
+                events.append(
+                    event_row(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy.id,
+                        mode="backtest",
+                        type_="order_filled",
+                        payload={
+                            "ticker": _tr_fill.ticker,
+                            "side": _tr_fill.side,
+                            "qty": _tr_fill.qty,
+                            "fill_price": str(_tr_fill.fill_price),
+                            "fill_date": (
+                                _tr_fill.fill_date.isoformat()
+                            ),
+                            "fees_inr": str(_tr_fill.fees_inr),
+                            "fee_rates_version": (
+                                _tr_fill.fee_rates_version
+                            ),
+                            "exit_reason": _exit_reason,
+                            "trailing_phase": (
+                                _stop_ev.phase.value
+                            ),
+                            "trailing_hwm": _stop_ev.hwm,
+                        },
+                    )
+                )
+                del _trailing_managers[_t]
+                stop_loss_skip.add(_t)
+                _logger.debug(
+                    "trailing_stop %s phase=%d stop=%.4f "
+                    "bar_low=%.4f exit=%s",
+                    _t,
+                    _stop_ev.phase.value,
+                    _stop_ev.new_stop,
+                    float(_bar_low),
+                    _exit_reason,
+                )
 
         # Time-based stop (ASETPLTFRM-430 Exp.3). Same pattern as
         # the price stop above but triggers on holding_days
@@ -970,6 +1077,42 @@ def run_backtest(
             pt.apply_fill(fill)
             total_fees += fill.fees_inr
             fee_rates_version = fill.fee_rates_version
+
+            # v5 trailing: init manager on BUY; clean up on SELL.
+            # ATR computed from raw bars — compute_indicators only
+            # produces RSI/SMA; atr_14 lives in the factor store.
+            if _trailing_enabled:
+                if fill.side == "BUY":
+                    _blist = bars.get(fill.ticker, [])
+                    _bars_up = [
+                        b for b in _blist if b.date <= bar_date
+                    ]
+                    _atr_series = _wilder_atr(_bars_up, 14)
+                    _atr = float(
+                        _atr_series[-1]
+                        if _atr_series and _atr_series[-1] is not None
+                        else 0.0
+                    )
+                    if _atr > 0 and fill.ticker not in _trailing_managers:
+                        # One manager per position — don't overwrite
+                        # when accumulating lots (averaging-in doesn't
+                        # reset the stop set at first entry).
+                        _trailing_managers[fill.ticker] = (
+                            TrailingStopManager(
+                                strategy.risk.per_trade,
+                                entry_price=float(fill.fill_price),
+                                atr=_atr,
+                                ticker=fill.ticker,
+                            )
+                        )
+                    else:
+                        _logger.warning(
+                            "trailing: insufficient bars for "
+                            "atr_14 on %s at %s — skip manager",
+                            fill.ticker, bar_date,
+                        )
+                elif fill.side == "SELL":
+                    _trailing_managers.pop(fill.ticker, None)
 
             events.append(
                 event_row(

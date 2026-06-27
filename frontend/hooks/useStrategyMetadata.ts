@@ -8,7 +8,7 @@
  * helper for editor save flows.
  */
 
-import useSWR from "swr";
+import useSWR, { mutate } from "swr";
 
 import { apiFetch } from "@/lib/apiFetch";
 import { API_URL } from "@/lib/config";
@@ -93,4 +93,10 @@ export async function upsertStrategyMetadata(
     }
     throw new Error(detail);
   }
+  // Invalidate the individual strategy SWR cache slots so the editor
+  // immediately shows the saved AST when re-opened for the same id.
+  await Promise.all([
+    mutate(`${API_URL}/algo/strategies/${strategyId}`),
+    mutate(`${API_URL}/algo/strategies/${strategyId}#meta`),
+  ]);
 }

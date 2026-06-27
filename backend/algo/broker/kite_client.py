@@ -21,19 +21,26 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 from typing import Any, AsyncIterator, Callable
 from uuid import uuid4
 
 from kiteconnect import KiteConnect
+from kiteconnect.exceptions import InputException, TokenException
 
 from backend.algo.broker.exceptions import (
+    BrokerResponseError,
+    DedupUnavailableError,
     DuplicateOrderError,
     FreezeChunkExceedsDailyCapError,
     LtpStaleError,
+    PartialChunkPlacementError,
+    TokenExpiredError,
 )
 from backend.algo.broker.freeze_cache import (
     default_for_bucket,
     get_freeze_qty,
+    get_tick_size,
     should_emit_fallback_event,
 )
 from backend.algo.broker.redis_keys import build_dedup_key
@@ -54,6 +61,11 @@ _DEFAULT_MAX_LTP_AGE_S = 999999
 # PR #4 — pre-submit dedup window. 0 disables the gate entirely.
 _DEFAULT_DEDUP_TTL_S = 60
 
+# Task 1.4 — fail-closed threshold. On Redis error, orders with
+# notional >= this value (INR) are BLOCKED (raise DedupUnavailableError).
+# Below threshold the legacy fail-open behaviour is kept with a warning.
+_DEFAULT_DEDUP_FAILCLOSED_INR = 100_000
+
 
 def _read_dedup_ttl_s() -> int:
     """Read ALGO_DEDUP_TTL_S env var; default 60s. 0 disables."""
@@ -69,6 +81,31 @@ def _read_dedup_ttl_s() -> int:
             _DEFAULT_DEDUP_TTL_S,
         )
         return _DEFAULT_DEDUP_TTL_S
+
+
+def _read_dedup_failclosed_inr() -> int:
+    """Read ALGO_DEDUP_FAILCLOSED_INR env var; default 100 000.
+
+    Orders with notional >= this value are BLOCKED (raise
+    ``DedupUnavailableError``) when the Redis dedup gate is
+    unreachable. Orders below the threshold continue to fail-open
+    with a warning (legacy behaviour).
+    """
+    raw = os.environ.get(
+        "ALGO_DEDUP_FAILCLOSED_INR",
+        "",
+    ).strip()
+    if not raw:
+        return _DEFAULT_DEDUP_FAILCLOSED_INR
+    try:
+        return int(raw)
+    except ValueError:
+        _logger.warning(
+            "ALGO_DEDUP_FAILCLOSED_INR=%r is not an int " "— using default %d",
+            raw,
+            _DEFAULT_DEDUP_FAILCLOSED_INR,
+        )
+        return _DEFAULT_DEDUP_FAILCLOSED_INR
 
 
 def _read_max_ltp_age_s() -> int:
@@ -148,6 +185,63 @@ def resolve_dry_run_for_user(
             exc,
         )
         return _read_dry_run_env()
+
+
+_DEFAULT_TICK = Decimal("0.05")
+
+
+def _floor_to_tick(price: float, tick: Decimal | None) -> float:
+    """Truncate *price* down to the nearest tick multiple.
+
+    Direction-neutral: suitable for LTP sentinels and similar values
+    that are not themselves LIMIT or stop prices.  Uses the same
+    ``_DEFAULT_TICK`` fallback as :func:`_round_to_tick`.
+    """
+    effective_tick = tick if (tick and tick > 0) else _DEFAULT_TICK
+    d_price = Decimal(str(price))
+    quantized = (d_price / effective_tick).to_integral_value(
+        rounding=ROUND_FLOOR
+    ) * effective_tick
+    return float(quantized)
+
+
+def _round_to_tick(
+    price: float,
+    tick: Decimal | None,
+    *,
+    side: str,
+    is_stop: bool,
+) -> float:
+    """Round *price* to the nearest valid tick multiple.
+
+    Direction rules
+    ---------------
+    * BUY LIMIT   → round DOWN  (never overpay).
+    * SELL LIMIT  → round UP    (never undersell).
+    * SELL stop   → round DOWN  (trigger fires below market).
+    * BUY  stop   → round UP    (trigger fires above market).
+
+    If *tick* is ``None`` or zero the NSE default (0.05) is used
+    and a warning is emitted so ops can investigate the data gap.
+    """
+    effective_tick = tick if (tick and tick > 0) else None
+    if effective_tick is None:
+        _logger.warning(
+            "_round_to_tick: tick=%r is falsy — "
+            "falling back to NSE default %s",
+            tick,
+            _DEFAULT_TICK,
+        )
+        effective_tick = _DEFAULT_TICK
+    buy_rounds_down = (side == "BUY" and not is_stop) or (
+        side == "SELL" and is_stop
+    )
+    rounding = ROUND_FLOOR if buy_rounds_down else ROUND_CEILING
+    d_price = Decimal(str(price))
+    quantized = (d_price / effective_tick).to_integral_value(
+        rounding=rounding
+    ) * effective_tick
+    return float(quantized)
 
 
 class KiteClient:
@@ -595,7 +689,11 @@ class KiteClient:
             )
         self._hist_throttle()
         keys = [
-            f"NSE:{t.removesuffix('.NS').removesuffix('.BO')}"
+            (
+                "BSE:" + t.removesuffix(".BO")
+                if t.endswith(".BO")
+                else "NSE:" + t.removesuffix(".NS")
+            )
             for t, _ in tickers
         ]
         raw = self._kc.quote(keys)
@@ -981,16 +1079,19 @@ class KiteClient:
                 f"Only 'regular' is allowed.",
             )
 
-        # ── Pre-submit dedup gate (PR #4 §3.4) ─────────────────
-        # Same (user, strategy, symbol, side, qty) inside the same
-        # minute → block. Cross-minute repeats are intentional. Dry-
-        # run already short-circuited above so we never see it here.
+        # ── Pre-submit dedup gate (PR #4 §3.4, hardened Task 1.4) ──
+        # Content-addressed key (symbol/side/minute, no qty) so a
+        # qty-recompute retry AND a same-signal double-fire in the
+        # same minute both collide correctly. Fail-closed when Redis
+        # is down for orders >= ALGO_DEDUP_FAILCLOSED_INR INR.
+        # Dry-run already short-circuited above so we never see it.
         self._dedup_guard_or_raise(
             user_id=user_id,
             strategy_id=strategy_id,
             symbol=tradingsymbol,
             side=transaction_type,
             qty=quantity,
+            price=price,
             events_sink=events_sink,
             session_id=session_id,
             internal_order_id=internal_order_id,
@@ -1042,33 +1143,70 @@ class KiteClient:
                 freeze_qty=freeze_qty,
                 chunk_qtys=chunks,
             )
-            first_oid = ""
+            # Transactional chunk loop. If chunk N raises AFTER
+            # chunks 0..N-1 are already live on the exchange, we
+            # MUST NOT let the bare SDK error propagate — the
+            # runtime treats a generic failure as "order failed"
+            # and may blind-retry the FULL quantity, doubling the
+            # already-live chunks into real duplicate exposure
+            # (Critical C1). Instead emit a partial-failure audit
+            # event and raise PartialChunkPlacementError carrying
+            # the live order ids so the caller reconciles them.
+            placed: list[str] = []
             for idx, chunk_qty in enumerate(chunks):
-                oid = self._place_single_chunk(
-                    tradingsymbol=tradingsymbol,
-                    exchange=exchange,
-                    transaction_type=transaction_type,
-                    quantity=chunk_qty,
-                    order_type=order_type,
-                    product=product,
-                    variety=variety,
-                    price=price,
-                    tag=(f"{tag}-c{idx}" if tag else f"c{idx}"),
-                    last_price=last_price,
-                    last_price_ts=last_price_ts,
-                    liquidity_bucket=liquidity_bucket,
-                    slippage_bps_applied=slippage_bps_applied,
-                    chunk_index=idx,
-                    chunk_total=len(chunks),
-                    events_sink=events_sink,
-                    session_id=session_id,
-                    user_id=user_id,
-                    strategy_id=strategy_id,
-                    internal_order_id=internal_order_id,
-                )
-                if idx == 0:
-                    first_oid = oid
-            return first_oid
+                try:
+                    oid = self._place_single_chunk(
+                        tradingsymbol=tradingsymbol,
+                        exchange=exchange,
+                        transaction_type=transaction_type,
+                        quantity=chunk_qty,
+                        order_type=order_type,
+                        product=product,
+                        variety=variety,
+                        price=price,
+                        tag=(f"{tag}-c{idx}" if tag else f"c{idx}"),
+                        last_price=last_price,
+                        last_price_ts=last_price_ts,
+                        liquidity_bucket=liquidity_bucket,
+                        slippage_bps_applied=slippage_bps_applied,
+                        chunk_index=idx,
+                        chunk_total=len(chunks),
+                        events_sink=events_sink,
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy_id,
+                        internal_order_id=internal_order_id,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._emit_partial_chunk_failure_event(
+                        events_sink=events_sink,
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy_id,
+                        internal_order_id=internal_order_id,
+                        symbol=tradingsymbol,
+                        placed_order_ids=placed,
+                        failed_chunk=idx,
+                        total_chunks=len(chunks),
+                        cause=str(exc),
+                    )
+                    _logger.error(
+                        "place_order: chunk %d/%d FAILED after %d "
+                        "live chunks (order_ids=%s) — NOT "
+                        "retrying full qty",
+                        idx,
+                        len(chunks),
+                        len(placed),
+                        placed,
+                        exc_info=True,
+                    )
+                    raise PartialChunkPlacementError(
+                        placed,
+                        idx,
+                        exc,
+                    ) from exc
+                placed.append(oid)
+            return placed[0]
 
         # Single-chunk path — quantity within freeze cap.
         return self._place_single_chunk(
@@ -1135,7 +1273,17 @@ class KiteClient:
             "product": product,
         }
         if order_type == "LIMIT":
-            params["price"] = price
+            tick = get_tick_size(
+                kc=self._kc,
+                redis_client=self._get_redis(),
+                symbol=tradingsymbol,
+            )
+            params["price"] = _round_to_tick(
+                price,
+                tick,
+                side=transaction_type,
+                is_stop=False,
+            )
         # NOTE: kiteconnect-python SDK does not accept
         # market_protection as a kwarg in this version. MARKET
         # orders without market_protection are rejected by Kite
@@ -1147,10 +1295,31 @@ class KiteClient:
         if tag:
             params["tag"] = tag
         resp = self._kc.place_order(variety=variety, **params)
-        # SDK returns {"order_id": "<id>"} or raises KiteException.
-        order_id: str = (
-            resp.get("order_id", "") if isinstance(resp, dict) else str(resp)
-        )
+        # SDK typically returns {"order_id": "<id>"} or raises
+        # KiteException.  Older SDK variants return a bare string id.
+        # Any other response (None, {}, dict without order_id) is an
+        # ambiguous broker signal: recording an empty id creates an
+        # untrackable phantom order that can never be cancelled or
+        # reconciled, so we must treat it as a hard failure.
+        if isinstance(resp, dict):
+            order_id: str = resp.get("order_id") or ""
+        elif isinstance(resp, str) and resp:
+            order_id = resp
+        else:
+            order_id = ""
+        if not order_id:
+            _logger.error(
+                "place_order: no order_id in SDK response — "
+                "rejecting as phantom; symbol=%s side=%s qty=%d "
+                "raw_response=%r",
+                tradingsymbol,
+                transaction_type,
+                quantity,
+                resp,
+            )
+            raise BrokerResponseError(
+                f"place_order returned no order_id: {resp!r}"
+            )
         _logger.info(
             "place_order: symbol=%s side=%s qty=%d "
             "order_type=%s chunk=%s/%s kite_order_id=%s",
@@ -1227,34 +1396,85 @@ class KiteClient:
         symbol: str,
         side: str,
         qty: int,
+        price: float,
         events_sink: Callable[[dict], None] | None,
         session_id: Any,
         internal_order_id: str,
     ) -> None:
-        """Acquire the SETNX dedup slot for this submission tuple.
+        """Acquire the SETNX dedup slot for this order.
 
-        Same-minute duplicate → emit ``order_duplicate_blocked`` +
-        raise ``DuplicateOrderError``. Redis unreachable or
-        ``ALGO_DEDUP_TTL_S=0`` → no-op (graceful degradation).
+        The Redis key is content-addressed on ``(user, strategy,
+        symbol, side, minute_bucket)`` — deliberately WITHOUT qty.
+        This means a retry that recomputes a different qty in the
+        same minute collides with the first attempt, AND the same
+        signal firing twice in the same minute collides (cross-call
+        duplicate guard). ``internal_order_id`` is still threaded
+        through for event/log traceability but is NOT part of the
+        key. A legitimate same-minute scale-in is intentionally
+        deduped (accepted tradeoff — safer default).
+
+        Duplicate → emit ``order_duplicate_blocked`` + raise
+        ``DuplicateOrderError``.
+
+        Redis error handling (fail-closed for large notional):
+        - notional = qty × price. If notional >=
+          ``ALGO_DEDUP_FAILCLOSED_INR`` (default 100 000 INR) the
+          order is BLOCKED via ``DedupUnavailableError`` because
+          the dedup backstop is a critical safety layer that should
+          not silently disengage on infrastructure failure for
+          large-money orders.
+        - Below the threshold the legacy fail-open behaviour is
+          preserved (log warning, let the order through) because the
+          financial impact of a rare duplicate is bounded.
+
+        ``ALGO_DEDUP_TTL_S=0`` → gate disabled entirely (no-op).
         """
         ttl_s = _read_dedup_ttl_s()
         if ttl_s <= 0:
             return
         redis_client = self._get_redis()
+        notional = qty * price
+        failclosed_inr = _read_dedup_failclosed_inr()
         if redis_client is None:
+            if notional >= failclosed_inr:
+                _logger.error(
+                    "place_order BLOCKED: dedup gate unavailable "
+                    "(no Redis) and notional=%.2f >= "
+                    "failclosed_inr=%d — blocking to protect "
+                    "against duplicate real-money order. "
+                    "symbol=%s side=%s qty=%d "
+                    "internal_order_id=%s",
+                    notional,
+                    failclosed_inr,
+                    symbol,
+                    side,
+                    qty,
+                    internal_order_id,
+                )
+                raise DedupUnavailableError(
+                    f"Redis dedup gate unavailable; order blocked "
+                    f"(fail-closed) because notional={notional:.2f} "
+                    f">= {failclosed_inr} INR. "
+                    f"internal_order_id={internal_order_id!r}",
+                )
             _logger.warning(
                 "place_order: dedup gate skipped — Redis "
-                "unreachable. symbol=%s qty=%d",
+                "unreachable. symbol=%s qty=%d notional=%.2f "
+                "< failclosed_inr=%d (fail-open)",
                 symbol,
                 qty,
+                notional,
+                failclosed_inr,
             )
             return
+        import time
+
         dedup_key = build_dedup_key(
             user_id=user_id,
             strategy_id=strategy_id,
             symbol=symbol,
             side=side,
-            qty=qty,
+            now_unix=time.time(),
         )
         try:
             acquired = redis_client.set(
@@ -1264,11 +1484,38 @@ class KiteClient:
                 ex=ttl_s,
             )
         except Exception as exc:  # noqa: BLE001
+            if notional >= failclosed_inr:
+                _logger.error(
+                    "place_order BLOCKED: dedup SETNX raised "
+                    "err=%s and notional=%.2f >= "
+                    "failclosed_inr=%d — blocking to protect "
+                    "against duplicate real-money order. "
+                    "symbol=%s side=%s qty=%d "
+                    "internal_order_id=%s",
+                    exc,
+                    notional,
+                    failclosed_inr,
+                    symbol,
+                    side,
+                    qty,
+                    internal_order_id,
+                    exc_info=True,
+                )
+                raise DedupUnavailableError(
+                    f"Redis dedup SETNX failed (err={exc!r}); "
+                    f"order blocked (fail-closed) because "
+                    f"notional={notional:.2f} >= "
+                    f"{failclosed_inr} INR. "
+                    f"internal_order_id={internal_order_id!r}",
+                ) from exc
             _logger.warning(
-                "place_order: dedup SETNX failed key=%s err=%s — "
-                "allowing order through (fail-open by design)",
+                "place_order: dedup SETNX failed key=%s err=%s "
+                "notional=%.2f < failclosed_inr=%d — "
+                "allowing order through (fail-open)",
                 dedup_key,
                 exc,
+                notional,
+                failclosed_inr,
             )
             return
         if not acquired:
@@ -1637,6 +1884,59 @@ class KiteClient:
                 exc_info=True,
             )
 
+    def _emit_partial_chunk_failure_event(
+        self,
+        *,
+        events_sink: Callable[[dict], None] | None,
+        session_id: Any,
+        user_id: Any,
+        strategy_id: Any,
+        internal_order_id: str,
+        symbol: str,
+        placed_order_ids: list[str],
+        failed_chunk: int,
+        total_chunks: int,
+        cause: str,
+    ) -> None:
+        """Audit a freeze-chunk submission that failed mid-loop.
+
+        Emitted when chunk ``failed_chunk`` raised while
+        ``placed_order_ids`` were already live on the exchange.
+        The runtime consumes this trail to reconcile the live
+        chunks rather than blind-retry the full quantity.
+        """
+        if events_sink is None:
+            return
+        from backend.algo.backtest.event_writer import event_row
+
+        payload = {
+            "internal_order_id": internal_order_id,
+            "symbol": symbol,
+            "placed_order_ids": placed_order_ids,
+            "placed_count": len(placed_order_ids),
+            "failed_chunk": failed_chunk,
+            "total_chunks": total_chunks,
+            "cause": cause,
+        }
+        sid = session_id if session_id is not None else uuid4()
+        uid = user_id if user_id is not None else uuid4()
+        try:
+            row = event_row(
+                session_id=sid,
+                user_id=uid,
+                strategy_id=strategy_id,
+                mode="live",
+                type_="order_partial_chunk_failure",
+                payload=payload,
+            )
+            events_sink(row)
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "order_partial_chunk_failure emit failed " "symbol=%s",
+                symbol,
+                exc_info=True,
+            )
+
     def _emit_freeze_fallback_event(
         self,
         *,
@@ -1714,11 +2014,26 @@ class KiteClient:
         order_type: str | None = None,
         price: float | None = None,
         quantity: int | None = None,
+        tradingsymbol: str,
+        transaction_type: str,
+        exchange: str = "NSE",
     ) -> str:
         """Modify price and/or quantity of a LIMIT order.
 
         Only LIMIT orders can be modified (MARKET orders are
         immediately sent to the exchange).  Returns the order_id.
+
+        Args:
+            order_id: Kite order ID to modify.
+            variety: Order variety (e.g. ``"regular"``).
+            order_type: Must be ``"LIMIT"`` or ``None``.
+            price: New limit price; tick-rounded before forwarding to
+                the SDK (BUY rounds down, SELL rounds up).
+            quantity: New quantity.
+            tradingsymbol: Exchange symbol used to look up tick size.
+            transaction_type: ``"BUY"`` or ``"SELL"`` — determines
+                rounding direction for the price.
+            exchange: Exchange code; defaults to ``"NSE"``.
 
         Raises:
             ValueError: if order_type is provided and is not LIMIT.
@@ -1729,24 +2044,38 @@ class KiteClient:
                 "modify_order requires an access_token; "
                 "complete the OAuth handshake first.",
             )
-        if self._dry_run:
-            _logger.info(
-                "[DRY_RUN] modify_order kite_order_id=%s "
-                "variety=%s price=%s qty=%s",
-                order_id,
-                variety,
-                price,
-                quantity,
-            )
-            return order_id
         if order_type is not None and order_type != "LIMIT":
             raise ValueError(
                 f"modify_order only supports LIMIT orders; "
                 f"got order_type={order_type!r}.",
             )
-        params: dict[str, Any] = {}
+        rounded_price: float | None = None
         if price is not None:
-            params["price"] = price
+            tick = get_tick_size(
+                kc=self._kc,
+                redis_client=self._get_redis(),
+                symbol=tradingsymbol,
+            )
+            rounded_price = _round_to_tick(
+                price,
+                tick,
+                side=transaction_type,
+                is_stop=False,
+            )
+        if self._dry_run:
+            _logger.info(
+                "[DRY_RUN] modify_order kite_order_id=%s "
+                "variety=%s price=%s (raw=%s) qty=%s",
+                order_id,
+                variety,
+                rounded_price,
+                price,
+                quantity,
+            )
+            return order_id
+        params: dict[str, Any] = {}
+        if rounded_price is not None:
+            params["price"] = rounded_price
         if quantity is not None:
             params["quantity"] = quantity
         if order_type is not None:
@@ -1757,9 +2086,11 @@ class KiteClient:
             **params,
         )
         _logger.info(
-            "modify_order: kite_order_id=%s variety=%s " "price=%s qty=%s",
+            "modify_order: kite_order_id=%s variety=%s "
+            "price=%s (raw=%s) qty=%s",
             order_id,
             variety,
+            rounded_price,
             price,
             quantity,
         )
@@ -1782,3 +2113,174 @@ class KiteClient:
             )
         resp = self._kc.positions()
         return resp.get("net", [])
+
+    # ── GTT (Good Till Triggered) ─────────────────────────────────
+
+    def place_gtt(
+        self,
+        ticker: str,
+        trigger_price: float,
+        limit_price: float,
+        qty: int,
+        transaction_type: str = "SELL",
+        last_price: float | None = None,
+    ) -> int:
+        """Place a single-leg GTT stop order. Returns gtt_id.
+
+        In dry-run mode logs the intent and returns 0 without
+        touching the Kite API.
+
+        Args:
+            ticker: Internal ticker (e.g. ``"RELIANCE.NS"``).
+            trigger_price: Price at which the GTT fires.
+            limit_price: Limit price of the triggered order.
+                ``trigger_price * 0.99`` is a safe headroom for
+                typical intraday gaps.
+            qty: Quantity to trade.
+            transaction_type: ``"SELL"`` (default) or ``"BUY"``.
+            last_price: Current market LTP. Kite requires this to
+                differ from trigger_price. Defaults to
+                ``trigger_price * 1.01`` when not supplied.
+
+        Returns:
+            Integer GTT trigger ID from Kite, or 0 in dry-run.
+        """
+        tradingsymbol = ticker.removesuffix(".NS").removesuffix(".BO")
+        exchange = "NSE"
+        tick = get_tick_size(
+            kc=self._kc,
+            redis_client=self._get_redis(),
+            symbol=tradingsymbol,
+        )
+        # Round stop-trigger (is_stop=True) + limit order prices
+        # to valid tick multiples before calling Kite.
+        trigger_price = _round_to_tick(
+            trigger_price,
+            tick,
+            side=transaction_type,
+            is_stop=True,
+        )
+        limit_price = _round_to_tick(
+            limit_price,
+            tick,
+            side=transaction_type,
+            is_stop=False,
+        )
+        raw_last = (
+            last_price if last_price is not None else trigger_price * 1.01
+        )
+        # LTP sentinel Kite requires to differ from trigger_price —
+        # floor-to-tick is direction-neutral (not an order price).
+        kite_last_price = _floor_to_tick(raw_last, tick)
+        if self._dry_run:
+            _logger.info(
+                "[DRY_RUN] place_gtt symbol=%s trigger=%.4f "
+                "limit=%.4f qty=%d side=%s last_price=%.4f",
+                tradingsymbol,
+                trigger_price,
+                limit_price,
+                qty,
+                transaction_type,
+                kite_last_price,
+            )
+            return 0
+        resp = self._kc.place_gtt(
+            trigger_type=self._kc.GTT_TYPE_SINGLE,
+            tradingsymbol=tradingsymbol,
+            exchange=exchange,
+            trigger_values=[trigger_price],
+            last_price=kite_last_price,
+            orders=[
+                {
+                    "exchange": exchange,
+                    "tradingsymbol": tradingsymbol,
+                    "transaction_type": transaction_type,
+                    "quantity": qty,
+                    "product": "CNC",
+                    "order_type": "LIMIT",
+                    "price": limit_price,
+                }
+            ],
+        )
+        gtt_id: int = (
+            int(resp.get("trigger_id", 0))
+            if isinstance(resp, dict)
+            else int(resp)
+        )
+        _logger.info(
+            "place_gtt: %s trigger=%.4f limit=%.4f qty=%d " "gtt_id=%d",
+            ticker,
+            trigger_price,
+            limit_price,
+            qty,
+            gtt_id,
+        )
+        return gtt_id
+
+    def delete_gtt(self, gtt_id: int) -> None:
+        """Cancel a GTT.
+
+        No-ops only on ``InputException`` (GTT genuinely not found or
+        already triggered). Raises ``TokenExpiredError`` on expired
+        credentials and re-raises any other error so the caller (which
+        is always wrapped in try/except) can log it rather than
+        silently masking network or unknown failures.
+
+        In dry-run mode skips the Kite API call.
+        """
+        if self._dry_run:
+            _logger.info("[DRY_RUN] delete_gtt gtt_id=%d", gtt_id)
+            return
+        try:
+            self._kc.delete_gtt(trigger_id=gtt_id)
+            _logger.info("delete_gtt: gtt_id=%d", gtt_id)
+        except TokenException as exc:
+            _logger.error(
+                "delete_gtt %d: token expired: %s",
+                gtt_id,
+                exc,
+                exc_info=True,
+            )
+            raise TokenExpiredError(str(exc)) from exc
+        except InputException as exc:
+            # GTT not found / already triggered — genuinely benign
+            _logger.info(
+                "delete_gtt %d: already gone/triggered (benign): %s",
+                gtt_id,
+                exc,
+            )
+        except Exception as exc:
+            # Network/general/etc. = a real failure; do NOT mask as
+            # "already triggered" — raise so the caller logs it.
+            _logger.error(
+                "delete_gtt %d FAILED (not a not-found): %s",
+                gtt_id,
+                exc,
+                exc_info=True,
+            )
+            raise
+
+    def get_gtts(self) -> list[dict]:
+        """List all active GTTs for the user.
+
+        Raises ``TokenExpiredError`` on expired credentials; re-raises
+        any other exception so callers can distinguish a read failure
+        from an empty list (the old silent-``[]`` behaviour was masking
+        real errors and breaking the duplicate-GTT guard).
+        """
+        try:
+            return self._kc.get_gtts()
+        except TokenException as exc:
+            _logger.error(
+                "get_gtts: token expired: %s",
+                exc,
+                exc_info=True,
+            )
+            raise TokenExpiredError(str(exc)) from exc
+        except Exception as exc:
+            _logger.error(
+                "get_gtts FAILED: %s",
+                exc,
+                exc_info=True,
+            )
+            raise

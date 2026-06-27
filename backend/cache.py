@@ -220,6 +220,37 @@ class CacheService:
             return False
 
     # ----------------------------------------------------------
+    # Pipeline
+    # ----------------------------------------------------------
+
+    def pipeline(self):
+        """Return a raw Redis pipeline for batched writes.
+
+        Callers MUST use the raw Redis keyword ``ex=`` (seconds)
+        for TTL — NOT the CacheService ``ttl=`` convention — because
+        the returned object is the raw redis-py Pipeline, not a
+        CacheService wrapper.  Example::
+
+            pipe = cache.pipeline()
+            if pipe is not None:
+                pipe.set("ltp:algo:RELIANCE", "2500.0", ex=60)
+                pipe.execute()
+
+        Returns ``None`` when Redis is unavailable so callers can
+        skip gracefully.
+        """
+        if self._client is None:
+            return None
+        try:
+            return self._client.pipeline()
+        except self._redis.RedisError:
+            _logger.warning(
+                "cache pipeline() failed",
+                exc_info=True,
+            )
+            return None
+
+    # ----------------------------------------------------------
     # LIST ops (ASETPLTFRM-417 / FE-5.1)
     #
     # Used by the live-mode trade_feature_snapshots buffer:
@@ -375,6 +406,10 @@ class _NoOpCache:
 
     def ping(self) -> bool:
         return False
+
+    def pipeline(self):
+        """No-op stub — returns None; callers must guard for None."""
+        return None
 
     # FE-5.1 LIST ops — no-op stubs matching CacheService API.
     def rpush(self, key: str, value: str) -> None:

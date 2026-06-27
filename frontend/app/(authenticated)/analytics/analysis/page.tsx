@@ -27,6 +27,8 @@ import { API_URL } from "@/lib/config";
 import dynamic from "next/dynamic";
 import { usePreferences } from "@/hooks/usePreferences";
 import { StockAnalysisLink } from "@/components/advanced-analytics/StockAnalysisLink";
+import { AddToStrategyModal } from "@/components/algo-trading/AddToStrategyModal";
+import { CleanupStrategyModal } from "@/components/algo-trading/CleanupStrategyModal";
 
 // Dynamic imports — lightweight-charts requires window/document
 // Skeleton heights match each chart's rendered height to keep
@@ -2116,6 +2118,37 @@ const DIST_SMA200_BUCKETS = [
 
 type DistSma200Bucket = (typeof DIST_SMA200_BUCKETS)[number]["value"];
 
+const BLENDED_RS_BUCKETS = [
+  { value: "lt10",    label: "< 10%",   caption: "Reject" },
+  { value: "10to20",  label: "10–20%",  caption: "Average" },
+  { value: "20to35",  label: "20–35%",  caption: "Good" },
+  { value: "35to50",  label: "35–50%",  caption: "Excellent" },
+  { value: "gt50",    label: "> 50%",   caption: "Elite leaders" },
+] as const;
+
+type BlendedRsBucket = (typeof BLENDED_RS_BUCKETS)[number]["value"];
+
+const MDD_6M_BUCKETS = [
+  { value: "lt10",    label: "< 10%",   caption: "⭐ Elite" },
+  { value: "10to15",  label: "10–15%",  caption: "Excellent" },
+  { value: "15to20",  label: "15–20%",  caption: "Good" },
+  { value: "20to30",  label: "20–30%",  caption: "Acceptable" },
+  { value: "gt30",    label: "> 30%",   caption: "Reject" },
+] as const;
+
+type Mdd6mBucket = (typeof MDD_6M_BUCKETS)[number]["value"];
+
+const SCORE_BUCKETS = [
+  { value: "lt50",    label: "< 50",   caption: "Weak — Reject" },
+  { value: "50to60",  label: "50–60",  caption: "Average — Avoid" },
+  { value: "60to70",  label: "60–70",  caption: "Good — Tradable" },
+  { value: "70to80",  label: "70–80",  caption: "Very Good — Preferred" },
+  { value: "80to90",  label: "80–90",  caption: "Excellent — High priority" },
+  { value: "gt90",    label: "> 90",   caption: "Elite — Highest priority" },
+] as const;
+
+type ScoreBucket = (typeof SCORE_BUCKETS)[number]["value"];
+
 function DistSma200MultiSelect({
   selected,
   onChange,
@@ -2207,6 +2240,219 @@ function DistSma200MultiSelect({
   );
 }
 
+function BlendedRsMultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: BlendedRsBucket[];
+  onChange: (v: BlendedRsBucket[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (v: BlendedRsBucket) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+
+  const label =
+    selected.length === 0
+      ? "All"
+      : selected.length === 1
+        ? BLENDED_RS_BUCKETS.find((b) => b.value === selected[0])?.label ?? "1 range"
+        : `${selected.length} ranges`;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        data-testid="watchlist-blended-rs-select"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${
+          selected.length > 0
+            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        }`}
+      >
+        {label}
+        <svg className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-[80] min-w-full w-max rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+          {selected.length > 0 && (
+            <button type="button" onClick={() => onChange([])} className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
+              Clear all
+            </button>
+          )}
+          {BLENDED_RS_BUCKETS.map((b) => {
+            const checked = selected.includes(b.value);
+            return (
+              <label key={b.value} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
+                <input type="checkbox" checked={checked} onChange={() => toggle(b.value)} className="shrink-0 accent-indigo-600" />
+                <span className="text-xs text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                  <span className="font-medium">{b.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400"> — {b.caption}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Mdd6mMultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: Mdd6mBucket[];
+  onChange: (v: Mdd6mBucket[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (v: Mdd6mBucket) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+
+  const label =
+    selected.length === 0
+      ? "All"
+      : selected.length === 1
+        ? MDD_6M_BUCKETS.find((b) => b.value === selected[0])?.label ?? "1 range"
+        : `${selected.length} ranges`;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        data-testid="watchlist-mdd6m-select"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${
+          selected.length > 0
+            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        }`}
+      >
+        {label}
+        <svg className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-[80] min-w-full w-max rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+          {selected.length > 0 && (
+            <button type="button" onClick={() => onChange([])} className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
+              Clear all
+            </button>
+          )}
+          {MDD_6M_BUCKETS.map((b) => {
+            const checked = selected.includes(b.value);
+            return (
+              <label key={b.value} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
+                <input type="checkbox" checked={checked} onChange={() => toggle(b.value)} className="shrink-0 accent-indigo-600" />
+                <span className="text-xs text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                  <span className="font-medium">{b.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400"> — {b.caption}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ScoreMultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: ScoreBucket[];
+  onChange: (v: ScoreBucket[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (v: ScoreBucket) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+
+  const label =
+    selected.length === 0
+      ? "All"
+      : selected.length === 1
+        ? SCORE_BUCKETS.find((b) => b.value === selected[0])?.label ?? "1 range"
+        : `${selected.length} ranges`;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        data-testid="watchlist-score-select"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${
+          selected.length > 0
+            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        }`}
+      >
+        {label}
+        <svg className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-[80] min-w-full w-max rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+          {selected.length > 0 && (
+            <button type="button" onClick={() => onChange([])} className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
+              Clear all
+            </button>
+          )}
+          {SCORE_BUCKETS.map((b) => {
+            const checked = selected.includes(b.value);
+            return (
+              <label key={b.value} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
+                <input type="checkbox" checked={checked} onChange={() => toggle(b.value)} className="shrink-0 accent-indigo-600" />
+                <span className="text-xs text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                  <span className="font-medium">{b.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400"> — {b.caption}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ColumnTooltip({ text }: { text: string }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const [coords, setCoords] = useState<{
@@ -2214,7 +2460,11 @@ function ColumnTooltip({ text }: { text: string }) {
   } | null>(null);
   const [mounted, setMounted] = useState(false);
 
-  useEffect(() => { setMounted(true); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setMounted(true); });
+    return () => { cancelled = true; };
+  }, []);
 
   const show = useCallback(() => {
     if (!triggerRef.current) return;
@@ -2271,8 +2521,29 @@ type Rsi2Filter = "lte5" | "lte10" | "lte25" | "gte80" | null;
 type AtrFilter = "" | "lt0" | "gt0lte1_5" | "gt1_5lte4" | "gt2lte5" | "gt2lte6" | "gt5";
 type SharpeFilter = "" | "lte0" | "gt0lte080" | "gt080lte2" | "gt080lte10" | "gt1";
 type RsFilter = "" | "lt25" | "gte25";
+type Rs3mFilter = "" | "lt15" | "gte15";
+
+// Reset target — "All / OFF" for every filter.
+// The page loads with curated defaults (initial useState values); Reset
+// returns to a fully-unfiltered state so the action is always visible.
+const RESET_TARGET = {
+  rsi2Filter:       null as Rsi2Filter | null,
+  curRsi2Filter:    null as Rsi2Filter | null,
+  atrFilter:        "" as AtrFilter,
+  sharpeFilter:     "" as SharpeFilter,
+  rs3mFilter:       "" as Rs3mFilter,
+  rsFilter:         "" as RsFilter,
+  blendedRsFilter:  [] as BlendedRsBucket[],
+  mdd6mFilter:      [] as Mdd6mBucket[],
+  distSma200Filter: [] as DistSma200Bucket[],
+  scoreFilter:      [] as ScoreBucket[],
+  goldenCross:      false,
+  sma50AboveLtp:    false,
+  sma200AboveLtp:   false,
+  search:           "",
+};
 type DistSma200Filter = DistSma200Bucket[];
-type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "dist_sma200" | "score";
+type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sharpe_ratio" | "blended_rs" | "rs_3m" | "rs_6m" | "mdd_6m" | "atr_pct" | "dist_sma200" | "score";
 type SortDir = "asc" | "desc";
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
@@ -2291,25 +2562,39 @@ function WatchlistStocksTab() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rsi2Filter, setRsi2Filter] =
-    useState<Rsi2Filter>(null);
+    useState<Rsi2Filter>("lte25");
   const [curRsi2Filter, setCurRsi2Filter] =
-    useState<Rsi2Filter>(null);
+    useState<Rsi2Filter | null>(null);
   const [market, setMarket] =
     useState<MarketFilter>("india");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] =
     useState(DEFAULT_WL_PAGE_SIZE);
   const [copied, setCopied] = useState(false);
-  const [goldenCross, setGoldenCross] = useState(false);
-  const [sma50AboveLtp, setSma50AboveLtp] = useState(false);
-  const [sma200AboveLtp, setSma200AboveLtp] = useState(false);
-  const [atrFilter, setAtrFilter] = useState<AtrFilter>("");
-  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("");
-  const [rsFilter, setRsFilter] = useState<RsFilter>("");
-  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>([]);
+  const [goldenCross, setGoldenCross] = useState(true);
+  const [sma50AboveLtp, setSma50AboveLtp] = useState(true);
+  const [sma200AboveLtp, setSma200AboveLtp] = useState(true);
+  const [atrFilter, setAtrFilter] = useState<AtrFilter>("gt2lte6");
+  const [sharpeFilter, setSharpeFilter] = useState<SharpeFilter>("gt1");
+  const [rs3mFilter, setRs3mFilter] = useState<Rs3mFilter>("gte15");
+  const [rsFilter, setRsFilter] = useState<RsFilter>("gte25");
+  const [blendedRsFilter, setBlendedRsFilter] = useState<BlendedRsBucket[]>(
+    ["20to35", "35to50", "gt50"],
+  );
+  const [mdd6mFilter, setMdd6mFilter] = useState<Mdd6mBucket[]>(
+    ["lt10", "10to15", "15to20", "20to30"],
+  );
+  const [distSma200Filter, setDistSma200Filter] = useState<DistSma200Filter>(
+    ["gt5lte15", "gt15lte35", "gt35lte50"],
+  );
+  const [scoreFilter, setScoreFilter] = useState<ScoreBucket[]>(
+    ["60to70", "70to80", "80to90", "gt90"],
+  );
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [addToStrategyOpen, setAddToStrategyOpen] = useState(false);
+  const [cleanupStrategyOpen, setCleanupStrategyOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -2416,6 +2701,15 @@ function WatchlistStocksTab() {
         return true;
       });
     }
+    if (rs3mFilter) {
+      stocks = stocks.filter((s) => {
+        const v = s.rs_3m;
+        if (v == null) return false;
+        if (rs3mFilter === "lt15") return v < 15;
+        if (rs3mFilter === "gte15") return v >= 15;
+        return true;
+      });
+    }
     if (rsFilter) {
       stocks = stocks.filter((s) => {
         const v = s.rs_6m;
@@ -2424,6 +2718,35 @@ function WatchlistStocksTab() {
         if (rsFilter === "lt25") return r < 25;
         if (rsFilter === "gte25") return r >= 25;
         return true;
+      });
+    }
+    if (blendedRsFilter.length > 0) {
+      stocks = stocks.filter((s) => {
+        const v = s.blended_rs;
+        if (v == null) return false;
+        return blendedRsFilter.some((bucket) => {
+          if (bucket === "lt10") return v < 10;
+          if (bucket === "10to20") return v >= 10 && v < 20;
+          if (bucket === "20to35") return v >= 20 && v < 35;
+          if (bucket === "35to50") return v >= 35 && v < 50;
+          if (bucket === "gt50") return v >= 50;
+          return false;
+        });
+      });
+    }
+    if (mdd6mFilter.length > 0) {
+      stocks = stocks.filter((s) => {
+        const v = s.mdd_6m; // always <= 0
+        if (v == null) return false;
+        const abs = Math.abs(v);
+        return mdd6mFilter.some((bucket) => {
+          if (bucket === "lt10") return abs < 10;
+          if (bucket === "10to15") return abs >= 10 && abs < 15;
+          if (bucket === "15to20") return abs >= 15 && abs < 20;
+          if (bucket === "20to30") return abs >= 20 && abs < 30;
+          if (bucket === "gt30") return abs >= 30;
+          return false;
+        });
       });
     }
     if (distSma200Filter.length > 0) {
@@ -2439,6 +2762,21 @@ function WatchlistStocksTab() {
           if (bucket === "gt35lte50") return r > 35 && r <= 50;
           if (bucket === "gt50lte80") return r > 50 && r <= 80;
           if (bucket === "gt80") return r > 80;
+          return false;
+        });
+      });
+    }
+    if (scoreFilter.length > 0) {
+      stocks = stocks.filter((s) => {
+        const v = s.score;
+        if (v == null) return false;
+        return scoreFilter.some((bucket) => {
+          if (bucket === "lt50")   return v < 50;
+          if (bucket === "50to60") return v >= 50 && v < 60;
+          if (bucket === "60to70") return v >= 60 && v < 70;
+          if (bucket === "70to80") return v >= 70 && v < 80;
+          if (bucket === "80to90") return v >= 80 && v < 90;
+          if (bucket === "gt90")   return v >= 90;
           return false;
         });
       });
@@ -2463,7 +2801,7 @@ function WatchlistStocksTab() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, distSma200Filter, search, sortKey, sortDir]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, scoreFilter, search, sortKey, sortDir]);
 
   const totalPages = Math.max(
     1,
@@ -2480,7 +2818,24 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rsFilter, distSma200Filter, search, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, scoreFilter, search, pageSize, market]);
+
+  const resetAllFilters = () => {
+    setRsi2Filter(RESET_TARGET.rsi2Filter);
+    setCurRsi2Filter(RESET_TARGET.curRsi2Filter);
+    setGoldenCross(RESET_TARGET.goldenCross);
+    setSma50AboveLtp(RESET_TARGET.sma50AboveLtp);
+    setSma200AboveLtp(RESET_TARGET.sma200AboveLtp);
+    setAtrFilter(RESET_TARGET.atrFilter);
+    setSharpeFilter(RESET_TARGET.sharpeFilter);
+    setRs3mFilter(RESET_TARGET.rs3mFilter);
+    setRsFilter(RESET_TARGET.rsFilter);
+    setBlendedRsFilter([...RESET_TARGET.blendedRsFilter]);
+    setMdd6mFilter([...RESET_TARGET.mdd6mFilter]);
+    setDistSma200Filter([...RESET_TARGET.distSma200Filter]);
+    setScoreFilter([...RESET_TARGET.scoreFilter]);
+    setSearch(RESET_TARGET.search);
+  };
 
   const handleCopyTickers = () => {
     const csv = filtered.map((s) => s.ticker).join(", ");
@@ -2522,8 +2877,8 @@ function WatchlistStocksTab() {
   return (
     <div className="space-y-3">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        {/* Left: market toggle + dropdowns grid */}
+      <div className="flex flex-col gap-2">
+        {/* Filter strip: row 1 = dropdowns, row 2 = chips + search + actions */}
         <div className="flex flex-col gap-2">
           {/* Row 1 — all dropdowns */}
           <div className="flex flex-wrap items-center gap-3">
@@ -2536,15 +2891,7 @@ function WatchlistStocksTab() {
                   data-testid={`watchlist-market-${m}`}
                   onClick={() => {
                     setMarket(m);
-                    setRsi2Filter(null);
-                    setCurRsi2Filter(null);
-                    setGoldenCross(false);
-                    setSma50AboveLtp(false);
-                    setSma200AboveLtp(false);
-                    setAtrFilter("");
-                    setSharpeFilter("");
-                    setDistSma200Filter([]);
-                    setSearch("");
+                    resetAllFilters();
                   }}
                   className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors ${
                     market === m
@@ -2618,6 +2965,17 @@ function WatchlistStocksTab() {
                   ],
                 },
                 {
+                  label: "RS(3M)",
+                  testId: "watchlist-rs3m-select",
+                  value: rs3mFilter,
+                  onChange: (v: string) => setRs3mFilter(v as Rs3mFilter),
+                  options: [
+                    { value: "", label: "All" },
+                    { value: "lt15", label: "< 15%" },
+                    { value: "gte15", label: "≥ 15%" },
+                  ],
+                },
+                {
                   label: "RS(6M)",
                   testId: "watchlist-rs-select",
                   value: rsFilter,
@@ -2647,6 +3005,17 @@ function WatchlistStocksTab() {
               </div>
             ))}
 
+            {/* Blended RS — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Blended RS
+              </label>
+              <BlendedRsMultiSelect
+                selected={blendedRsFilter}
+                onChange={setBlendedRsFilter}
+              />
+            </div>
+
             {/* Dist SMA200 — multi-select */}
             <div className="flex items-center gap-1.5">
               <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
@@ -2657,9 +3026,21 @@ function WatchlistStocksTab() {
                 onChange={setDistSma200Filter}
               />
             </div>
+
+            {/* MDD(6M) — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                MDD(6M)
+              </label>
+              <Mdd6mMultiSelect
+                selected={mdd6mFilter}
+                onChange={setMdd6mFilter}
+              />
+            </div>
+
           </div>
 
-          {/* Row 2 — toggle chips */}
+          {/* Row 2 — toggle chips + search + actions */}
           <div className="flex flex-wrap items-center gap-1.5">
             {(
               [
@@ -2701,57 +3082,131 @@ function WatchlistStocksTab() {
                 {label}
               </button>
             ))}
-          </div>
-        </div>
 
-        {/* Right: search + copy */}
-        <div className="flex items-center gap-2 self-start">
-          <div className="relative">
-            <svg
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none"
-              viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+            <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 mx-1" />
+
+            {/* Score — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                Score
+              </label>
+              <ScoreMultiSelect
+                selected={scoreFilter}
+                onChange={setScoreFilter}
+              />
+            </div>
+
+            <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 mx-1" />
+
+            {/* Search */}
+            <div className="relative">
+              <svg
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none"
+                viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+              >
+                <circle cx="11" cy="11" r="8" />
+                <path d="m21 21-4.35-4.35" />
+              </svg>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search ticker…"
+                data-testid="watchlist-search"
+                className="pl-8 pr-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-36"
+              />
+            </div>
+
+            {/* Copy Tickers */}
+            <button
+              type="button"
+              data-testid="watchlist-copy-tickers"
+              onClick={handleCopyTickers}
+              title="Copy comma-separated tickers to clipboard"
+              className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
             >
-              <circle cx="11" cy="11" r="8" />
-              <path d="m21 21-4.35-4.35" />
-            </svg>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search ticker…"
-              data-testid="watchlist-search"
-              className="pl-8 pr-3 py-1.5 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-xs text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-36"
-            />
-          </div>
-        <button
-          type="button"
-          data-testid="watchlist-copy-tickers"
-          onClick={handleCopyTickers}
-          title="Copy comma-separated tickers to clipboard"
-          className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors self-start"
-        >
-          {copied ? (
-            <>
-              <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <path d="M20 6 9 17l-5-5" />
-              </svg>
-              Copied!
-            </>
-          ) : (
-            <>
-              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" />
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
-              Copy Tickers
-              {filtered.length > 0 && (
-                <span className="text-gray-400">({filtered.length})</span>
+              {copied ? (
+                <>
+                  <svg className="w-3.5 h-3.5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M20 6 9 17l-5-5" />
+                  </svg>
+                  Copied!
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                  Copy Tickers
+                  {filtered.length > 0 && (
+                    <span className="text-gray-400">({filtered.length})</span>
+                  )}
+                </>
               )}
-            </>
-          )}
-        </button>
+            </button>
+
+            {/* Add to Strategy */}
+            <button
+              type="button"
+              data-testid="watchlist-add-to-strategy"
+              onClick={() => setAddToStrategyOpen(true)}
+              disabled={filtered.length === 0}
+              title="Add filtered tickers to a strategy's allowed list"
+              className="inline-flex items-center gap-1.5 rounded-md border border-indigo-200 dark:border-indigo-700 px-3 py-1.5 text-xs font-medium text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              Add to Strategy
+            </button>
+
+            {/* Cleanup Strategy */}
+            <button
+              type="button"
+              data-testid="watchlist-cleanup-strategy"
+              onClick={() => setCleanupStrategyOpen(true)}
+              title="Review and trim a strategy's allowed ticker list"
+              className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 dark:border-rose-700 px-3 py-1.5 text-xs font-medium text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-900/30 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6" />
+                <path d="M10 11v6M14 11v6" />
+              </svg>
+              Cleanup Strategy
+            </button>
+
+            {/* Reset All Filters */}
+            <button
+              type="button"
+              data-testid="watchlist-reset-filters"
+              onClick={resetAllFilters}
+              title="Reset all filters to defaults"
+              className="inline-flex items-center gap-1 rounded-md border border-gray-200 dark:border-gray-700 px-2.5 py-1.5 text-xs font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                <path d="M3 3v5h5" />
+              </svg>
+              Reset
+            </button>
+          </div>
         </div>
       </div>
+
+      {addToStrategyOpen && (
+        <AddToStrategyModal
+          filteredTickers={filtered.map((s) => s.ticker)}
+          onClose={() => setAddToStrategyOpen(false)}
+        />
+      )}
+
+      {cleanupStrategyOpen && (
+        <CleanupStrategyModal
+          filteredTickers={filtered.map((s) => s.ticker)}
+          onClose={() => setCleanupStrategyOpen(false)}
+        />
+      )}
 
       {/* Table */}
       <div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-gray-700">
@@ -2769,7 +3224,6 @@ function WatchlistStocksTab() {
                   { key: "current_rsi_2", label: "Curr RSI(2)" },
                   { key: "sma_200", label: "SMA 200" },
                   { key: "sma_50", label: "SMA 50" },
-                  { key: "sma_20", label: "SMA 20" },
                   {
                     key: "sharpe_ratio",
                     label: "Sharpe (6M)",
@@ -2781,14 +3235,47 @@ function WatchlistStocksTab() {
                       "Higher = better risk-adjusted return. >2 strong, <0 net negative.",
                   },
                   {
+                    key: "blended_rs",
+                    label: "Blended RS",
+                    tooltip:
+                      "Blended Relative Strength = 0.6 × RS(3M) + 0.4 × RS(6M)\n" +
+                      "Each RS = Stock Return% − Nifty 50 Return% over that period.\n\n" +
+                      "Example: RS(3M) = +12%, RS(6M) = +8%\n" +
+                      "→ Blended RS = 0.6×12 + 0.4×8 = +10.4%\n\n" +
+                      "Weights recent 3M performance more — Nifty leaders often rotate\n" +
+                      "every 3–6 months, so blending both periods is more robust than\n" +
+                      "pure 6M relative strength.",
+                  },
+                  {
+                    key: "rs_3m",
+                    label: "RS (3M)",
+                    tooltip:
+                      "Relative Strength vs Nifty 50 over last 3 months (~63 trading days)\n" +
+                      "Formula: Stock 3M Return% − Nifty 50 3M Return%\n\n" +
+                      "Example: Stock up 10%, Nifty up 4%\n" +
+                      "→ RS(3M) = +6% (outperformed Nifty by 6pp in 3 months)\n\n" +
+                      "Positive = beat the index recently. Negative = underperformed.",
+                  },
+                  {
                     key: "rs_6m",
                     label: "RS (6M)",
                     tooltip:
-                      "Relative Strength vs Nifty 50 over last 6 months\n" +
+                      "Relative Strength vs Nifty 50 over last 6 months (~126 trading days)\n" +
                       "Formula: Stock 6M Return% − Nifty 50 6M Return%\n\n" +
                       "Example: Stock up 18%, Nifty up 8%\n" +
                       "→ RS(6M) = +10% (outperformed Nifty by 10pp)\n\n" +
                       "Positive = beat the index. Negative = underperformed.",
+                  },
+                  {
+                    key: "mdd_6m",
+                    label: "MDD (6M)",
+                    tooltip:
+                      "Maximum Drawdown over last 6 months (~126 trading days)\n" +
+                      "Formula: (Trough after Peak − Peak) ÷ Peak × 100\n\n" +
+                      "Example: Peak close = ₹150, Lowest close after that = ₹120\n" +
+                      "→ MDD = (120 − 150) / 150 × 100 = −20%\n\n" +
+                      "Always negative or zero. Closer to 0 = shallower drawdown (safer).\n" +
+                      "> −10% mild, −10% to −25% moderate, < −25% severe.",
                   },
                   {
                     key: "atr_pct",
@@ -2814,12 +3301,15 @@ function WatchlistStocksTab() {
                     key: "score",
                     label: "Score",
                     tooltip:
-                      "Composite score: quality + momentum + volatility rank\n" +
-                      "Formula: 0.5×SharpePercentile + 0.3×RSPercentile + 0.2×ATRPercentile\n" +
-                      "Each metric is ranked 0–100 among watchlist stocks before weighting.\n\n" +
-                      "Example: Sharpe pct=70, RS pct=80, ATR pct=30\n" +
-                      "→ Score = 0.5×70 + 0.3×80 + 0.2×30 = 35 + 24 + 6 = 65\n\n" +
-                      "Higher score = stronger risk-adjusted outperformance.",
+                      "Composite score (0–100), higher = stronger quality + momentum.\n\n" +
+                      "Percentile-ranked cross-stock (higher rank = better):\n" +
+                      "  Sharpe (6M)        30%\n" +
+                      "  Blended RS         30%\n" +
+                      "  Max Drawdown (6M)  20%  (shallower drawdown = higher rank)\n\n" +
+                      "Closeness score — fixed curve, not relative to peers:\n" +
+                      "  ATR %              10%  (ideal 3–4%; peaks at 100, drops to 0 above 10%)\n" +
+                      "  SMA200 Distance    10%  (ideal 20–30%; peaks at 100, drops to 0 above 90%)\n\n" +
+                      "Missing factors are excluded and remaining weights re-normalised.",
                   },
                 ] as { key: SortKey; label: string; tooltip?: string }[]
               ).map((col) => {
@@ -2855,7 +3345,7 @@ function WatchlistStocksTab() {
             {pageRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={12}
+                  colSpan={14}
                   className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500"
                 >
                   No stocks match the current filter.
@@ -2907,12 +3397,15 @@ function WatchlistStocksTab() {
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
                       {fmt(row.sma_200)}
+                      {row.current_sma_200 != null && (
+                        <span className="text-blue-500 dark:text-blue-400"> | {fmt(row.current_sma_200)}</span>
+                      )}
                     </td>
                     <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
                       {fmt(row.sma_50)}
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-gray-700 dark:text-gray-300">
-                      {fmt(row.sma_20)}
+                      {row.current_sma_50 != null && (
+                        <span className="text-blue-500 dark:text-blue-400"> | {fmt(row.current_sma_50)}</span>
+                      )}
                     </td>
                     <td className={`px-4 py-2.5 font-mono text-xs ${
                       row.sharpe_ratio == null
@@ -2926,6 +3419,34 @@ function WatchlistStocksTab() {
                       {fmt(row.sharpe_ratio)}
                     </td>
                     <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.blended_rs == null
+                        ? "text-gray-400"
+                        : row.blended_rs > 20
+                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          : row.blended_rs > 0
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-red-500 dark:text-red-400"
+                    }`}
+                      title="Blended RS: 0.6×RS(3M) + 0.4×RS(6M)"
+                    >
+                      {row.blended_rs != null
+                        ? `${row.blended_rs >= 0 ? "+" : ""}${fmt(row.blended_rs)}%`
+                        : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.rs_3m == null
+                        ? "text-gray-400"
+                        : row.rs_3m > 0
+                          ? "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          : "text-red-500 dark:text-red-400"
+                    }`}
+                      title="Stock 3M return minus Nifty 50 3M return"
+                    >
+                      {row.rs_3m != null
+                        ? `${row.rs_3m >= 0 ? "+" : ""}${fmt(row.rs_3m)}%`
+                        : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
                       row.rs_6m == null
                         ? "text-gray-400"
                         : row.rs_6m > 0
@@ -2937,6 +3458,19 @@ function WatchlistStocksTab() {
                       {row.rs_6m != null
                         ? `${row.rs_6m >= 0 ? "+" : ""}${fmt(row.rs_6m)}%`
                         : "—"}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs ${
+                      row.mdd_6m == null
+                        ? "text-gray-400"
+                        : row.mdd_6m > -10
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : row.mdd_6m > -25
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "text-red-600 dark:text-red-400 font-semibold"
+                    }`}
+                      title="Max drawdown: (trough after peak − peak) / peak × 100"
+                    >
+                      {row.mdd_6m != null ? `${fmt(row.mdd_6m)}%` : "—"}
                     </td>
                     <td className={`px-4 py-2.5 font-mono text-xs ${
                       row.atr_pct == null
@@ -2971,7 +3505,7 @@ function WatchlistStocksTab() {
                             ? "text-red-500 dark:text-red-400"
                             : "text-gray-900 dark:text-gray-100"
                     }`}
-                      title="Score = 0.5×SharpePercentile + 0.3×RSPercentile + 0.2×ATRPercentile"
+                      title="Score = 0.30×Sharpe(pct) + 0.30×BlendedRS(pct) + 0.20×MDD(pct) + 0.10×ATR(closeness) + 0.10×SMA200(closeness)"
                     >
                       {fmt(row.score)}
                     </td>

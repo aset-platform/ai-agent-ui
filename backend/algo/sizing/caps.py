@@ -2,8 +2,11 @@
 restrictive limit. Per spec §3.4."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -50,6 +53,13 @@ class PositionCaps:
             cash_after = current_cash - intended_value
             if cash_after < cash_floor_value:
                 room = current_cash - cash_floor_value
+                if room <= 0:
+                    _logger.warning(
+                        "caps: cash floor zeroed entry --"
+                        " current_cash=%s cash_floor=%s (no room)",
+                        current_cash,
+                        cash_floor_value,
+                    )
                 intended_value = max(Decimal("0"), room)
 
         return int(intended_value / stock_price)

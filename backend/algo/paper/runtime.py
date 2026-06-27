@@ -22,6 +22,8 @@ service shell.
 from __future__ import annotations
 
 import logging
+import os
+import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -46,9 +48,13 @@ from backend.algo.backtest.stop_loss_monitor import (
 from backend.algo.backtest.time_stop_monitor import (
     check_time_stop_triggers,
 )
+from backend.algo.backtest.trailing_stop_manager import (
+    TrailingStopManager,
+)
 
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
+from backend.algo.features.primitives import wilder_atr as _wilder_atr
 # FE-15b — shared per-bar feature assembly.
 from backend.algo.features.per_bar import (
     assemble_per_bar_features,
@@ -193,6 +199,28 @@ class PaperRuntime:
         self._session_id = uuid4()
         self._events: list[dict[str, Any]] = []
         self._kill_switch_active = kill_switch_active
+        # Periodic flush thresholds — read from env with safe defaults.
+        try:
+            self._flush_n: int = int(
+                os.environ.get("ALGO_PAPER_EVENT_FLUSH_N", "50")
+            )
+        except Exception:  # noqa: BLE001
+            self._flush_n = 50
+        try:
+            self._flush_secs: float = float(
+                os.environ.get("ALGO_PAPER_EVENT_FLUSH_SECS", "30")
+            )
+        except Exception:  # noqa: BLE001
+            self._flush_secs = 30.0
+        # Monotonic timestamp of the last successful periodic flush.
+        # Initialised to 0.0; overwritten at run() start and after
+        # each successful flush so the time-threshold is measured
+        # from the later of run-start and last flush.
+        self._last_flush_ts: float = 0.0
+        # Most-recent LTP per ticker, updated on every tick in run().
+        # Used by _account_snapshot to mark open positions to market
+        # so caps and sizing behave identically to the live runtime.
+        self._last_marks: dict[str, Decimal] = {}
         # Per-ticker rolling bar history for indicator computation.
         # On every closed bar we re-run compute_indicators over the
         # ticker's full series. SMA + golden_cross are O(N); paper
@@ -271,6 +299,12 @@ class PaperRuntime:
         # require resolving the scope here).
         self._factor_cache: dict[tuple[str, date], dict[str, Decimal]] = {}
         self._factor_loaded_for_ticker: set[str] = set()
+        # v5 three-phase trailing stop — None fields = disabled (v3 unchanged).
+        self._trailing_enabled = (
+            strategy.risk.per_trade.trailing_trigger_pct is not None
+            and strategy.risk.per_trade.trailing_atr_multiplier is not None
+        )
+        self._trailing_managers: dict[str, TrailingStopManager] = {}
         # REGIME-1 — regime_label + stress_prob lookup, loaded
         # lazily on first bar so paper sessions resolve regime
         # features identically to backtest.
@@ -413,6 +447,53 @@ class PaperRuntime:
                 ticker, exc,
             )
 
+    def _maybe_flush_events(self, *, force: bool = False) -> None:
+        """Flush accumulated events to Iceberg when a threshold is met.
+
+        Thresholds (checked in order):
+        - ``force=True`` — always flush (used in finally block).
+        - ``len(_events) >= _flush_n`` — size threshold.
+        - ``_events`` non-empty AND ``now - _last_flush_ts >= _flush_secs``
+          — time threshold.
+
+        On SUCCESS: ``_events`` is cleared and ``_last_flush_ts`` advanced.
+        On FAILURE: exception is logged (exc_info=True) and ``_events`` is
+        NOT cleared so the next threshold trip (or the force-flush in the
+        finally block) can retry the same rows.
+
+        Design note: a paper observability flush failure must NOT kill the
+        run.  This is a deliberate divergence from §4.3 rule 17 (propagate
+        Iceberg write errors).  The events table is non-critical
+        observability; losing an entire paper session to a transient write
+        blip is a worse outcome than retrying at the next threshold.  The
+        brief documents this trade-off explicitly (task-6.4-brief.md §
+        "On FAILURE").
+        """
+        now = time.monotonic()
+        should_flush = (
+            force
+            or len(self._events) >= self._flush_n
+            or (
+                self._events
+                and now - self._last_flush_ts >= self._flush_secs
+            )
+        )
+        if not should_flush:
+            return
+        try:
+            flush_events(self._events)
+            self._events = []
+            self._last_flush_ts = now
+        except Exception:
+            _logger.exception(
+                "PaperRuntime: periodic event flush failed "
+                "(session_id=%s, buffered=%d rows); "
+                "events retained for retry — run continues",
+                self._session_id,
+                len(self._events),
+            )
+            # Do NOT re-raise: a flush blip must not kill the paper run.
+
     async def run(self, source: TickSource) -> int:
         """Drain the source. Returns the count of fills emitted.
 
@@ -422,9 +503,14 @@ class PaperRuntime:
         """
         fills = 0
         last_price_per_ticker: dict[str, Decimal] = {}
+        # Anchor the time threshold to run start, not object creation.
+        self._last_flush_ts = time.monotonic()
         try:
             async for tick in source:
                 last_price_per_ticker[tick.ticker] = Decimal(str(tick.ltp))
+                self._last_marks[tick.ticker] = last_price_per_ticker[
+                    tick.ticker
+                ]
                 self._resampler.feed(tick)
                 for bar in self._resampler.pop_completed():
                     fills += self._on_bar_close(
@@ -434,6 +520,8 @@ class PaperRuntime:
                             Decimal(str(bar.close)),
                         ),
                     )
+                # Periodic crash-safe flush: no-op until a threshold trips.
+                self._maybe_flush_events()
         finally:
             for bar in self._resampler.close_partial_bars():
                 fills += self._on_bar_close(
@@ -443,9 +531,8 @@ class PaperRuntime:
                         Decimal(str(bar.close)),
                     ),
                 )
-            if self._events:
-                flush_events(self._events)
-                self._events = []
+            # Force-flush all remaining events in one Iceberg commit.
+            self._maybe_flush_events(force=True)
             # ASETPLTFRM-417 / FE-5.1 — drain the per-session
             # feature snapshot buffer in ONE Iceberg commit.
             # Non-fatal: failure logs + buffer is cleared so a
@@ -595,84 +682,194 @@ class PaperRuntime:
         # bar-close events).
         stop_loss_triggered = False
         if existing_pos is not None and existing_pos.qty > 0:
-            sl_triggers = check_stop_loss_triggers(
-                open_positions={
-                    bar.ticker: {
-                        "qty": existing_pos.qty,
-                        "avg_price": existing_pos.avg_price,
+            if self._trailing_enabled:
+                # v5 path: evaluate TrailingStopManager using
+                # bar.low (stop-hit) then bar.high (HWM update).
+                _mgr = self._trailing_managers.get(bar.ticker)
+                if _mgr is not None:
+                    _bar_low = float(bar.low)
+                    _bar_high = float(bar.high)
+                    _stop_event = None
+                    if _bar_low <= _mgr.current_stop:
+                        _stop_event = _mgr.on_price_update(_bar_low)
+                    else:
+                        _mgr.on_price_update(_bar_high)
+                    if _stop_event and _stop_event.event_type == "STOP_HIT":
+                        _exit_reason = (
+                            "phase1_stop"
+                            if _stop_event.phase.value == 1
+                            else "phase1_ratchet"
+                            if _stop_event.phase.value == 15
+                            else "trail_stop"
+                        )
+                        _ts_sig = Signal(
+                            strategy_id=self._strategy.id,
+                            user_id=self._user_id,
+                            ticker=bar.ticker,
+                            side="SELL",
+                            qty=existing_pos.qty,
+                            emitted_at_ns=bar.bar_open_ts_ns,
+                            reason=_exit_reason,
+                        )
+                        try:
+                            _ts_fill = self._broker.execute(
+                                signal=_ts_sig,
+                                last_price=last_price,
+                                fill_date=bar_date_obj,
+                            )
+                        except Exception as exc:
+                            _logger.error(
+                                "paper trailing fill failed for "
+                                "%s: %s",
+                                bar.ticker, exc, exc_info=True,
+                            )
+                            _ts_fill = None
+                        if _ts_fill is not None:
+                            self._positions.apply_fill(_ts_fill)
+                            _emit_paper_budget_lifecycle(
+                                user_id=self._user_id,
+                                strategy_id=self._strategy.id,
+                                fill=_ts_fill,
+                            )
+                            self._events.append(
+                                event_row(
+                                    session_id=self._session_id,
+                                    user_id=self._user_id,
+                                    strategy_id=self._strategy.id,
+                                    mode="paper",
+                                    type_="order_filled",
+                                    payload={
+                                        "ticker": _ts_fill.ticker,
+                                        "side": _ts_fill.side,
+                                        "qty": _ts_fill.qty,
+                                        "fill_price": str(
+                                            _ts_fill.fill_price
+                                        ),
+                                        "fill_date": (
+                                            _ts_fill.fill_date
+                                            .isoformat()
+                                        ),
+                                        "fees_inr": str(
+                                            _ts_fill.fees_inr
+                                        ),
+                                        "fee_rates_version": (
+                                            _ts_fill.fee_rates_version
+                                        ),
+                                        "exit_reason": _exit_reason,
+                                        "trailing_phase": (
+                                            _stop_event.phase.value
+                                        ),
+                                        "trailing_hwm": (
+                                            _stop_event.hwm
+                                        ),
+                                    },
+                                )
+                            )
+                            self._trailing_managers.pop(
+                                bar.ticker, None
+                            )
+                            from backend.algo.backtest \
+                                .cooldown_hydration import (
+                                _HydratedClose,
+                            )
+                            if _exit_reason in (
+                                "phase1_stop", "phase1_ratchet"
+                            ):
+                                self._cooldown_history.append(
+                                    _HydratedClose(
+                                        ticker=bar.ticker,
+                                        exit_reason=_exit_reason,
+                                        closed_at=bar_date_obj,
+                                    )
+                                )
+                            _logger.info(
+                                "paper trailing SELL %s phase=%d "
+                                "stop=%.4f reason=%s",
+                                bar.ticker,
+                                _stop_event.phase.value,
+                                _stop_event.new_stop,
+                                _exit_reason,
+                            )
+                            stop_loss_triggered = True
+            else:
+                # v3 flat stop-loss path (unchanged).
+                sl_triggers = check_stop_loss_triggers(
+                    open_positions={
+                        bar.ticker: {
+                            "qty": existing_pos.qty,
+                            "avg_price": existing_pos.avg_price,
+                        },
                     },
-                },
-                current_closes={bar.ticker: Decimal(str(bar.close))},
-                stop_loss_pct=float(
-                    self._strategy.risk.per_trade.stop_loss_pct
-                ),
-            )
-            for trig in sl_triggers:
-                sl_signal = Signal(
-                    strategy_id=self._strategy.id,
-                    user_id=self._user_id,
-                    ticker=trig.ticker,
-                    side="SELL",
-                    qty=existing_pos.qty,
-                    emitted_at_ns=bar.bar_open_ts_ns,
-                    reason="stop_loss",
+                    current_closes={
+                        bar.ticker: Decimal(str(bar.close))
+                    },
+                    stop_loss_pct=float(
+                        self._strategy.risk.per_trade.stop_loss_pct
+                    ),
                 )
-                sl_fill = self._broker.execute(
-                    signal=sl_signal,
-                    last_price=last_price,
-                    fill_date=bar_date_obj,
-                )
-                self._positions.apply_fill(sl_fill)
-                _emit_paper_budget_lifecycle(
-                    user_id=self._user_id,
-                    strategy_id=self._strategy.id,
-                    fill=sl_fill,
-                )
-                self._events.append(
-                    event_row(
-                        session_id=self._session_id,
+                for trig in sl_triggers:
+                    sl_signal = Signal(
+                        strategy_id=self._strategy.id,
+                        user_id=self._user_id,
+                        ticker=trig.ticker,
+                        side="SELL",
+                        qty=existing_pos.qty,
+                        emitted_at_ns=bar.bar_open_ts_ns,
+                        reason="stop_loss",
+                    )
+                    sl_fill = self._broker.execute(
+                        signal=sl_signal,
+                        last_price=last_price,
+                        fill_date=bar_date_obj,
+                    )
+                    self._positions.apply_fill(sl_fill)
+                    _emit_paper_budget_lifecycle(
                         user_id=self._user_id,
                         strategy_id=self._strategy.id,
-                        mode="paper",
-                        type_="order_filled",
-                        payload={
-                            "ticker": sl_fill.ticker,
-                            "side": sl_fill.side,
-                            "qty": sl_fill.qty,
-                            "fill_price": str(sl_fill.fill_price),
-                            "fill_date": (
-                                sl_fill.fill_date.isoformat()
-                            ),
-                            "fees_inr": str(sl_fill.fees_inr),
-                            "fee_rates_version": (
-                                sl_fill.fee_rates_version
-                            ),
-                            "exit_reason": "stop_loss",
-                        },
+                        fill=sl_fill,
                     )
-                )
-                stop_loss_triggered = True
-                # ASETPLTFRM-436 — keep cooldown gate in sync.
-                from backend.algo.backtest.cooldown_hydration \
-                    import _HydratedClose
-                self._cooldown_history.append(_HydratedClose(
-                    ticker=trig.ticker,
-                    exit_reason="stop_loss",
-                    closed_at=bar_date_obj,
-                ))
-                # INFO (not DEBUG) — paper is a real-time simulator;
-                # operators need stops visible without flipping the
-                # log level.
-                _logger.info(
-                    "paper stop_loss SELL %s qty=%d avg=%.4f "
-                    "close=%.4f loss=%.2f%% threshold=%.2f%%",
-                    trig.ticker,
-                    existing_pos.qty,
-                    float(trig.avg_price),
-                    float(trig.current_close),
-                    float(trig.loss_pct),
-                    float(trig.stop_loss_pct),
-                )
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="paper",
+                            type_="order_filled",
+                            payload={
+                                "ticker": sl_fill.ticker,
+                                "side": sl_fill.side,
+                                "qty": sl_fill.qty,
+                                "fill_price": str(sl_fill.fill_price),
+                                "fill_date": (
+                                    sl_fill.fill_date.isoformat()
+                                ),
+                                "fees_inr": str(sl_fill.fees_inr),
+                                "fee_rates_version": (
+                                    sl_fill.fee_rates_version
+                                ),
+                                "exit_reason": "stop_loss",
+                            },
+                        )
+                    )
+                    stop_loss_triggered = True
+                    # ASETPLTFRM-436 — keep cooldown gate in sync.
+                    from backend.algo.backtest.cooldown_hydration \
+                        import _HydratedClose
+                    self._cooldown_history.append(_HydratedClose(
+                        ticker=trig.ticker,
+                        exit_reason="stop_loss",
+                        closed_at=bar_date_obj,
+                    ))
+                    _logger.info(
+                        "paper stop_loss SELL %s qty=%d avg=%.4f "
+                        "close=%.4f loss=%.2f%% threshold=%.2f%%",
+                        trig.ticker,
+                        existing_pos.qty,
+                        float(trig.avg_price),
+                        float(trig.current_close),
+                        float(trig.loss_pct),
+                        float(trig.stop_loss_pct),
+                    )
         if stop_loss_triggered:
             # Same-bar skip: AST eval must NOT run for a ticker
             # that just stopped out — mirrors backtest semantics.
@@ -719,6 +916,8 @@ class PaperRuntime:
                     )
                     continue
                 self._positions.apply_fill(ts_fill)
+                if self._trailing_enabled:
+                    self._trailing_managers.pop(trig.ticker, None)
                 _emit_paper_budget_lifecycle(
                     user_id=self._user_id,
                     strategy_id=self._strategy.id,
@@ -928,6 +1127,35 @@ class PaperRuntime:
             fill_date=bar_date_obj,
         )
         self._positions.apply_fill(fill)
+        if self._trailing_enabled:
+            if fill.side == "BUY":
+                # Mirror the backtest runner: compute ATR directly from
+                # the per-ticker OHLCV history (already in scope as
+                # `history`). The factor cache does not store atr_14.
+                _bars_up = [b for b in history if b.date <= bar_date_obj]
+                _atr_series = _wilder_atr(_bars_up, 14)
+                _atr = float(
+                    _atr_series[-1]
+                    if _atr_series and _atr_series[-1] is not None
+                    else 0.0
+                )
+                if _atr > 0 and fill.ticker not in self._trailing_managers:
+                    self._trailing_managers[fill.ticker] = (
+                        TrailingStopManager(
+                            self._strategy.risk.per_trade,
+                            entry_price=float(fill.fill_price),
+                            atr=_atr,
+                            ticker=fill.ticker,
+                        )
+                    )
+                else:
+                    _logger.warning(
+                        "paper trailing: missing atr_14 for %s — "
+                        "no trailing manager created",
+                        fill.ticker,
+                    )
+            elif fill.side == "SELL":
+                self._trailing_managers.pop(fill.ticker, None)
         _emit_paper_budget_lifecycle(
             user_id=self._user_id,
             strategy_id=self._strategy.id,
@@ -989,6 +1217,70 @@ class PaperRuntime:
             )
         return 1
 
+    def _maybe_emit_qty_zero_rejection(
+        self,
+        *,
+        action: dict,
+        ticker: str,
+        last_price: Decimal | None,
+        bar_date: date,
+    ) -> bool:
+        """Emit a ``signal_rejected`` event when a ``set_target_weight``
+        BUY intent sizes to qty=0 because available equity cannot afford
+        a single share.  Mirrors live ``_maybe_emit_qty_zero_rejection``
+        (mode='paper', no dry_run key).  Returns True iff appended.
+        """
+        if not isinstance(action, dict):
+            return False
+        if action.get("type") != "set_target_weight":
+            return False
+        if last_price is None or last_price <= 0:
+            return False
+        try:
+            weight = Decimal(str(action.get("weight", 0)))
+        except (TypeError, ValueError, ArithmeticError):
+            return False
+        if weight <= 0:
+            return False
+        current_equity = (
+            self._initial + self._positions.total_realised_pnl_inr()
+        )
+        if current_equity <= 0:
+            return False
+        target_qty = int((current_equity * weight) // last_price)
+        if target_qty > 0:
+            return False
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="paper",
+                type_="signal_rejected",
+                payload={
+                    "reason": "insufficient_capital_qty_zero",
+                    "ticker": ticker,
+                    "symbol": str(ticker).upper().removesuffix(".NS"),
+                    "side": "BUY",
+                    "qty": 0,
+                    "target_weight": float(weight),
+                    "last_price": str(last_price),
+                    "current_equity_inr": str(current_equity),
+                    "bar_date": bar_date.isoformat(),
+                },
+            )
+        )
+        _logger.info(
+            "paper entry SKIPPED — insufficient capital (qty=0): "
+            "ticker=%s target_weight=%s last_price=%s equity=%s "
+            "(raise capital / weight or use a cheaper universe)",
+            ticker,
+            float(weight),
+            last_price,
+            current_equity,
+        )
+        return True
+
     def _action_to_signal(
         self,
         action: dict,
@@ -1010,6 +1302,53 @@ class PaperRuntime:
                     bar_date_ns=bar_date_ns,
                     last_price=last_price,
                 )
+                if qty <= 0:
+                    # Guard: None/invalid price is an acceptable silent
+                    # drop (no valid tick yet).  Emitting an event here
+                    # would produce "last_price": "None" — a malformed
+                    # payload the live runtime never produces.
+                    if last_price is None or last_price <= 0:
+                        return None
+                    bar_date_obj = datetime.fromtimestamp(
+                        bar_date_ns / 1_000_000_000,
+                        tz=timezone.utc,
+                    ).date()
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="paper",
+                            type_="signal_rejected",
+                            payload={
+                                "reason": (
+                                    "insufficient_capital_qty_zero"
+                                ),
+                                "ticker": ticker,
+                                "symbol": (
+                                    str(ticker).upper().removesuffix(
+                                        ".NS"
+                                    )
+                                ),
+                                "side": "BUY",
+                                "qty": 0,
+                                "last_price": str(last_price),
+                                "current_equity_inr": str(
+                                    self._initial
+                                    + self._positions
+                                    .total_realised_pnl_inr()
+                                ),
+                                "bar_date": bar_date_obj.isoformat(),
+                            },
+                        )
+                    )
+                    _logger.info(
+                        "paper entry SKIPPED — composer qty=0: "
+                        "ticker=%s last_price=%s",
+                        ticker,
+                        last_price,
+                    )
+                    return None
             else:
                 qty = int(qty_spec.get("shares") or 0)
             if qty <= 0:
@@ -1044,6 +1383,14 @@ class PaperRuntime:
         if t == "exit":
             existing = self._positions.open_positions().get(ticker)
             if not existing:
+                return None
+            # v5 trailing stop: GTT/simulated trail is the primary exit —
+            # suppress AST exit signal while trailing manager is active.
+            if self._trailing_enabled and ticker in self._trailing_managers:
+                _logger.info(
+                    "trailing active — suppressing AST exit for %s",
+                    ticker,
+                )
                 return None
             return Signal(
                 strategy_id=self._strategy.id,
@@ -1094,6 +1441,21 @@ class PaperRuntime:
                     qty=int(-diff),
                     emitted_at_ns=bar_date_ns,
                 )
+            # diff==0: either flat+target=0 (can't afford) or holding
+            # already at target. Only the flat+target=0 case is the live
+            # parity drop to surface (matches _maybe_emit_qty_zero_rejection
+            # guard: weight>0, equity>0, target_qty==0).
+            if current_qty == 0 and target_qty == 0:
+                bar_date_obj = datetime.fromtimestamp(
+                    bar_date_ns / 1_000_000_000,
+                    tz=timezone.utc,
+                ).date()
+                self._maybe_emit_qty_zero_rejection(
+                    action=action,
+                    ticker=ticker,
+                    last_price=last_price,
+                    bar_date=bar_date_obj,
+                )
             return None
         return None
 
@@ -1116,6 +1478,10 @@ class PaperRuntime:
             tz=timezone.utc,
         ).date()
         nav = self._initial + self._positions.total_realised_pnl_inr()
+        deployed_cost = sum(
+            Decimal(p.qty) * p.avg_price
+            for p in self._positions.open_positions().values()
+        )
         factor_row = self._factor_cache.get(
             (ticker, bar_date_obj),
             {},
@@ -1128,7 +1494,7 @@ class PaperRuntime:
             ticker=ticker,
             bar_date=bar_date_obj,
             nav=nav,
-            cash=nav,
+            cash=nav - deployed_cost,
             stock_price=last_price,
             realized_vol_annual=realized_vol,
             sector=None,
@@ -1141,18 +1507,15 @@ class PaperRuntime:
         open_qty = {
             t: p.qty for t, p in self._positions.open_positions().items()
         }
-        # Approximate equity = initial + realised. Unrealised
-        # left to caller-supplied marks (Slice 8b reconciles
-        # with live ticks).
+        realised = self._positions.total_realised_pnl_inr()
+        unrealised = self._positions.unrealised_pnl_inr(self._last_marks)
         return AccountState(
             user_id=self._user_id,
             day_date=datetime.now(timezone.utc).date(),
             initial_capital_inr=self._initial,
-            current_equity_inr=(
-                self._initial + self._positions.total_realised_pnl_inr()
-            ),
-            daily_realised_pnl_inr=(self._positions.total_realised_pnl_inr()),
-            daily_unrealised_pnl_inr=Decimal("0"),
+            current_equity_inr=self._initial + realised + unrealised,
+            daily_realised_pnl_inr=realised,
+            daily_unrealised_pnl_inr=unrealised,
             open_positions=open_qty,
             open_position_count=len(open_qty),
             kill_switch_active=self._kill_switch_active,

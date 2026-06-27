@@ -22,7 +22,9 @@ They can be called independently in tests without time-mocking.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import NamedTuple
 from uuid import UUID
@@ -30,12 +32,19 @@ from uuid import UUID
 from sqlalchemy import text
 
 from backend.algo.backtest.event_writer import event_row, flush_events
+from backend.algo.broker.credentials_repo import BrokerCredentialsRepo
+from backend.algo.broker.kite_client import KiteClient
 from backend.algo.live.drift_repo import DriftRepo
-from backend.db.engine import get_session_factory
+from backend.db.engine import disposable_pg_session
 
 _logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
+
+# Broker call timeout — override via ALGO_RECON_KITE_TIMEOUT_S env var.
+_RECON_KITE_TIMEOUT_S: float = float(
+    os.environ.get("ALGO_RECON_KITE_TIMEOUT_S", "15")
+)
 
 
 # ---------------------------------------------------------------
@@ -103,8 +112,7 @@ async def _fetch_our_positions(user_id: UUID) -> dict[str, int]:
     user regardless of source.  In V2-5 the caller will filter to
     ``source='live'`` only.
     """
-    factory = get_session_factory()
-    async with factory() as session:
+    async with disposable_pg_session() as session:
         rows = (
             await session.execute(
                 text(
@@ -132,19 +140,12 @@ async def _fetch_broker_positions(user_id: UUID) -> dict[str, int]:
     Falls back to empty dict if credentials are missing / expired
     (logs a WARNING — the job handles absent credentials gracefully).
     """
-    from backend.algo.broker.credentials_repo import (
-        BrokerCredentialsRepo,
-    )
-    from backend.algo.broker.kite_client import KiteClient
-    from backend.db.engine import get_session_factory
-
     # ``BrokerCredentialsRepo.load`` requires an AsyncSession and
     # returns a dict with already-decrypted ``api_key`` +
     # ``access_token`` + an ``access_token_expired`` bool. No
     # manual Fernet step needed — repo handles decryption itself.
     repo = BrokerCredentialsRepo()
-    factory = get_session_factory()
-    async with factory() as session:
+    async with disposable_pg_session() as session:
         creds = await repo.load(session, user_id)
     if not creds:
         _logger.warning(
@@ -165,7 +166,28 @@ async def _fetch_broker_positions(user_id: UUID) -> dict[str, int]:
         api_key=creds["api_key"],
         access_token=access_token,
     )
-    raw = kite.get_positions()
+    try:
+        raw = await asyncio.wait_for(
+            asyncio.to_thread(kite.get_positions),
+            timeout=_RECON_KITE_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        _logger.warning(
+            "reconcile: kite.get_positions timeout (%.1fs) for user %s"
+            " — skipping this tick",
+            _RECON_KITE_TIMEOUT_S,
+            user_id,
+            exc_info=True,
+        )
+        return {}
+    except Exception:
+        _logger.warning(
+            "reconcile: kite.get_positions error for user %s"
+            " — skipping this tick",
+            user_id,
+            exc_info=True,
+        )
+        return {}
     result: dict[str, int] = {}
     for pos in raw:
         sym = pos.get("tradingsymbol", "")
@@ -186,7 +208,9 @@ async def reconcile_user(user_id: UUID) -> dict:
     1. Fetch our open positions from PG.
     2. Fetch broker net positions from Kite.
     3. Compute drift (respecting per-user threshold).
-    4. For each NEW drift symbol → emit ``position_drift_detected``.
+    4. For each NEW drift symbol → emit ``position_drift_untracked``
+       (severity="high", when broker_qty>0 & our_qty==0) or
+       ``position_drift_detected`` (other drifts).
        For previously seen, same diff → only bump counter.
        For symbols that were drifting but now agree → emit
        ``drift_resolved``.
@@ -228,18 +252,34 @@ async def reconcile_user(user_id: UUID) -> dict:
         )
         if is_new:
             # First time we see this drift → emit event.
-            events.append(event_row(
-                session_id=UUID(int=0),  # system event
-                user_id=user_id,
-                strategy_id=None,
-                mode="live",
-                type_="position_drift_detected",
-                payload={
-                    **diff_payload,
-                    "consecutive_runs": new_count,
-                    "threshold": threshold,
-                },
-            ))
+            # Untracked: broker holds shares we have NO record of.
+            if item.broker_qty > 0 and item.our_qty == 0:
+                events.append(event_row(
+                    session_id=UUID(int=0),  # system event
+                    user_id=user_id,
+                    strategy_id=None,
+                    mode="live",
+                    type_="position_drift_untracked",
+                    payload={
+                        **diff_payload,
+                        "severity": "high",
+                        "consecutive_runs": new_count,
+                        "threshold": threshold,
+                    },
+                ))
+            else:
+                events.append(event_row(
+                    session_id=UUID(int=0),  # system event
+                    user_id=user_id,
+                    strategy_id=None,
+                    mode="live",
+                    type_="position_drift_detected",
+                    payload={
+                        **diff_payload,
+                        "consecutive_runs": new_count,
+                        "threshold": threshold,
+                    },
+                ))
 
     # --- Handle resolved drifts -------------------------------
     resolved_symbols = open_symbols - current_symbols

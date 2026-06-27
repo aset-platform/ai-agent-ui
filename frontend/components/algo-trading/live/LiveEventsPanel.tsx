@@ -7,11 +7,13 @@
  * land in real time without leaving the page.
  *
  * Surfaces every event LiveRuntime emits (signal_generated,
- * signal_rejected, order_submitted_live, order_rejected_live,
- * order_filled_live, order_cancelled_live, order_cancelled_timeout,
- * order_duplicate_blocked, order_ltp_stale_blocked,
- * order_freeze_chunked, freeze_qty_fallback_applied,
- * position_hydrated) with a colour-coded badge + the most
+ * signal_rejected, signal_adjusted, order_submitted_live,
+ * order_rejected_live, order_filled_live, order_cancelled_live,
+ * order_cancelled_timeout, order_duplicate_blocked,
+ * order_ltp_stale_blocked, order_freeze_chunked,
+ * freeze_qty_fallback_applied, position_hydrated,
+ * trailing_stop_recovered, trailing_gtt_verified) with a
+ * colour-coded badge + the most
  * salient payload fields. Click a row to expand its raw payload.
  *
  * Reuses usePaperEvents (mode="live", dry_run=false) — same SWR
@@ -101,6 +103,21 @@ const TYPE_BADGE: Record<string, BadgeStyle> = {
     text: "text-slate-700 dark:text-slate-300",
     label: "POSTBACK",
   },
+  trailing_stop_recovered: {
+    bg: "bg-cyan-100 dark:bg-cyan-900/40",
+    text: "text-cyan-800 dark:text-cyan-200",
+    label: "RESTORED",
+  },
+  trailing_gtt_verified: {
+    bg: "bg-teal-100 dark:bg-teal-900/40",
+    text: "text-teal-800 dark:text-teal-200",
+    label: "GTT-OK",
+  },
+  signal_adjusted: {
+    bg: "bg-orange-100 dark:bg-orange-900/40",
+    text: "text-orange-800 dark:text-orange-200",
+    label: "ADJUSTED",
+  },
 };
 
 const FALLBACK_BADGE: BadgeStyle = {
@@ -174,6 +191,22 @@ function summarise(
       const ts = payload["tradingsymbol"] ?? sym;
       const status = String(payload["status"] ?? "");
       return `${ts || "?"} — ${status || "received"}`;
+    }
+    case "trailing_stop_recovered": {
+      const stop = payload["current_stop"];
+      const phase = payload["phase"];
+      return `${sym} phase=${phase} stop=₹${stop} ← Redis`;
+    }
+    case "trailing_gtt_verified": {
+      const stop = payload["current_stop"];
+      const phase = payload["phase"];
+      const gtt = payload["gtt_id"];
+      return `${sym} phase=${phase} stop=₹${stop} GTT #${gtt}`;
+    }
+    case "signal_adjusted": {
+      const oldQty = payload["old_qty"];
+      const newQty = payload["new_qty"];
+      return `${sym} ${side} qty ${oldQty} → ${newQty}`;
     }
     default:
       return sym || "—";

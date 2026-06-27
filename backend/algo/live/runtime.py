@@ -31,8 +31,10 @@ cancel them.  Each entry is::
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
+import time as _time
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from typing import Any
@@ -55,6 +57,13 @@ from backend.algo.backtest.stop_loss_monitor import (
 from backend.algo.backtest.time_stop_monitor import (
     check_time_stop_triggers,
 )
+from backend.algo.backtest.trailing_stop_manager import (
+    TrailingStopManager,
+)
+from backend.algo.features.primitives import wilder_atr as _wilder_atr
+from backend.algo.broker.exceptions import (
+    PartialChunkPlacementError,
+)
 from backend.algo.broker.freeze_cache import get_tick_size
 from backend.algo.broker.kite_client import KiteClient
 
@@ -70,12 +79,23 @@ from backend.algo.features.per_bar import (
 from backend.algo.live import slippage as _slippage
 from backend.algo.live.order_timeout import _OrderTimeoutWatcher
 from backend.algo.live.budget import (
+    fetch_kite_available_cash,
     reserve as budget_reserve,
+)
+from backend.algo.live.budget import (
+    reserve_if_headroom as budget_reserve_if_headroom,
+)
+from backend.algo.live.budget import (
+    sum_active_reservations_for_strategy as budget_active_for_strategy,
 )
 from backend.algo.live.budget import (
     transition as budget_transition,
 )
+from backend.algo.live.budget import (
+    load_user_budget as budget_load_user,
+)
 from backend.algo.live.budget_types import ReservationState
+from backend.db.engine import disposable_pg_session
 from backend.algo.live.safety import (
     LiveRejectReason,
     pre_trade_check,
@@ -124,12 +144,64 @@ _MIN_EVAL_TIME_IST = _parse_ist_time(
     os.environ.get("ALGO_DAILY_MIN_EVAL_TIME_IST", "14:20"),
 )
 
+# Earliest wall-clock at which a BUY order may be placed.
+# The NSE opening auction runs 09:07–09:15; the first 15 min of the
+# regular session (09:15–09:30) is typically high-volatility price
+# discovery. No BUY is placed before this time regardless of which
+# eval path fired. SELLs and GTT exits are never gated here.
+# Override: ALGO_MIN_BUY_TIME_IST (HH:MM IST).
+_MIN_BUY_TIME_IST = _parse_ist_time(
+    os.environ.get("ALGO_MIN_BUY_TIME_IST", "09:30"),
+)
+
 # PR3 — live-mode events are buffered and flushed on this cadence
 # instead of one Iceberg commit per signal. The terminal flush on
 # session stop drains whatever remains. Env-overridable for tuning.
 _EVENT_FLUSH_INTERVAL_S = float(
     os.environ.get("ALGO_EVENT_FLUSH_INTERVAL_S", "5")
 )
+
+# Task 7.6 — timeout for the worker-thread blocking wait when the
+# emergency STOP_HIT SELL is routed through _submit_order via
+# run_coroutine_threadsafe. Falls back to 15.0 on any parse error.
+try:
+    _EMERGENCY_SUBMIT_TIMEOUT_S = float(
+        os.getenv("ALGO_EMERGENCY_SUBMIT_TIMEOUT_S", "15")
+    )
+    if _EMERGENCY_SUBMIT_TIMEOUT_S <= 0:
+        raise ValueError("must be positive")
+except Exception:  # noqa: BLE001
+    _EMERGENCY_SUBMIT_TIMEOUT_S = 15.0
+
+# High #15 — cap per-ticker bar history so a long live session cannot
+# grow _bars_by_ticker without bound. 300 > SMA-200 (largest indicator
+# lookback) with headroom; override via ALGO_MAX_BAR_HISTORY env var.
+# Falls back to 300 on any parse error so a bad env value doesn't crash
+# the runtime at startup.
+try:
+    _MAX_BAR_HISTORY = int(os.getenv("ALGO_MAX_BAR_HISTORY", "300"))
+    if _MAX_BAR_HISTORY < 1:
+        raise ValueError("must be positive")
+except Exception:  # noqa: BLE001
+    _MAX_BAR_HISTORY = 300
+
+# _closed_entry_cache keys are (ticker, closed_date). Entries whose
+# date is older than this many calendar days are evicted at bar-close.
+# 4 calendar days covers 2 trading days including a weekend.
+_CLOSED_ENTRY_CACHE_MAX_AGE_DAYS = 4
+
+
+def _env_truthy(name: str) -> bool:
+    """True when env var ``name`` is set to a truthy value.
+
+    Read live (not at import) so tests can toggle it via monkeypatch
+    and operators can flip it without a restart. Truthy ⇔ one of
+    ``1/true/yes/on`` (case-insensitive); anything else is False.
+    """
+    val = os.environ.get(name)
+    if val is None:
+        return False
+    return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _select_last_price_ts_ns(tick: Any) -> int:
@@ -143,6 +215,64 @@ def _select_last_price_ts_ns(tick: Any) -> int:
     detect.
     """
     return tick.exchange_ts_ns or tick.ts_ns
+
+
+def _parse_fill_date(*candidates: Any) -> date | None:
+    """Return the ``date`` parsed from the first ISO-8601 candidate.
+
+    Used to preserve a position's REAL open date across a restart /
+    fill-sync. Each candidate is an ISO-8601 timestamp string (e.g.
+    the in-flight entry's ``filled_at`` or ``submitted_at``). The
+    first parseable one wins; returns ``None`` when none parse so the
+    caller can fall back to ``date.today()`` rather than crash.
+
+    A naive timestamp (no tz) is treated as UTC. We take the UTC
+    ``.date()`` — fill dates are coarse-grained for the calendar-day
+    ``max_holding_days`` arithmetic, so tz drift of a few hours never
+    flips a holding-day count near the boundary in a way that under-
+    counts (UTC is at or behind IST, so it never reports the position
+    as YOUNGER than it really is).
+    """
+    for cand in candidates:
+        if not cand:
+            continue
+        if isinstance(cand, date) and not isinstance(cand, datetime):
+            return cand
+        if isinstance(cand, datetime):
+            return cand.date()
+        if not isinstance(cand, str):
+            continue
+        raw = cand.strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            _logger.warning(
+                "fill-date: cannot parse ISO timestamp %r", cand,
+            )
+            continue
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed.date()
+    return None
+
+
+def _to_int(v: Any) -> int:
+    """Coerce a broker numeric field to int; 0 on garbage/None."""
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_ns(tradingsymbol: str) -> str:
+    """Kite bare tradingsymbol -> internal ``.NS`` ticker form.
+
+    Leaves a symbol that already carries an exchange suffix
+    (``"RELIANCE.NS"``) untouched; appends ``.NS`` otherwise.
+    """
+    return tradingsymbol if "." in tradingsymbol else f"{tradingsymbol}.NS"
 
 
 class LiveNotEnabledError(RuntimeError):
@@ -214,6 +344,9 @@ class LiveRuntime:
         self._caps = caps
         self._run_id = run_id
         self._caps_repo = caps_repo
+        self._gtt_limit_headroom_pct: float = float(
+            caps.get("gtt_limit_headroom_pct", 0.01)
+        )
         self._kill_switch_repo = kill_switch_repo
         self._ticker_to_token = ticker_to_token or {}
         self._evaluator = Evaluator()
@@ -234,6 +367,21 @@ class LiveRuntime:
         # positions + Redis; flushed to algo.runs every 30s.
         self._ticker_locked: set[str] = set()
         self._bars_by_ticker: dict[str, list] = {}
+        # Task 4.0a — anti-churn guard. Keyed on (ticker, side) →
+        # epoch seconds of the last ACTUAL placement. A non-protective
+        # (rebalance/entry) order for the same key inside
+        # ALGO_ORDER_COOLDOWN_S is suppressed; protective exits are
+        # exempt. See _submit_order's churn guard.
+        self._last_submit_ts: dict[tuple[str, str], float] = {}
+
+        # Task 4.0b — capital-shrink guardrail. Set True in run() when
+        # the configured start capital is below the cost-basis of
+        # already-deployed positions (e.g. runtime restarted with ₹20k
+        # while real positions were built under ₹100k). While set, the
+        # ``set_target_weight`` branch SUPPRESSES rebalance-DOWN trims
+        # (which would liquidate real shares) — BUYs and protective
+        # exits are unaffected. See _detect_capital_below_deployed.
+        self._capital_below_deployed: bool = False
 
         # ASETPLTFRM-376 — hydrate PositionTracker from any pre-
         # existing Kite positions/holdings so EXIT logic can see
@@ -343,6 +491,14 @@ class LiveRuntime:
         # not a ticker list).
         self._factor_cache: dict[tuple[str, date], dict[str, Decimal]] = {}
         self._factor_loaded_for_ticker: set[str] = set()
+        # v5 three-phase trailing stop (all None = disabled; v3 unchanged).
+        self._trailing_enabled = (
+            strategy.risk.per_trade.trailing_trigger_pct is not None
+            and strategy.risk.per_trade.trailing_atr_multiplier is not None
+        )
+        self._trailing_managers: dict[str, TrailingStopManager] = {}
+        self._gtt_ids: dict[str, int] = {}
+        self._ws_hwm: dict[str, float] = {}
         # REGIME-1 — regime_label + stress_prob lookup, loaded
         # lazily on first bar so live sessions resolve regime
         # features identically to backtest + paper.
@@ -506,10 +662,23 @@ class LiveRuntime:
         # ``finally:`` block when the runtime stops.
         # Daily / CNC strategies leave this as None.
         self._square_off_task: asyncio.Task | None = None
+        # Task 7.7 — per-ticker last observed LTP, written every tick
+        # inside run() so _square_off_all_open() can price its SELL
+        # off live market price instead of the stale avg_price anchor.
+        self._last_price_per_ticker: dict[str, Decimal] = {}
 
         # PR3 — periodic algo.events flush task. Started in run(),
         # cancelled in its finally: before the terminal flush.
         self._event_flush_task: asyncio.Task | None = None
+        # v5 trailing stop — 15-min GTT ratchet task (trailing-
+        # enabled strategies only). Started in run(), cancelled in
+        # finally: before terminal flush.
+        self._trailing_ratchet_task: asyncio.Task | None = None
+        # Task 7.6 — event loop reference, set in run() once the loop
+        # is running. Allows _ratchet_all_gtts (a sync method run on a
+        # worker thread) to route the emergency SELL through _submit_order
+        # via run_coroutine_threadsafe. None until run() starts.
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def _load_bucket_by_ticker(self) -> dict[str, str]:
         """Read latest ``stocks.universe_snapshot`` and build a
@@ -730,18 +899,33 @@ class LiveRuntime:
             ticker = f"{sym}.NS" if not sym.endswith(".NS") else sym
             qty = int(pg_entry.get("qty") or pg_entry.get("fill_qty") or 0)
             fill_price_raw = pg_entry.get("fill_price") or 0
-            fill_price = Decimal(str(fill_price_raw)) if fill_price_raw else Decimal("0")
+            fill_price = (
+                Decimal(str(fill_price_raw))
+                if fill_price_raw
+                else Decimal("0")
+            )
             if qty <= 0:
                 continue
             if side not in ("BUY", "SELL"):
                 continue
+            # Preserve the REAL fill date so opened_at (→ time-stop
+            # holding-days) survives a restart. The webhook stamps
+            # ``filled_at`` on the in-flight entry at fill time;
+            # ``submitted_at`` is the fallback. Only default to today
+            # when neither is present/parseable.
+            orig_date = _parse_fill_date(
+                pg_entry.get("filled_at"),
+                pg_entry.get("submitted_at"),
+            )
+            if orig_date is None:
+                orig_date = _dt.now(_tz.utc).date()
             fill = Fill(
                 intent_id=uuid4(),
                 ticker=ticker,
                 side=side,  # type: ignore[arg-type]
                 qty=qty,
                 fill_price=fill_price,
-                fill_date=_dt.now(_tz.utc).date(),
+                fill_date=orig_date,
                 fees_inr=Decimal("0"),
                 fee_rates_version="postback_sync",
             )
@@ -755,6 +939,31 @@ class LiveRuntime:
             # Mirror status into in-memory _in_flight so next sync skips it
             if mem_entry is not None:
                 mem_entry["status"] = "filled"
+
+            # Place the protective GTT / trailing manager exactly as the
+            # webhook postback does. Without this a BUY synced here (postback
+            # miss / mid-session restart) is left NAKED — no stop — for the
+            # rest of the session. on_buy_fill_trailing is sync, self-gates on
+            # _trailing_enabled, and is idempotent on _trailing_managers; it
+            # does blocking Kite I/O so run it off the event loop.
+            if (
+                side == "BUY"
+                and self._trailing_enabled
+                and ticker not in self._trailing_managers
+            ):
+                try:
+                    await asyncio.to_thread(
+                        self.on_buy_fill_trailing,
+                        ticker=ticker,
+                        fill_price=float(fill_price),
+                        qty=qty,
+                    )
+                except Exception:  # noqa: BLE001
+                    _logger.error(
+                        "fill-sync: protective GTT init failed for %s "
+                        "— position may be unprotected until ratchet",
+                        ticker, exc_info=True,
+                    )
 
             # Transition the budget reservation to FILLED immediately.
             # reservation_id was stored in the in-flight entry at submit
@@ -828,6 +1037,57 @@ class LiveRuntime:
                         )
         except asyncio.CancelledError:
             raise
+
+    def _per_bar_sync_reads(
+        self,
+        *,
+        ticker: str,
+        bar_date_obj: date,
+        history: list[Any],
+        cadence: str,
+    ) -> None:
+        """Sync Iceberg reads + feature emit for one bar.
+
+        Called via ``asyncio.to_thread`` from ``_on_bar_close`` so
+        the event-loop tick drain is not blocked. Must complete before
+        ``assemble_per_bar_features`` (sequential ``await``).
+
+        FE-10: feature emission failure is non-fatal (try/except kept
+        as today — ticker logged, bar continues).
+        REGIME-2a: factor / regime / overlay caches are idempotent +
+        O(1) after first load so repeated calls are cheap.
+        """
+        # FE-10 — emit per-ticker intraday features to
+        # ``stocks.intraday_features`` for the bar that just
+        # closed. Side-effect only; failure is non-fatal. Daily
+        # cadence is a no-op inside the emitter (FE-3 owns the
+        # daily writes). Cohort features (FE-8 / FE-9) are NOT
+        # emitted here — daily-batch compute is canonical.
+        try:
+            from backend.algo.features.live_emitter import (
+                _INTERVAL_SEC_BY_LABEL,
+                emit_features_for_bar,
+            )
+
+            if cadence in _INTERVAL_SEC_BY_LABEL:
+                emit_features_for_bar(
+                    ticker=ticker,
+                    interval_sec=_INTERVAL_SEC_BY_LABEL[cadence],
+                    history=history,
+                    cadence_interval=cadence,
+                    mode="live",
+                )
+        except Exception:
+            _logger.exception(
+                "[live] FE-10 feature emission hook failed "
+                "(non-fatal): ticker=%s",
+                ticker,
+            )
+        # REGIME-2a — lazy-load cached factor rows for this
+        # ticker on first sight; subsequent bars are O(1).
+        self._ensure_factor_cache(ticker, bar_date_obj)
+        self._ensure_regime_cache(bar_date_obj)
+        self._ensure_daily_overlay_cache(ticker, bar_date_obj)
 
     def _ensure_regime_cache(self, bar_date_obj: date) -> None:
         if self._regime_loaded:
@@ -974,10 +1234,8 @@ class LiveRuntime:
             return time(15, 14)
 
     async def _schedule_mis_square_off(self) -> None:
-        """Sleep until ``square_off_time`` IST today, then emit a
-        synthetic SELL signal for every open position via the
-        normal ``_submit_order`` path. Caps + slippage + audit all
-        apply normally.
+        """Sleep until ``square_off_time`` IST today, then close all
+        open positions via :meth:`_square_off_all_open`.
 
         Cancelled by ``run()``'s ``finally:`` block on session stop.
         If the target time is already in the past at scheduling
@@ -987,8 +1245,6 @@ class LiveRuntime:
         Daily / CNC strategies must never reach this method —
         ``run()`` only schedules it when ``strategy.product == "MIS"``.
         """
-        from backend.algo.paper.types import Signal
-
         target_t = self._parse_square_off_ist(
             self._strategy.square_off_time,
         )
@@ -1025,6 +1281,27 @@ class LiveRuntime:
             )
             raise
 
+        await self._square_off_all_open()
+
+    async def _square_off_all_open(self) -> None:
+        """Emit a SELL signal for every open MIS position.
+
+        Called by :meth:`_schedule_mis_square_off` after the sleep
+        fires. Also callable directly in tests or emergency paths.
+
+        For each open position with ``qty > 0``:
+
+        1. **Cancel GTT first** — pop and delete any active protective
+           GTT so it cannot fire concurrently with the SELL, causing a
+           double-sell. Failure to cancel is best-effort (logged,
+           never skips the SELL).
+        2. **Price off live LTP** — use
+           ``self._last_price_per_ticker`` (updated every tick in
+           ``run()``). Falls back to ``pos.avg_price`` when no tick
+           has been seen for the ticker (e.g. early-morning test).
+        """
+        from backend.algo.paper.types import Signal
+
         open_positions = self._positions.open_positions()
         if not open_positions:
             _logger.info(
@@ -1042,6 +1319,32 @@ class LiveRuntime:
         for ticker, pos in list(open_positions.items()):
             if pos.qty <= 0:
                 continue
+
+            # ── 1. Cancel GTT before SELL (prevents double-sell) ──
+            gtt_id = self._gtt_ids.pop(ticker, None)
+            if gtt_id:
+                try:
+                    self._kite.delete_gtt(gtt_id)
+                except Exception as exc:  # noqa: BLE001
+                    _logger.warning(
+                        "LiveRuntime: MIS auto-square could not "
+                        "cancel GTT %d for %s: %s — proceeding "
+                        "with SELL anyway",
+                        gtt_id,
+                        ticker,
+                        exc,
+                        exc_info=True,
+                    )
+            self._trailing_managers.pop(ticker, None)
+            self._ws_hwm.pop(ticker, None)
+
+            # ── 2. Price off live LTP; fall back to avg_price ──
+            live_ltp = self._last_price_per_ticker.get(ticker)
+            if live_ltp is not None and live_ltp > 0:
+                last_price = live_ltp
+            else:
+                last_price = Decimal(str(pos.avg_price))
+
             signal = Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
@@ -1053,15 +1356,10 @@ class LiveRuntime:
                 ),
                 reason="mis_auto_square_off",
             )
-            # Use the position's avg price as a reference for the
-            # marketable-LIMIT calc inside _submit_order. Real-time
-            # LTP would be better, but this method runs from a
-            # standalone task and doesn't have the per-tick last
-            # price map handy. Avg-price is a conservative anchor.
             try:
                 await self._submit_order(
                     signal=signal,
-                    last_price=Decimal(str(pos.avg_price)),
+                    last_price=last_price,
                 )
             except Exception as exc:  # noqa: BLE001
                 _logger.warning(
@@ -1073,8 +1371,1123 @@ class LiveRuntime:
                     exc_info=True,
                 )
 
+    # ── v5 GTT trailing stop — 15-min ratchet ────────────────────
+
+    async def _trailing_ratchet_loop(self) -> None:
+        """Every 15 min during market hours: ratchet GTTs.
+
+        Aligned to 15m bar boundaries starting 09:15 IST.
+        Stops evaluating at 15:25 IST (strategy time-stop fires
+        before then to close all positions anyway).
+        """
+        _MARKET_OPEN = (9, 15)
+        _MARKET_CLOSE = (15, 25)
+        _INTERVAL_MIN = 15
+
+        while True:
+            try:
+                now_ist = datetime.now(IST)
+                h, m = now_ist.hour, now_ist.minute
+
+                after_open = (h, m) >= _MARKET_OPEN
+                before_close = (h, m) < _MARKET_CLOSE
+                if not (after_open and before_close):
+                    await asyncio.sleep(60)
+                    continue
+
+                minutes_past = (
+                    (m - _MARKET_OPEN[1]) % _INTERVAL_MIN
+                )
+                wait_s = (
+                    (_INTERVAL_MIN - minutes_past) * 60
+                    - now_ist.second
+                )
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s)
+
+                if not self._trailing_enabled:
+                    continue
+
+                await asyncio.to_thread(self._ratchet_all_gtts)
+
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                _logger.error(
+                    "trailing ratchet loop error: %s",
+                    exc, exc_info=True,
+                )
+                await asyncio.sleep(30)
+
+    def _ratchet_all_gtts(self) -> None:
+        """Sync: evaluate all trailing managers against WS HWM.
+
+        Called from ``_trailing_ratchet_loop`` via
+        ``asyncio.to_thread``. Updates GTTs when stop ratchets up.
+        Places an emergency limit sell if STOP_HIT is detected via
+        the WS HWM (i.e. the GTT fired but the postback hasn't
+        arrived yet, or the GTT missed).
+        """
+        for ticker, mgr in list(self._trailing_managers.items()):
+            pos = self._positions.open_positions().get(ticker)
+            if pos is None or pos.qty <= 0:
+                self._trailing_managers.pop(ticker, None)
+                continue
+
+            hwm_price = self._ws_hwm.get(ticker, 0.0)
+            if hwm_price <= 0:
+                continue
+
+            old_stop = mgr.current_stop
+            event = mgr.on_price_update(hwm_price)
+
+            if event is None:
+                continue
+
+            if event.event_type == "STOP_UPDATED":
+                old_gtt_id = self._gtt_ids.get(ticker)
+                stop = mgr.current_stop
+                limit = stop * (
+                    1.0 - self._gtt_limit_headroom_pct
+                )
+                try:
+                    if old_gtt_id:
+                        self._kite.delete_gtt(old_gtt_id)
+                    new_id = self._kite.place_gtt(
+                        ticker=ticker,
+                        trigger_price=stop,
+                        limit_price=limit,
+                        qty=pos.qty,
+                        last_price=hwm_price,
+                    )
+                    self._gtt_ids[ticker] = new_id
+                    self._save_trailing_state(ticker, mgr, new_id)
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="gtt_ratcheted",
+                            payload={
+                                "ticker": ticker,
+                                "phase": event.phase.value,
+                                "old_stop": old_stop,
+                                "new_stop": stop,
+                                "hwm": event.hwm,
+                                "gtt_id_old": old_gtt_id,
+                                "gtt_id_new": new_id,
+                                "dry_run": self._dry_run,
+                            },
+                        )
+                    )
+                    _logger.info(
+                        "trailing: ratcheted GTT %s "
+                        "%.4f → %.4f (phase %d) dry=%s",
+                        ticker, old_stop, stop,
+                        event.phase.value, self._dry_run,
+                    )
+                except Exception as exc:
+                    _logger.error(
+                        "trailing: ratchet GTT failed for %s: %s",
+                        ticker, exc, exc_info=True,
+                    )
+
+            elif event.event_type == "STOP_HIT":
+                _logger.warning(
+                    "trailing: STOP_HIT via WS HWM for %s "
+                    "— GTT may not have fired; emergency SELL",
+                    ticker,
+                )
+                old_gtt_id = self._gtt_ids.pop(ticker, None)
+                if old_gtt_id:
+                    # Best-effort: a GTT-cancel failure (e.g. token
+                    # expiry / network — Task 7.9 made delete_gtt raise
+                    # on real errors) must NOT skip the emergency SELL
+                    # that follows. Protective exit always proceeds.
+                    try:
+                        self._kite.delete_gtt(old_gtt_id)
+                    except Exception as exc:  # noqa: BLE001
+                        _logger.error(
+                            "trailing: STOP_HIT delete_gtt %s failed "
+                            "for %s — proceeding with emergency SELL: "
+                            "%s",
+                            old_gtt_id, ticker, exc, exc_info=True,
+                        )
+                # Task 7.6 — concurrency guard: detect whether we are
+                # on the event-loop thread or a worker thread.
+                # run_coroutine_threadsafe(...).result() deadlocks if
+                # called FROM the loop thread (the blocked thread IS
+                # the loop so the coro can never run). In production
+                # _ratchet_all_gtts runs via asyncio.to_thread, so the
+                # loop is free; but tests call it synchronously on the
+                # loop thread — those must fall back to direct
+                # place_order so the protective exit is never skipped.
+                _on_loop_thread = True
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    _on_loop_thread = False
+                _use_tracked = (
+                    self._loop is not None
+                    and self._loop.is_running()
+                    and not _on_loop_thread
+                )
+                # sold tracks whether the protective exit was actually
+                # placed. Manager is only popped when sold=True; on
+                # failure it stays so the next ratchet tick retries.
+                sold = False
+                raw = ticker.removesuffix(".NS").removesuffix(".BO")
+                if _use_tracked:
+                    # Worker-thread path (production): route through the
+                    # tracked _submit_order which records _in_flight,
+                    # applies tick-rounding, dedup, and reconciliation.
+                    _sig = Signal(
+                        strategy_id=self._strategy.id,
+                        user_id=self._user_id,
+                        ticker=ticker,
+                        side="SELL",
+                        qty=pos.qty,
+                        emitted_at_ns=_time.time_ns(),
+                        reason="stop_loss",
+                    )
+                    try:
+                        _fut = asyncio.run_coroutine_threadsafe(
+                            self._submit_order(
+                                signal=_sig,
+                                last_price=Decimal(
+                                    str(mgr.current_stop)
+                                ),
+                            ),
+                            self._loop,
+                        )
+                        _fut.result(
+                            timeout=_EMERGENCY_SUBMIT_TIMEOUT_S
+                        )
+                        sold = True
+                    except concurrent.futures.TimeoutError:
+                        # Order MAY already be in flight on the loop —
+                        # do NOT retry via place_order (double-sell
+                        # risk). Keep the manager so the next ratchet
+                        # tick (~30s) retries the protective exit.
+                        _logger.warning(
+                            "trailing: tracked emergency SELL timed"
+                            " out for %s — order may be in flight;"
+                            " manager retained for retry",
+                            ticker,
+                            exc_info=True,
+                        )
+                    except Exception as exc:
+                        # Coroutine did NOT submit — safe to attempt a
+                        # last-resort direct place_order (no in-flight
+                        # order possible on non-timeout path).
+                        _logger.error(
+                            "trailing: tracked emergency SELL failed"
+                            " for %s: %s — attempting direct fallback",
+                            ticker,
+                            exc,
+                            exc_info=True,
+                        )
+                        try:
+                            self._kite.place_order(
+                                tradingsymbol=raw,
+                                exchange="NSE",
+                                transaction_type="SELL",
+                                quantity=pos.qty,
+                                order_type="LIMIT",
+                                price=mgr.current_stop,
+                                product=(
+                                    self._strategy.product or "CNC"
+                                ),
+                            )
+                            sold = True
+                        except Exception as exc2:
+                            _logger.error(
+                                "trailing: last-resort direct SELL"
+                                " also failed for %s: %s",
+                                ticker,
+                                exc2,
+                                exc_info=True,
+                            )
+                else:
+                    # Loop-thread / no-loop / sync-test path: fall back
+                    # to direct place_order so the protective exit is
+                    # never skipped and existing sync tests pass.
+                    try:
+                        self._kite.place_order(
+                            tradingsymbol=raw,
+                            exchange="NSE",
+                            transaction_type="SELL",
+                            quantity=pos.qty,
+                            order_type="LIMIT",
+                            price=mgr.current_stop,
+                            product=self._strategy.product or "CNC",
+                        )
+                        sold = True
+                    except Exception as exc:
+                        _logger.error(
+                            "trailing: emergency SELL failed for "
+                            "%s: %s",
+                            ticker,
+                            exc,
+                            exc_info=True,
+                        )
+                # Only clean up the manager when the SELL was actually
+                # placed. On failure, keep it so the next ratchet tick
+                # retries the protective exit — mirrors STOP_UPDATED
+                # (test_ratchet_graceful_when_place_gtt_raises).
+                if sold:
+                    self._trailing_managers.pop(ticker, None)
+
+    # ── v5 GTT trailing stop ─────────────────────────────────────
+
+    def _on_sell_fill_trailing(
+        self,
+        ticker: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        """Clear trailing state when a position-closing SELL fills.
+
+        Called from the postback handler on COMPLETE SELL.
+
+        ``reason`` is the signal reason stored in the in-flight entry.
+        A ``set_target_weight`` SELL is a rebalancing *trim* (partial
+        reduce to fit the 20% weight), NOT a full position close.
+        For trims the GTT and trailing state must be preserved so the
+        remaining shares stay protected. Only exit/stop_loss/None (GTT
+        trigger postback has no in-flight entry) → full close cleanup.
+
+        Safe to call even when no trailing state exists for the ticker.
+        A GTT-cancel failure must NOT abort the rest of the cleanup
+        (best-effort, logged with ``exc_info``).
+        """
+        if not self._trailing_enabled:
+            return
+        if reason == "set_target_weight":
+            # Rebalancing trim: position is NOT fully closed.
+            # Keep GTT + trailing manager active to protect what remains.
+            _logger.info(
+                "trailing: set_target_weight trim for %s — "
+                "preserving GTT/trailing state (not a full close); "
+                "gtt_id=%s",
+                ticker, self._gtt_ids.get(ticker),
+            )
+            return
+        # Full close (exit, stop_loss, GTT fire, panic-close, etc.)
+        # Capture the gtt_id BEFORE popping so we can cancel it.
+        gtt_id = self._gtt_ids.get(ticker)
+        self._trailing_managers.pop(ticker, None)
+        self._gtt_ids.pop(ticker, None)
+        self._ws_hwm.pop(ticker, None)
+        try:
+            from backend.cache import get_cache
+            get_cache().invalidate_exact(
+                f"trailing:{self._user_id}:"
+                f"{self._strategy.id}:{ticker}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        if gtt_id:
+            try:
+                self._kite.delete_gtt(gtt_id)
+            except Exception as exc:
+                _logger.warning(
+                    "trailing: delete_gtt %s failed on SELL close "
+                    "for %s: %s",
+                    gtt_id, ticker, exc, exc_info=True,
+                )
+        self._ticker_locked.discard(ticker)
+        self._sync_ticker_lock_to_redis()
+        _logger.info(
+            "trailing: state cleared for %s after SELL fill "
+            "(gtt_id=%s, lock released)", ticker, gtt_id,
+        )
+
+    def on_buy_fill_trailing(
+        self,
+        *,
+        ticker: str,
+        fill_price: float,
+        qty: int,
+    ) -> None:
+        """Initialise TrailingStopManager + place GTT after BUY fill.
+
+        Called by the postback route when a COMPLETE BUY arrives for
+        a trailing-enabled strategy. Safe to call from any thread —
+        the only shared state is the in-memory dicts (no await).
+        """
+        if not self._trailing_enabled:
+            return
+        today = datetime.now(timezone.utc).date()
+        _atr_raw = next(
+            (
+                self._factor_cache.get((ticker, today - timedelta(days=n)))
+                for n in range(8)
+                if (today - timedelta(days=n)).weekday() < 5
+                and self._factor_cache.get((ticker, today - timedelta(days=n)))
+            ),
+            {},
+        )
+        atr = float(_atr_raw.get("atr_14", 0.0))
+        if atr <= 0:
+            _bars = self._bars_by_ticker.get(ticker, [])
+            if len(_bars) >= 2:
+                _atr_series = _wilder_atr(_bars, 14)
+                atr = float(
+                    _atr_series[-1]
+                    if _atr_series and _atr_series[-1] is not None
+                    else 0.0
+                )
+        if atr <= 0:
+            atr = fill_price * 0.02
+            _logger.warning(
+                "trailing: atr_14 missing for %s — "
+                "using 2%% price proxy atr=%.4f; "
+                "phase-3 trail may be imprecise",
+                ticker, atr,
+            )
+        mgr = TrailingStopManager(
+            self._strategy.risk.per_trade,
+            entry_price=fill_price,
+            atr=atr,
+            ticker=ticker,
+        )
+        stop = mgr.current_stop
+        limit = stop * (1.0 - self._gtt_limit_headroom_pct)
+        try:
+            gtt_id = self._kite.place_gtt(
+                ticker=ticker,
+                trigger_price=stop,
+                limit_price=limit,
+                qty=qty,
+                last_price=fill_price,
+            )
+        except Exception as exc:
+            _logger.error(
+                "trailing: place_gtt failed for %s: %s",
+                ticker, exc, exc_info=True,
+            )
+            return
+        self._trailing_managers[ticker] = mgr
+        self._gtt_ids[ticker] = gtt_id
+        self._ws_hwm[ticker] = fill_price
+        self._save_trailing_state(ticker, mgr, gtt_id)
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="live",
+                type_="gtt_placed",
+                payload={
+                    "ticker": ticker,
+                    "phase": 1,
+                    "entry_price": fill_price,
+                    "stop_price": stop,
+                    "limit_price": limit,
+                    "gtt_id": gtt_id,
+                    "atr": atr,
+                    "dry_run": self._dry_run,
+                },
+            )
+        )
+        _logger.info(
+            "trailing: placed GTT %d for %s stop=%.4f "
+            "(dry_run=%s)",
+            gtt_id, ticker, stop, self._dry_run,
+        )
+
+    def _save_trailing_state(
+        self,
+        ticker: str,
+        mgr: TrailingStopManager,
+        gtt_id: int,
+    ) -> None:
+        """Persist trailing manager state to Redis (TTL = 48 h)."""
+        try:
+            import json as _json
+            from backend.cache import get_cache
+            key = (
+                f"trailing:{self._user_id}:"
+                f"{self._strategy.id}:{ticker}"
+            )
+            data = mgr.to_dict()
+            data["gtt_id"] = gtt_id
+            get_cache().set(key, _json.dumps(data), ttl=172800)
+        except Exception as exc:
+            _logger.warning(
+                "trailing: Redis save failed for %s: %s",
+                ticker, exc, exc_info=True,
+            )
+
+    def _load_trailing_state_from_redis(self) -> None:
+        """On restart: reload all trailing managers from Redis.
+
+        Called once at the top of ``run()`` after ticker-lock restore.
+        Silently skips tickers with no Redis entry or with corrupt data.
+        """
+        if not self._trailing_enabled:
+            return
+        try:
+            import json as _json
+            from backend.cache import get_cache
+            cache = get_cache()
+            prefix = (
+                f"trailing:{self._user_id}:{self._strategy.id}:"
+            )
+            # Scan both hydrated positions AND locked tickers so a restart
+            # that missed the Kite positions() API still recovers trailing
+            # managers for all previously-filled positions.
+            _restore_set = (
+                set(self._positions.open_positions().keys())
+                | self._ticker_locked
+            )
+            for ticker in list(_restore_set):
+                raw = cache.get(f"{prefix}{ticker}")
+                if raw is None:
+                    continue
+                data = _json.loads(raw)
+                gtt_id = int(data.pop("gtt_id", 0))
+                if not gtt_id:
+                    continue
+                mgr = TrailingStopManager.from_dict(
+                    data, self._strategy.risk.per_trade,
+                )
+                self._trailing_managers[ticker] = mgr
+                self._gtt_ids[ticker] = gtt_id
+                self._ws_hwm[ticker] = mgr.state.hwm
+                _logger.info(
+                    "trailing: restored %s from Redis "
+                    "phase=%d stop=%.4f gtt_id=%d",
+                    ticker, mgr.state.phase.value,
+                    mgr.current_stop, gtt_id,
+                )
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="trailing_stop_recovered",
+                        payload={
+                            "ticker": ticker,
+                            "phase": mgr.state.phase.value,
+                            "hwm": mgr.state.hwm,
+                            "current_stop": mgr.current_stop,
+                            "gtt_id": gtt_id,
+                        },
+                    )
+                )
+        except Exception as exc:
+            _logger.warning(
+                "trailing: Redis restore failed: %s",
+                exc, exc_info=True,
+            )
+
+    async def _recover_unhydrated_positions(self) -> None:
+        """Re-inject positions that are ticker-locked but missed by hydration.
+
+        Scenario: a BUY filled while the prior runtime was stopping — the
+        Kite postback arrived after ``get_live_runtime`` returned None, so
+        ``on_buy_fill_trailing`` was never called.  On the next restart
+        ``positions()['net']`` can miss the intraday CNC fill (timing race),
+        so the position never enters the tracker and ``ensure_gtts`` can't
+        place its GTT.
+
+        Recovery: for every ticker in ``_ticker_locked`` that is NOT in
+        ``open_positions()``, look up the fill data from the previous run's
+        ``live_orders_in_flight`` and inject a synthetic BUY fill.  This
+        makes the position visible to ``_ensure_gtts_for_hydrated_positions``,
+        which runs immediately after and places the missing GTT.
+        """
+        open_pos = self._positions.open_positions()
+        locked_unhydrated = {
+            t for t in self._ticker_locked
+            if t not in open_pos
+        }
+        if not locked_unhydrated:
+            return
+
+        try:
+            filled = await self._caps_repo.get_filled_buys_from_previous_runs(
+                self._user_id, self._strategy.id, self._run_id
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "recover_positions: previous run query failed: %s",
+                exc,
+                exc_info=True,
+            )
+            return
+
+        from backend.algo.backtest.types import Fill
+
+        recovered = 0
+        for ticker in locked_unhydrated:
+            fd = filled.get(ticker)
+            if not fd or fd["fill_price"] <= 0 or fd["qty"] <= 0:
+                continue
+            # Preserve the REAL open date so the time-stop holding-day
+            # count survives the restart. Fall back to today only when
+            # the previous run's in-flight entry carried no parseable
+            # fill/submit timestamp.
+            open_date = fd.get("fill_date") or _parse_fill_date(
+                fd.get("filled_at"), fd.get("submitted_at"),
+            )
+            if open_date is None:
+                open_date = datetime.now(timezone.utc).date()
+            self._positions.apply_fill(
+                Fill(
+                    intent_id=uuid4(),
+                    ticker=ticker,
+                    side="BUY",
+                    qty=fd["qty"],
+                    fill_price=Decimal(str(fd["fill_price"])),
+                    fill_date=open_date,
+                    fees_inr=Decimal("0"),
+                    fee_rates_version="recovered",
+                )
+            )
+            _logger.info(
+                "recover_positions: re-injected %s qty=%d avg=%.4f "
+                "opened_at=%s (locked-but-not-hydrated; prev run "
+                "in_flight)",
+                ticker,
+                fd["qty"],
+                float(fd["fill_price"]),
+                open_date.isoformat(),
+            )
+            recovered += 1
+
+        if recovered:
+            _logger.info(
+                "recover_positions: %d position(s) re-injected",
+                recovered,
+            )
+
+    async def _ensure_gtts_for_hydrated_positions(self) -> None:
+        """Verify every HELD position's GTT against the LIVE Kite book.
+
+        Called once in ``run()`` after ``_load_trailing_state_from_redis()``.
+        Kite's active GTT book is the SOURCE OF TRUTH — a Redis-restored
+        ``gtt_id`` is NOT proof a GTT exists. This is a real-money safety
+        check: a held position whose GTT is dead on Kite would otherwise be
+        silently believed-protected.
+
+        For every held position (``open_positions()`` with ``qty > 0``),
+        regardless of whether the ticker is already in
+        ``_trailing_managers``:
+          - If Kite has an active GTT for the bare symbol → the position IS
+            protected. Register/correct the manager to the REAL Kite
+            ``gtt_id`` (trust Kite over Redis); never place a duplicate.
+          - If Kite has NO active GTT → the position is UNPROTECTED (even if
+            Redis had a manager/id). Place a fresh GTT (entry=avg_price, ATR
+            from factor cache / Wilder fallback / 2% proxy) and register it.
+            A zero/negative ``avg_price`` is refused (Task 3.2 preserved).
+
+        Kite READ FAILURE is NOT "no GTTs": if ``get_gtts`` raises we log a
+        loud WARNING, emit ``gtt_verification_failed``, and return early
+        leaving existing managers intact — placing on an unreadable book
+        would create duplicate GTTs.
+
+        Source tag ``hydrated_algo`` / ``hydrated_manual`` is logged and
+        emitted in the ``gtt_placed`` event.
+        """
+        if not self._trailing_enabled:
+            return
+
+        open_pos = self._positions.open_positions()
+        held = {
+            t: p
+            for t, p in open_pos.items()
+            if p.qty > 0
+        }
+        if not held:
+            return
+
+        _logger.info(
+            "ensure_gtts: verifying %d held position(s) vs Kite: %s",
+            len(held), list(held),
+        )
+
+        # Batch-fetch active GTTs from Kite once. A READ FAILURE must NOT
+        # masquerade as "no GTTs" (that would place duplicates). Fail
+        # VISIBLE: warn loudly, emit an event, and bail with managers
+        # intact.
+        try:
+            all_gtts: list[dict] = await asyncio.to_thread(
+                self._kite.get_gtts
+            )
+        except Exception as exc:
+            _logger.warning(
+                "ensure_gtts: get_gtts FAILED — cannot verify held "
+                "positions against Kite; leaving %d manager(s) intact, "
+                "placing nothing (avoids duplicate GTTs): %s",
+                len(self._trailing_managers), exc, exc_info=True,
+            )
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="gtt_verification_failed",
+                    payload={
+                        "error": str(exc),
+                        "held_tickers": list(held),
+                        "managers_preserved": list(
+                            self._trailing_managers
+                        ),
+                    },
+                )
+            )
+            return
+
+        # bare_symbol (no suffix) → (gtt_id, trigger_price)
+        kite_gtt_map: dict[str, tuple[int, float]] = {}
+        for _g in all_gtts:
+            if _g.get("status") != "active":
+                continue
+            _cond = _g.get("condition") or {}
+            _sym = (_cond.get("tradingsymbol") or "").upper()
+            _gid = _g.get("id") or 0
+            _triggers = _cond.get("trigger_values") or []
+            if _sym and _gid and _triggers:
+                kite_gtt_map[_sym] = (int(_gid), float(_triggers[0]))
+
+        # Batch-query algo.events to identify algo-placed positions.
+        _algo_syms: set[str] = set()
+        try:
+            from backend.db.duckdb_engine import query_iceberg_table
+            import json as _json
+            _evt_rows = query_iceberg_table(
+                "algo.events",
+                "SELECT payload_json FROM events "
+                "WHERE user_id = ? AND mode = 'live' "
+                "  AND type = 'order_filled_live'",
+                [str(self._user_id)],
+            )
+            for _r in _evt_rows:
+                try:
+                    _p = _json.loads(_r.get("payload_json") or "{}")
+                    _s = (_p.get("symbol") or "").upper()
+                    if _s:
+                        _algo_syms.add(_s)
+                except Exception:
+                    pass
+        except Exception as exc:
+            _logger.debug(
+                "ensure_gtts: events query failed: %s", exc
+            )
+
+        _today = datetime.now(timezone.utc).date()
+
+        for ticker, pos in held.items():
+            bare = (
+                ticker.removesuffix(".NS").removesuffix(".BO").upper()
+            )
+            avg_price = float(pos.avg_price)
+            qty = pos.qty
+            source = (
+                "hydrated_algo"
+                if bare in _algo_syms
+                else "hydrated_manual"
+            )
+
+            # ── Kite is SOURCE OF TRUTH ──────────────────────────────
+            # If an active GTT exists on Kite for this held position it
+            # IS protected. Register/correct the manager to the REAL
+            # Kite gtt_id (trust Kite over a possibly-stale Redis id)
+            # and place NOTHING — no duplicate GTTs. Reuse the
+            # Redis-restored manager (phase/hwm) when present; else
+            # build one at entry so the ratchet loop can manage it.
+            existing = kite_gtt_map.get(bare)
+            if existing:
+                _existing_gtt_id, _existing_stop = existing
+                mgr = self._trailing_managers.get(ticker)
+                if mgr is None:
+                    if avg_price <= 0:
+                        # Can't build a manager off a ₹0 entry, but the
+                        # position IS protected on Kite — record the id
+                        # so the ratchet loop sees it; skip manager.
+                        self._gtt_ids[ticker] = _existing_gtt_id
+                        _logger.warning(
+                            "ensure_gtts: %s protected by Kite GTT %d "
+                            "but avg_price=%.4f — registered gtt_id "
+                            "without a manager (manual review).",
+                            ticker, _existing_gtt_id, avg_price,
+                        )
+                        continue
+                    mgr = TrailingStopManager(
+                        self._strategy.risk.per_trade,
+                        entry_price=avg_price,
+                        atr=avg_price * 0.02,
+                        ticker=ticker,
+                    )
+                    _ltp = self._ws_hwm.get(ticker, avg_price)
+                    if _ltp > avg_price:
+                        mgr.on_price_update(_ltp)
+                _prev_id = self._gtt_ids.get(ticker)
+                self._trailing_managers[ticker] = mgr
+                self._gtt_ids[ticker] = _existing_gtt_id
+                self._ws_hwm.setdefault(ticker, avg_price)
+                self._save_trailing_state(
+                    ticker, mgr, _existing_gtt_id,
+                )
+                if _prev_id is not None and _prev_id != _existing_gtt_id:
+                    _logger.warning(
+                        "ensure_gtts: %s gtt_id corrected %d -> %d "
+                        "(Redis was stale; Kite is truth)",
+                        ticker, _prev_id, _existing_gtt_id,
+                    )
+                _logger.info(
+                    "ensure_gtts: %s protected by live Kite GTT %d "
+                    "kite_stop=%.4f phase=%d source=%s — no duplicate",
+                    ticker, _existing_gtt_id, _existing_stop,
+                    mgr.state.phase.value, source,
+                )
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="trailing_gtt_verified",
+                        payload={
+                            "ticker": ticker,
+                            "phase": mgr.state.phase.value,
+                            "hwm": mgr.state.hwm,
+                            "current_stop": mgr.current_stop,
+                            "gtt_id": _existing_gtt_id,
+                            "source": source,
+                        },
+                    )
+                )
+                continue
+
+            # ── No active Kite GTT — position is UNPROTECTED ─────────
+            # Place a fresh protective GTT (even if Redis had a manager
+            # whose gtt_id is now dead on Kite).
+            # REFUSE to place a GTT off a missing/zero entry price.
+            # A ₹0 avg_price yields a ₹0 trigger/limit — a garbage
+            # protective stop that would either never fire or fire
+            # instantly. Emit a loud event so the unprotected position
+            # is visible on the live panel instead of silently naked.
+            if avg_price <= 0:
+                _logger.error(
+                    "ensure_gtts: REFUSING GTT for %s — entry price "
+                    "is %.4f (missing/zero). Position left WITHOUT a "
+                    "protective stop; manual review required.",
+                    ticker, avg_price,
+                )
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="gtt_skipped_no_entry_price",
+                        payload={
+                            "ticker": ticker,
+                            "avg_price": avg_price,
+                            "qty": qty,
+                            "source": source,
+                        },
+                    )
+                )
+                continue
+
+            # ATR — weekday-aware, same pattern as on_buy_fill_trailing.
+            _atr_raw = next(
+                (
+                    self._factor_cache.get(
+                        (ticker, _today - timedelta(days=_n))
+                    )
+                    for _n in range(8)
+                    if (
+                        _today - timedelta(days=_n)
+                    ).weekday() < 5
+                    and self._factor_cache.get(
+                        (ticker, _today - timedelta(days=_n))
+                    ) is not None
+                ),
+                {},
+            )
+            atr = float(_atr_raw.get("atr_14", 0.0))
+            if atr <= 0:
+                # Fallback: compute Wilder ATR(14) from preloaded daily bars.
+                _bars = self._bars_by_ticker.get(ticker, [])
+                if len(_bars) >= 2:
+                    _atr_series = _wilder_atr(_bars, 14)
+                    atr = float(
+                        _atr_series[-1]
+                        if _atr_series and _atr_series[-1] is not None
+                        else 0.0
+                    )
+            if atr <= 0:
+                # Last resort: 2% of entry price (phase-0 GTT still placed;
+                # phase-3 ATR trail will be imprecise but better than no GTT).
+                atr = avg_price * 0.02
+                _logger.warning(
+                    "ensure_gtts: atr_14 missing for %s — "
+                    "using 2%% price proxy atr=%.4f; "
+                    "phase-3 trail may be imprecise",
+                    ticker, atr,
+                )
+
+            # Build manager at entry; advance phase via LTP if known.
+            mgr = TrailingStopManager(
+                self._strategy.risk.per_trade,
+                entry_price=avg_price,
+                atr=atr,
+                ticker=ticker,
+            )
+            ltp = self._ws_hwm.get(ticker, avg_price)
+            if ltp > avg_price:
+                mgr.on_price_update(ltp)
+
+            stop = mgr.current_stop
+            limit = stop * (1.0 - self._gtt_limit_headroom_pct)
+
+            # No GTT on Kite — place a fresh one.
+            # ltp captured in closure so lambda binds the right value
+            # per iteration (ticker-level variable, not loop-level).
+            _ltp_snap = ltp
+            try:
+                gtt_id = await asyncio.to_thread(
+                    lambda: self._kite.place_gtt(
+                        ticker=ticker,
+                        trigger_price=stop,
+                        limit_price=limit,
+                        qty=qty,
+                        last_price=_ltp_snap,
+                    )
+                )
+            except Exception as exc:
+                _logger.error(
+                    "ensure_gtts: place_gtt failed for %s: %s",
+                    ticker, exc, exc_info=True,
+                )
+                continue
+
+            self._trailing_managers[ticker] = mgr
+            self._gtt_ids[ticker] = gtt_id
+            self._ws_hwm.setdefault(ticker, avg_price)
+            self._save_trailing_state(ticker, mgr, gtt_id)
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="gtt_placed",
+                    payload={
+                        "ticker": ticker,
+                        "phase": mgr.state.phase.value,
+                        "entry_price": avg_price,
+                        "stop_price": stop,
+                        "limit_price": limit,
+                        "gtt_id": gtt_id,
+                        "atr": atr,
+                        "dry_run": self._dry_run,
+                        "source": source,
+                    },
+                )
+            )
+            _logger.info(
+                "ensure_gtts: placed GTT %d for %s stop=%.4f "
+                "phase=%d source=%s (dry_run=%s)",
+                gtt_id, ticker, stop,
+                mgr.state.phase.value, source, self._dry_run,
+            )
+
+    def _broker_really_held(self) -> set[str] | None:
+        """Tickers with ANY real exposure across ALL broker sources.
+
+        The load-bearing safety set for close-time / hydration GTT
+        cleanup. A ticker is HELD if it shows exposure in EITHER:
+          * ``positions().net`` row with ``quantity != 0`` — this
+            catches CNC buys made TODAY (they live in net, NOT in
+            holdings until T+1), the exact bug a holdings()-only
+            check caused earlier.
+          * ``holdings`` row with ``quantity > 0 OR t1_quantity > 0``
+            — settled or T+1-pending delivery equity.
+
+        Returns the union as internal ``.NS`` tickers, or ``None`` if
+        EITHER broker read raises / is unavailable. ``None`` means
+        UNKNOWN -> the caller MUST clean nothing (fail safe). Reuses
+        the ``kite._kc.positions()/holdings()`` access pattern from
+        ``position_hydration.hydrate``.
+        """
+        kc = getattr(self._kite, "_kc", None)
+        if kc is None:
+            _logger.warning(
+                "cleanup: kite._kc unavailable — held set UNKNOWN",
+            )
+            return None
+        try:
+            raw_pos = kc.positions()
+            raw_hold = kc.holdings()
+        except Exception as exc:
+            _logger.warning(
+                "cleanup: broker positions/holdings read failed — "
+                "held set UNKNOWN (%s)", exc, exc_info=True,
+            )
+            return None
+
+        held: set[str] = set()
+
+        net = (
+            raw_pos.get("net", [])
+            if isinstance(raw_pos, dict) else []
+        )
+        for r in net:
+            qty = _to_int(r.get("quantity"))
+            if qty == 0:
+                continue
+            sym = (r.get("tradingsymbol") or "").strip()
+            if sym:
+                held.add(_as_ns(sym))
+
+        rows = raw_hold if isinstance(raw_hold, list) else []
+        for r in rows:
+            settled = _to_int(r.get("quantity"))
+            t1 = _to_int(r.get("t1_quantity"))
+            if settled <= 0 and t1 <= 0:
+                continue
+            sym = (r.get("tradingsymbol") or "").strip()
+            if sym:
+                held.add(_as_ns(sym))
+
+        return held
+
+    async def _cleanup_stale_protection(self) -> None:
+        """Cancel GTTs + clear lock/Redis for PROVABLY-GONE tickers.
+
+        Called once in ``run()`` right AFTER
+        ``_ensure_gtts_for_hydrated_positions``. Reconciles leftover
+        protection (a lock / trailing manager / live Kite GTT) for
+        tickers that NO LONGER have any real position — e.g. a SELL
+        that filled while the prior runtime was down, so close-time
+        cleanup never ran.
+
+        GUARDRAIL (load-bearing, real-money): a ticker is cleaned ONLY
+        if ``_broker_really_held`` proves it gone across ALL broker
+        sources. If the broker read is UNKNOWN (``None``) we clean
+        NOTHING and emit ``cleanup_skipped_broker_unreadable``.
+        """
+        if not self._trailing_enabled:
+            return
+
+        really_held = self._broker_really_held()
+        if really_held is None:
+            _logger.warning(
+                "cleanup: broker unreadable — skipping stale "
+                "protection cleanup (clean nothing, fail safe)",
+            )
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="cleanup_skipped_broker_unreadable",
+                    payload={
+                        "candidates": sorted(
+                            self._ticker_locked
+                            | set(self._trailing_managers)
+                        ),
+                    },
+                )
+            )
+            return
+
+        # Active Kite GTT book: bare symbol -> gtt_id. Best-effort;
+        # only used to find a GTT to cancel, NOT as a safety gate.
+        gtt_by_bare: dict[str, int] = {}
+        try:
+            all_gtts = await asyncio.to_thread(self._kite.get_gtts)
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "cleanup: get_gtts failed: %s", exc, exc_info=True,
+            )
+            all_gtts = []
+        for _g in all_gtts or []:
+            if _g.get("status") != "active":
+                continue
+            _cond = _g.get("condition") or {}
+            _sym = (_cond.get("tradingsymbol") or "").upper()
+            _gid = _g.get("id") or 0
+            if _sym and _gid:
+                gtt_by_bare[_sym] = int(_gid)
+
+        candidates = (
+            set(self._ticker_locked)
+            | set(self._trailing_managers)
+            | {_as_ns(s) for s in gtt_by_bare}
+        )
+
+        lock_changed = False
+        for ticker in sorted(candidates):
+            if ticker in really_held:
+                continue
+            bare = (
+                ticker.removesuffix(".NS").removesuffix(".BO").upper()
+            )
+            gtt_id = self._gtt_ids.get(ticker) or gtt_by_bare.get(bare)
+            if gtt_id:
+                try:
+                    self._kite.delete_gtt(gtt_id)
+                except Exception as exc:
+                    _logger.warning(
+                        "cleanup: delete_gtt %s failed for %s: %s",
+                        gtt_id, ticker, exc, exc_info=True,
+                    )
+            try:
+                from backend.cache import get_cache
+                get_cache().invalidate_exact(
+                    f"trailing:{self._user_id}:"
+                    f"{self._strategy.id}:{ticker}"
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            self._trailing_managers.pop(ticker, None)
+            self._gtt_ids.pop(ticker, None)
+            self._ws_hwm.pop(ticker, None)
+            if ticker in self._ticker_locked:
+                self._ticker_locked.discard(ticker)
+                lock_changed = True
+            _logger.info(
+                "cleanup: stale protection cleared for %s "
+                "(provably gone; cancelled_gtt_id=%s)",
+                ticker, gtt_id,
+            )
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="stale_protection_cleaned",
+                    payload={
+                        "ticker": ticker,
+                        "cancelled_gtt_id": gtt_id,
+                        "reason": "provably_gone_no_broker_position",
+                    },
+                )
+            )
+
+        if lock_changed:
+            self._sync_ticker_lock_to_redis()
+
     async def run(self, source: TickSource) -> int:
         """Drain the tick source. Returns fill count."""
+        # Task 7.6 — capture the running event loop so _ratchet_all_gtts
+        # (called via to_thread on a worker thread) can route the
+        # emergency STOP_HIT SELL through _submit_order.
+        self._loop = asyncio.get_running_loop()
+
         from backend.algo.stream.sources import ReplayTickSource
 
         self._is_replay = isinstance(source, ReplayTickSource)
@@ -1153,6 +2566,14 @@ class LiveRuntime:
                 self._ticker_locked.add(ticker)
         self._ticker_locked.update(self._restore_ticker_locks_from_redis())
         self._ticker_locked.update(await self._restore_ticker_locks_from_pg())
+        await self._recover_unhydrated_positions()
+        self._load_trailing_state_from_redis()
+        await self._ensure_gtts_for_hydrated_positions()
+        await self._cleanup_stale_protection()
+        # Task 4.0b — once positions are hydrated, detect a start where
+        # the configured capital is below the already-deployed cost so
+        # the set_target_weight branch can suppress liquidating trims.
+        self._detect_capital_below_deployed()
         if self._ticker_locked:
             _logger.info(
                 "LiveRuntime: ticker locks restored: %s",
@@ -1166,6 +2587,11 @@ class LiveRuntime:
             self._periodic_budget_reconcile(),
             name=f"budget_reconcile_{self._run_id}",
         )
+        if self._trailing_enabled:
+            self._trailing_ratchet_task = asyncio.create_task(
+                self._trailing_ratchet_loop(),
+                name=f"trailing_ratchet_{self._run_id}",
+            )
 
         try:
             async for tick in source:
@@ -1177,6 +2603,20 @@ class LiveRuntime:
                         tick.ticker,
                     )
                 last_price_per_ticker[tick.ticker] = Decimal(str(tick.ltp))
+                # Task 7.7 — mirror into instance dict so the MIS
+                # square-off task (_square_off_all_open) can read
+                # the latest LTP without holding a run() reference.
+                self._last_price_per_ticker[tick.ticker] = (
+                    last_price_per_ticker[tick.ticker]
+                )
+                # v5 trailing stop: lightweight HWM update per tick.
+                if (
+                    self._trailing_enabled
+                    and tick.ticker in self._trailing_managers
+                ):
+                    _ltp = float(tick.ltp)
+                    if _ltp > self._ws_hwm.get(tick.ticker, 0.0):
+                        self._ws_hwm[tick.ticker] = _ltp
                 # PR #1 — stamp arrival time for staleness gate.
                 # ASETPLTFRM-372 — prefer exchange-emission ts
                 # when Kite supplied it (full/quote-mode packets);
@@ -1304,6 +2744,17 @@ class LiveRuntime:
                 _logger.warning(
                     "final budget reconcile failed", exc_info=True
                 )
+
+            # v5 trailing stop: cancel the ratchet loop before
+            # the event flush so any final ratchet events land
+            # in self._events before terminal drain.
+            if self._trailing_ratchet_task is not None:
+                self._trailing_ratchet_task.cancel()
+                try:
+                    await self._trailing_ratchet_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                self._trailing_ratchet_task = None
 
             # PR3 — stop the periodic flush before the terminal drain
             # so they cannot race on self._events.
@@ -1480,6 +2931,12 @@ class LiveRuntime:
                     bar_open_ts_ns=bucket_open_ns,
                 )
             )
+            # High #15 — trim in place so the same list object remains
+            # bound to _bars_by_ticker[ticker]; keeps the most-recent N
+            # bars. Only on new-bucket append (NOT the in-place update
+            # else branch below — that path never grows the list).
+            if len(history) > _MAX_BAR_HISTORY:
+                del history[: len(history) - _MAX_BAR_HISTORY]
         else:
             today_bar = history[-1]
             history[-1] = today_bar.model_copy(
@@ -1500,38 +2957,20 @@ class LiveRuntime:
         # defers a BUY that appears solely on today's still-forming
         # candle; replay is exempt (wall-clock is meaningless there).
         ind_map = compute_indicators(history)
-        # FE-10 — emit per-ticker intraday features to
-        # ``stocks.intraday_features`` for the bar that just
-        # closed. Side-effect only; failure is non-fatal. Daily
-        # cadence is a no-op inside the emitter (FE-3 owns the
-        # daily writes). Cohort features (FE-8 / FE-9) are NOT
-        # emitted here — daily-batch compute is canonical.
-        try:
-            from backend.algo.features.live_emitter import (
-                _INTERVAL_SEC_BY_LABEL,
-                emit_features_for_bar,
-            )
-
-            _cadence = self._strategy.schedule.interval
-            if _cadence in _INTERVAL_SEC_BY_LABEL:
-                emit_features_for_bar(
-                    ticker=bar.ticker,
-                    interval_sec=_INTERVAL_SEC_BY_LABEL[_cadence],
-                    history=history,
-                    cadence_interval=_cadence,
-                    mode="live",
-                )
-        except Exception:
-            _logger.exception(
-                "[live] FE-10 feature emission hook failed "
-                "(non-fatal): ticker=%s",
-                bar.ticker,
-            )
-        # REGIME-2a — lazy-load cached factor rows for this
-        # ticker on first sight; subsequent bars are O(1).
-        self._ensure_factor_cache(bar.ticker, bar_date_obj)
-        self._ensure_regime_cache(bar_date_obj)
-        self._ensure_daily_overlay_cache(bar.ticker, bar_date_obj)
+        # FE-10 + REGIME-2a — offloaded to a worker thread so the
+        # WS tick drain is not blocked by sync Iceberg reads.
+        # Sequential await ensures caches are warm before the
+        # assemble_per_bar_features call that follows.
+        await asyncio.to_thread(
+            self._per_bar_sync_reads,
+            ticker=bar.ticker,
+            bar_date_obj=bar_date_obj,
+            history=history,
+            cadence=self._strategy.schedule.interval,
+        )
+        # High #15 — evict stale _closed_entry_cache entries once per
+        # bar-close. Cheap dict comprehension; guards unbounded growth.
+        self._evict_stale_closed_entry_cache(as_of=bar_date_obj)
         # FE-15b — shared per-bar feature assembly (single
         # source of truth across backtest/paper/live/dry-run).
         features = assemble_per_bar_features(
@@ -1542,19 +2981,51 @@ class LiveRuntime:
                     "today_vol": Decimal(bar.volume),
                 },
             ),
-            market_regime=self._market_regime.get(bar_date_obj),
-            market_trend=self._market_trend.get(bar_date_obj),
-            factor_row=(
-                self._factor_cache.get((bar.ticker, bar_date_obj))
-                or self._factor_cache.get(
-                    (bar.ticker, bar_date_obj - timedelta(days=1))
-                )
+            market_regime=next(
+                (
+                    self._market_regime.get(bar_date_obj - timedelta(days=n))
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._market_regime.get(bar_date_obj - timedelta(days=n))
+                    is not None
+                ),
+                None,
             ),
-            regime_row=(
-                self._regime_by_date.get(bar_date_obj)
-                or self._regime_by_date.get(
-                    bar_date_obj - timedelta(days=1)
-                )
+            market_trend=next(
+                (
+                    self._market_trend.get(bar_date_obj - timedelta(days=n))
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._market_trend.get(bar_date_obj - timedelta(days=n))
+                    is not None
+                ),
+                None,
+            ),
+            factor_row=next(
+                (
+                    self._factor_cache.get(
+                        (bar.ticker, bar_date_obj - timedelta(days=n))
+                    )
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._factor_cache.get(
+                        (bar.ticker, bar_date_obj - timedelta(days=n))
+                    )
+                ),
+                None,
+            ),
+            regime_row=next(
+                (
+                    self._regime_by_date.get(
+                        bar_date_obj - timedelta(days=n)
+                    )
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._regime_by_date.get(
+                        bar_date_obj - timedelta(days=n)
+                    )
+                ),
+                None,
             ),
             daily_overlay=self._daily_overlay_cache.get(
                 (bar.ticker, bar_date_obj),
@@ -1677,6 +3148,45 @@ class LiveRuntime:
                     trig.holding_days,
                     trig.max_holding_days,
                 )
+                # v5 trailing stop: cancel GTT before placing SELL
+                # to prevent double exit (GTT fires + SELL fills).
+                if self._trailing_enabled:
+                    _gtt_id = self._gtt_ids.pop(trig.ticker, None)
+                    if _gtt_id is not None:
+                        try:
+                            self._kite.delete_gtt(_gtt_id)
+                        except Exception:  # noqa: BLE001
+                            _logger.warning(
+                                "time_stop: delete_gtt %d "
+                                "failed for %s",
+                                _gtt_id, trig.ticker,
+                                exc_info=True,
+                            )
+                        self._events.append(
+                            event_row(
+                                session_id=self._session_id,
+                                user_id=self._user_id,
+                                strategy_id=self._strategy.id,
+                                mode="live",
+                                type_="gtt_cancelled_for_time_stop",
+                                payload={
+                                    "ticker": trig.ticker,
+                                    "holding_days": trig.holding_days,
+                                    "gtt_id": _gtt_id,
+                                    "dry_run": self._dry_run,
+                                },
+                            )
+                        )
+                    self._trailing_managers.pop(trig.ticker, None)
+                    self._ws_hwm.pop(trig.ticker, None)
+                    try:
+                        from backend.cache import get_cache
+                        get_cache().invalidate_exact(
+                            f"trailing:{self._user_id}:"
+                            f"{self._strategy.id}:{trig.ticker}"
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass
                 fill_count = await self._submit_order(
                     signal=ts_signal,
                     last_price=last_price,
@@ -1702,8 +3212,28 @@ class LiveRuntime:
                 self._strategy.root.model_dump(by_alias=True),
                 ctx,
             )
-        except KeyError:
+        except KeyError as exc:
+            _logger.warning(
+                "eval_node KeyError ticker=%s date=%s missing_key=%s "
+                "features=%s",
+                bar.ticker, bar_date_obj, exc,
+                {k: v for k, v in (features or {}).items()
+                 if k in ("rsi_2", "distance_from_sma50", "distance_from_sma200",
+                          "stress_prob", "nifty_above_sma200", "nifty_30d_return_pct")},
+            )
             return 0
+
+        _logger.info(
+            "eval ticker=%s date=%s action=%s rsi2=%s sma50dist=%s sma200dist=%s "
+            "stress_prob=%s nifty_sma200=%s nifty30d=%s",
+            bar.ticker, bar_date_obj, action,
+            (features or {}).get("rsi_2"),
+            (features or {}).get("distance_from_sma50"),
+            (features or {}).get("distance_from_sma200"),
+            (features or {}).get("stress_prob"),
+            (features or {}).get("nifty_above_sma200"),
+            (features or {}).get("nifty_30d_return_pct"),
+        )
 
         signal = self._action_to_signal(
             action,
@@ -1736,6 +3266,25 @@ class LiveRuntime:
             and bar.ticker not in self._ticker_locked
         ):
             now_ist = datetime.now(IST).time()
+
+            # Gate A: no BUY before _MIN_BUY_TIME_IST (default 09:30).
+            # Pre-open auction prices are erratic; first 15 min of the
+            # regular session is volatile price discovery.
+            # SELL / GTT exits are never blocked here.
+            if (
+                signal is not None
+                and signal.side == "BUY"
+                and now_ist < _MIN_BUY_TIME_IST
+            ):
+                _logger.info(
+                    "daily BUY deferred — before %s IST "
+                    "(ticker=%s now=%s IST)",
+                    _MIN_BUY_TIME_IST.strftime("%H:%M"),
+                    bar.ticker,
+                    now_ist.strftime("%H:%M:%S"),
+                )
+                return 0
+
             if now_ist < _MIN_EVAL_TIME_IST:
                 # Before gate — only yesterday's closed bar may trigger
                 # a BUY. Running-bar-only signals are deferred.
@@ -1743,12 +3292,45 @@ class LiveRuntime:
                     history, bar, last_price,
                 )
                 if closed_entry is not None and closed_entry.side == "BUY":
-                    _logger.info(
-                        "daily entry on CLOSED bar (pre-gate) — "
-                        "acting now: ticker=%s",
-                        bar.ticker,
-                    )
-                    signal = closed_entry
+                    # Dual-bar confirmation: yesterday was oversold
+                    # (closed_entry says BUY). Also require today's
+                    # running bar to confirm (today's main-eval signal
+                    # == BUY). If today's bar no longer says BUY the
+                    # stock has already recovered intraday — suppress to
+                    # avoid chasing a gap-up or upper-circuit opener.
+                    if signal is not None and signal.side == "BUY":
+                        _logger.info(
+                            "daily entry on CLOSED bar (pre-gate) — "
+                            "both bars confirm: ticker=%s",
+                            bar.ticker,
+                        )
+                        signal = closed_entry
+                    else:
+                        _logger.info(
+                            "daily closed-bar BUY suppressed — "
+                            "today's running bar does not confirm "
+                            "(stock recovered intraday, ticker=%s)",
+                            bar.ticker,
+                        )
+                        self._events.append(
+                            event_row(
+                                session_id=self._session_id,
+                                user_id=self._user_id,
+                                strategy_id=self._strategy.id,
+                                mode="live",
+                                type_="signal_rejected",
+                                payload={
+                                    **(
+                                        {"dry_run": True}
+                                        if self._dry_run else {}
+                                    ),
+                                    "reason": "today_bar_not_confirmed",
+                                    "ticker": bar.ticker,
+                                    "side": "BUY",
+                                },
+                            )
+                        )
+                        return 0
                 elif signal is not None and signal.side == "BUY":
                     _logger.info(
                         "daily entry premature (today-forming only) "
@@ -1761,6 +3343,12 @@ class LiveRuntime:
             # flows through unchanged. No closed-bar override.
 
         if signal is None:
+            _logger.info(
+                "_action_to_signal returned None ticker=%s action=%s "
+                "last_price=%s equity=%s",
+                bar.ticker, action, last_price,
+                self._initial + self._positions.total_realised_pnl_inr(),
+            )
             return 0
 
         # ASETPLTFRM-436 — repeat-offender cooldown gate. Blocks
@@ -1898,7 +3486,8 @@ class LiveRuntime:
 
         account = self._account_snapshot(
             kill_switch_active=await self._kill_switch_repo.is_active(
-                self._user_id
+                self._user_id,
+                session_factory=disposable_pg_session,
             ),
         )
         # Exposure-based day_state: "consumption" is the capital
@@ -1908,14 +3497,134 @@ class LiveRuntime:
         # restart preserves yesterday's overnight legs. Square-offs
         # naturally bring this back to 0, no daily reset job needed.
         positions_open = self._positions.open_positions()
-        committed_inr_now = sum(
+        filled_committed = sum(
             (Decimal(p.qty) * p.avg_price for p in positions_open.values()),
             start=Decimal("0"),
         )
+        # Critical C4 — deployed = filled positions + in-flight
+        # BUY reservations. Without the in-flight term two BUYs in
+        # one tick both size against the same remaining max_inr
+        # (fills land asynchronously, so positions_open hasn't moved
+        # yet). Dry-run reservations are tagged mode=dryrun and are
+        # excluded by the query, so the rehearsal still sees full
+        # headroom. Best-effort: a budget read failure must not
+        # block trading, so fall back to filled-only.
+        active_reserved = Decimal("0")
+        try:
+            active_reserved = await budget_active_for_strategy(
+                self._user_id,
+                self._strategy.id,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.warning(
+                "in-flight reservation read failed for strategy=%s "
+                "— deployed falls back to filled-only",
+                self._strategy.id,
+                exc_info=True,
+            )
+        committed_inr_now = filled_committed + active_reserved
         day_state = {
             "cumulative_inr_today": committed_inr_now,
             "orders_count_today": len(positions_open),
         }
+
+        # Strategy budget cap — BUY only. Use the strategy's own
+        # max_inr allocation minus what's already deployed to compute
+        # how many shares we can actually afford. This is tighter than
+        # Zerodha's live_balance (which includes the user's buffer
+        # beyond the strategy allocation) and correctly reflects
+        # remaining strategy headroom.
+        # Only active when max_inr > 0 (0 means "no cap").
+        if signal.side == "BUY":
+            _max_inr = Decimal(str(current_caps.get("max_inr") or 0))
+            if _max_inr > 0:
+                _internal_remaining = _max_inr - committed_inr_now
+                # Cap against Kite's actual available cash so the clamped
+                # qty doesn't overshoot what the broker will accept.
+                # pre_trade_check enforces this too, but aligning here
+                # turns a full reject into a partial-fill instead.
+                # Dry-run: no real broker cash; fail-open on error.
+                _kite_cash = Decimal("Infinity")
+                if not self._dry_run:
+                    try:
+                        _kite_cash = await fetch_kite_available_cash(
+                            self._user_id
+                        )
+                    except Exception:  # noqa: BLE001
+                        pass  # pre_trade_check is the authoritative gate
+                _remaining = min(_internal_remaining, _kite_cash)
+                _affordable = (
+                    int(_remaining // last_price)
+                    if last_price and last_price > 0 and _remaining > 0
+                    else 0
+                )
+                if _affordable < 1:
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="signal_rejected",
+                            payload={
+                                **({"dry_run": True} if self._dry_run else {}),
+                                "reason": "insufficient_balance",
+                                "ticker": signal.ticker,
+                                "side": signal.side,
+                                "qty": signal.qty,
+                                "max_inr": str(_max_inr),
+                                "committed_inr": str(committed_inr_now),
+                                "remaining_inr": str(max(_remaining, Decimal("0"))),
+                                "last_price": str(last_price),
+                            },
+                        )
+                    )
+                    _logger.warning(
+                        "live budget cap: %s rejected — remaining ₹%s "
+                        "(max_inr ₹%s − deployed ₹%s) < price ₹%s",
+                        signal.ticker,
+                        _remaining,
+                        _max_inr,
+                        committed_inr_now,
+                        last_price,
+                    )
+                    return 0
+                elif _affordable < signal.qty:
+                    _old_qty = signal.qty
+                    signal = signal.model_copy(update={"qty": _affordable})
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="signal_adjusted",
+                            payload={
+                                **({"dry_run": True} if self._dry_run else {}),
+                                "ticker": signal.ticker,
+                                "side": signal.side,
+                                "old_qty": _old_qty,
+                                "new_qty": _affordable,
+                                "max_inr": str(_max_inr),
+                                "committed_inr": str(committed_inr_now),
+                                "remaining_inr": str(_remaining),
+                                "last_price": str(last_price),
+                                "reason": "strategy_budget_cap",
+                            },
+                        )
+                    )
+                    _logger.info(
+                        "live budget cap: %s qty %d → %d "
+                        "(max_inr ₹%s − deployed ₹%s = ₹%s remaining, "
+                        "price ₹%s)",
+                        signal.ticker,
+                        _old_qty,
+                        _affordable,
+                        _max_inr,
+                        committed_inr_now,
+                        _remaining,
+                        last_price,
+                    )
 
         decision = await pre_trade_check(
             signal=signal,
@@ -1991,6 +3700,51 @@ class LiveRuntime:
     # Kite order submission
     # ----------------------------------------------------------
 
+    # Default cooldown between same-(ticker, side) non-protective
+    # placements. Read once per call so tests / ops can tune via env
+    # without a restart. 300s = 5 min: long enough to outlast an
+    # order-timeout cancel+re-eval cycle, short enough to not block a
+    # legitimate same-direction rebalance later in the session.
+    _COOLDOWN_DEFAULT_S = 300.0
+
+    def _churn_suppress_kind(
+        self, *, ticker: str, side: str
+    ) -> str | None:
+        """Return the churn-suppression kind for a non-protective
+        (ticker, side) order, or None if it may proceed.
+
+        ``"inflight"`` — a non-terminal in-flight entry exists for the
+        same (ticker, side). ``"cooldown"`` — placed within
+        ``ALGO_ORDER_COOLDOWN_S`` of the last actual placement. The
+        caller MUST have already exempted protective exits.
+        """
+        symbol = ticker.replace(".NS", "")
+        _TERMINAL = {"filled", "cancelled", "rejected", "complete"}
+        for entry in self._in_flight:
+            if entry.get("side") != side:
+                continue
+            entry_symbol = str(entry.get("symbol", "")).replace(
+                ".NS", ""
+            )
+            if entry_symbol != symbol:
+                continue
+            if str(entry.get("status", "")).lower() not in _TERMINAL:
+                return "inflight"
+
+        try:
+            cooldown_s = float(
+                os.getenv(
+                    "ALGO_ORDER_COOLDOWN_S",
+                    str(self._COOLDOWN_DEFAULT_S),
+                )
+            )
+        except (TypeError, ValueError):
+            cooldown_s = self._COOLDOWN_DEFAULT_S
+        last = self._last_submit_ts.get((ticker, side))
+        if last is not None and (_time.time() - last) < cooldown_s:
+            return "cooldown"
+        return None
+
     async def _submit_order(
         self,
         *,
@@ -2007,6 +3761,58 @@ class LiveRuntime:
         exchange = "NSE"
         symbol = signal.ticker.replace(".NS", "")
         side = "BUY" if signal.side == "BUY" else "SELL"
+
+        # Task 4.0a — anti-churn guard. On 2026-06-25 the runtime
+        # re-issued an identical KTKBANK set_target_weight SELL every
+        # eval (~60s) while prior ones were still in-flight or had
+        # just been cancelled by the order-timeout watcher → place→
+        # cancel→re-place churn that became real fills. Suppress a
+        # non-protective duplicate (ticker, side) when an order is
+        # already in flight OR within the cooldown window.
+        #
+        # Load-bearing safety property: a PROTECTIVE exit MUST NEVER
+        # be suppressed. stop_loss / time_stop / mis_auto_square_off
+        # (and any reason containing "exit") bypass the guard
+        # entirely — a protective SELL always reaches place_order.
+        reason = (signal.reason or "").lower()
+        _PROTECTIVE = {"stop_loss", "time_stop", "mis_auto_square_off"}
+        is_protective = reason in _PROTECTIVE or "exit" in reason
+        if not is_protective:
+            suppress_kind = self._churn_suppress_kind(
+                ticker=signal.ticker, side=side
+            )
+            if suppress_kind is not None:
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="dryrun" if self._dry_run else "live",
+                        type_="order_suppressed_churn",
+                        payload={
+                            **(
+                                {"dry_run": True}
+                                if self._dry_run
+                                else {}
+                            ),
+                            "ticker": signal.ticker,
+                            "side": side,
+                            "qty": signal.qty,
+                            "signal_reason": signal.reason,
+                            "suppress_kind": suppress_kind,
+                        },
+                    )
+                )
+                _logger.info(
+                    "order SUPPRESSED (churn/%s): ticker=%s side=%s "
+                    "qty=%d reason=%s — not placing",
+                    suppress_kind,
+                    signal.ticker,
+                    side,
+                    signal.qty,
+                    signal.reason,
+                )
+                return 0
 
         # Use LIMIT orders priced at the bar-close LTP plus a
         # small marketable buffer so the order is aggressive
@@ -2067,34 +3873,116 @@ class LiveRuntime:
         # Intraday MIS strategies route here with product="MIS".
         product_code = self._strategy.product
 
-        # Budget reservation — append-only audit lifecycle.
-        # Reserves on BUY + SELL so the ledger captures full
-        # context (Cap 0 gating runs separately in safety.py;
-        # this is the audit trail).
+        # Budget reservation.
+        #
+        # Critical C4 — for a LIVE BUY the reservation is the
+        # AUTHORITATIVE atomic gate, not just an audit row. The
+        # safety.py Cap-0 check (run earlier in pre_trade_check) is
+        # a cached advisory pre-filter; it has a TOCTOU window where
+        # two concurrent BUYs can both pass. reserve_if_headroom
+        # locks the user (advisory xact lock + FOR UPDATE),
+        # recomputes headroom UNCACHED in one txn, and only inserts
+        # the PENDING row if it fits. On None we ABORT — no order is
+        # placed.
+        #
+        # SELL frees capital (never gated) and dry-run is a
+        # rehearsal that must NOT consume real budget — both keep
+        # the plain append-only audit reservation. dry-run rows are
+        # tagged mode=dryrun and are excluded from every headroom
+        # query.
         order_cost = (
             Decimal(signal.qty) * last_price
             if last_price and last_price > 0
             else Decimal("0")
         )
-        reservation_id = await budget_reserve(
-            user_id=self._user_id,
-            strategy_id=self._strategy.id,
-            ticker=signal.ticker,
-            side=signal.side,
-            qty=signal.qty,
-            reserved_inr=order_cost,
-            metadata={
-                "internal_order_id": internal_order_id,
-                "limit_price": (
-                    str(limit_price) if limit_price is not None else None
-                ),
-                # Tag dry-run reservations so the user-pool headroom
-                # math excludes them (mirrors paper). Only real live
-                # orders account against allocated_inr; dry-run is a
-                # rehearsal and must not consume the budget.
-                "mode": "dryrun" if self._dry_run else "live",
-            },
-        )
+        reservation_metadata = {
+            "internal_order_id": internal_order_id,
+            "limit_price": (
+                str(limit_price) if limit_price is not None else None
+            ),
+            "mode": "dryrun" if self._dry_run else "live",
+        }
+        if signal.side == "BUY" and not self._dry_run:
+            try:
+                allocated_inr = (
+                    await budget_load_user(self._user_id)
+                ).allocated_inr
+            except Exception:  # noqa: BLE001
+                # Fail-closed: cannot determine the allocation →
+                # do not place a live order against unknown budget.
+                _logger.error(
+                    "live order ABORT %s — budget load failed; "
+                    "cannot gate on allocated_inr (fail-closed)",
+                    signal.ticker,
+                    exc_info=True,
+                )
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="signal_rejected",
+                        payload={
+                            "reason": "insufficient_balance",
+                            "ticker": signal.ticker,
+                            "side": signal.side,
+                            "qty": signal.qty,
+                            "order_cost": str(order_cost),
+                            "detail": "budget_load_failed",
+                        },
+                    )
+                )
+                return 0
+            reservation_id = await budget_reserve_if_headroom(
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                ticker=signal.ticker,
+                side=signal.side,
+                qty=signal.qty,
+                reserved_inr=order_cost,
+                allocated_inr=allocated_inr,
+                metadata=reservation_metadata,
+            )
+            if reservation_id is None:
+                # Atomic gate rejected — over allocated headroom.
+                # ABORT; do NOT place the order.
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="signal_rejected",
+                        payload={
+                            "reason": "insufficient_balance",
+                            "ticker": signal.ticker,
+                            "side": signal.side,
+                            "qty": signal.qty,
+                            "order_cost": str(order_cost),
+                            "allocated_inr": str(allocated_inr),
+                        },
+                    )
+                )
+                _logger.warning(
+                    "live order ABORT %s — atomic reserve "
+                    "rejected: cost ₹%s over allocated ₹%s "
+                    "headroom",
+                    signal.ticker,
+                    order_cost,
+                    allocated_inr,
+                )
+                return 0
+        else:
+            reservation_id = await budget_reserve(
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                ticker=signal.ticker,
+                side=signal.side,
+                qty=signal.qty,
+                reserved_inr=order_cost,
+                metadata=reservation_metadata,
+            )
         try:
             kite_order_id = await asyncio.to_thread(
                 self._kite.place_order,
@@ -2125,6 +4013,101 @@ class LiveRuntime:
                 # PR #4 — daily-cap budget for freeze-chunk pre-check
                 daily_cap_remaining=daily_cap_remaining,
             )
+        except PartialChunkPlacementError as exc:
+            # Critical C1 — a freeze-split order failed mid-loop
+            # with chunks 0..N-1 ALREADY live on the exchange. We
+            # must NOT re-submit (that would blind-retry the full
+            # qty and double the live chunks). Instead record the
+            # live order ids in _in_flight so the postback / order-
+            # timeout reconciler tracks and settles them, and move
+            # the reservation into PARTIAL (an ACTIVE, non-terminal
+            # state) so its reserved capital stays held and the
+            # reconciliation loop picks it up — explicitly NOT
+            # FILLED/CANCELLED (terminal — would free/settle the
+            # budget and lose the live exposure).
+            placed_ids = exc.placed_order_ids
+            _logger.error(
+                "live order PARTIAL chunk failure: symbol=%s "
+                "side=%s placed=%d failed_chunk=%d — recording "
+                "live ids %s, NOT re-submitting",
+                symbol,
+                side,
+                len(placed_ids),
+                exc.failed_chunk,
+                placed_ids,
+                exc_info=True,
+            )
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="order_partial_chunk_failure",
+                    payload={
+                        **({"dry_run": True} if self._dry_run else {}),
+                        "internal_order_id": internal_order_id,
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": signal.qty,
+                        "placed_order_ids": placed_ids,
+                        "placed_count": len(placed_ids),
+                        "failed_chunk": exc.failed_chunk,
+                        "rejection_reason": str(exc.cause)[:500],
+                    },
+                )
+            )
+            # Record each live chunk so reconciliation / order-
+            # timeout track them. All chunks share the originating
+            # internal_order_id + reservation_id for attribution.
+            for oid in placed_ids:
+                self._in_flight.append(
+                    {
+                        "kite_order_id": oid,
+                        "internal_order_id": internal_order_id,
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": signal.qty,
+                        "submitted_at": now_iso,
+                        "status": "submitted",
+                        "reason": signal.reason,
+                        "product": product_code,
+                        "reservation_id": (
+                            str(reservation_id)
+                            if reservation_id
+                            else None
+                        ),
+                    }
+                )
+            if placed_ids:
+                await self._caps_repo.update_in_flight(
+                    self._user_id,
+                    self._run_id,
+                    self._in_flight,
+                )
+            # Move reservation to PARTIAL (needs-reconcile) — keeps
+            # the capital held; reconciler settles the live chunks.
+            try:
+                await budget_transition(
+                    reservation_id=reservation_id,
+                    new_state=ReservationState.PARTIAL,
+                    kite_order_id=(
+                        placed_ids[0] if placed_ids else None
+                    ),
+                    error_text=str(exc.cause)[:500],
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "budget transition to PARTIAL failed — "
+                    "reservation %s, placed ids %s — "
+                    "reconciliation loop will heal",
+                    reservation_id,
+                    placed_ids,
+                )
+            # Return the count of live chunks (>0 if any reached
+            # the exchange). Crucially we DO NOT re-call
+            # place_order — the live chunks settle via reconcile.
+            return len(placed_ids)
         except Exception as exc:
             rejection_reason = str(exc)
             self._events.append(
@@ -2220,6 +4203,12 @@ class LiveRuntime:
             ),
         }
         self._in_flight.append(in_flight_entry)
+        # Task 4.0a — record the placement clock for the anti-churn
+        # cooldown. Keyed on the internal ticker (.NS form) + side so
+        # the guard's lookup matches. Updated ONLY on an actual
+        # placement (incl. dry-run), never on a suppressed/aborted
+        # order — so a suppressed dup does not extend the window.
+        self._last_submit_ts[(signal.ticker, side)] = _time.time()
         await self._caps_repo.update_in_flight(
             self._user_id,
             self._run_id,
@@ -2598,8 +4587,17 @@ class LiveRuntime:
             tz=timezone.utc,
         ).date()
         nav = self._initial + self._positions.total_realised_pnl_inr()
-        factor_row = self._factor_cache.get(
-            (ticker, bar_date_obj),
+        factor_row = next(
+            (
+                self._factor_cache.get(
+                    (ticker, bar_date_obj - timedelta(days=n))
+                )
+                for n in range(8)
+                if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                and self._factor_cache.get(
+                    (ticker, bar_date_obj - timedelta(days=n))
+                )
+            ),
             {},
         )
         realized_vol = factor_row.get(
@@ -2660,19 +4658,49 @@ class LiveRuntime:
                         "today_vol": Decimal(closed[-1].volume),
                     },
                 ),
-                market_regime=self._market_regime.get(closed_date),
-                market_trend=self._market_trend.get(closed_date),
-                factor_row=(
-                    self._factor_cache.get((bar.ticker, closed_date))
-                    or self._factor_cache.get(
-                        (bar.ticker, closed_date - timedelta(days=1))
-                    )
+                market_regime=next(
+                    (
+                        self._market_regime.get(closed_date - timedelta(days=n))
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._market_regime.get(closed_date - timedelta(days=n))
+                        is not None
+                    ),
+                    None,
                 ),
-                regime_row=(
-                    self._regime_by_date.get(closed_date)
-                    or self._regime_by_date.get(
-                        closed_date - timedelta(days=1)
-                    )
+                market_trend=next(
+                    (
+                        self._market_trend.get(closed_date - timedelta(days=n))
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._market_trend.get(closed_date - timedelta(days=n))
+                        is not None
+                    ),
+                    None,
+                ),
+                factor_row=next(
+                    (
+                        self._factor_cache.get(
+                            (bar.ticker, closed_date - timedelta(days=n))
+                        )
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._factor_cache.get(
+                            (bar.ticker, closed_date - timedelta(days=n))
+                        )
+                    ),
+                    None,
+                ),
+                regime_row=next(
+                    (
+                        self._regime_by_date.get(closed_date - timedelta(days=n))
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._regime_by_date.get(
+                            closed_date - timedelta(days=n)
+                        )
+                    ),
+                    None,
                 ),
                 daily_overlay=self._daily_overlay_cache.get(
                     (bar.ticker, closed_date),
@@ -2715,6 +4743,24 @@ class LiveRuntime:
                 bar_date=closed_date,
             )
         return sig
+
+    def _evict_stale_closed_entry_cache(self, *, as_of: date) -> None:
+        """Drop _closed_entry_cache entries older than
+        _CLOSED_ENTRY_CACHE_MAX_AGE_DAYS calendar days before ``as_of``.
+
+        High #15 — prevents the cache from growing without bound across
+        a long live session. Called once per bar-close; the dict is
+        small (one entry per ticker per day) so the comprehension is
+        cheap. Safe to call on an empty dict.
+        """
+        if not self._closed_entry_cache:
+            return
+        cutoff = as_of - timedelta(days=_CLOSED_ENTRY_CACHE_MAX_AGE_DAYS)
+        self._closed_entry_cache = {
+            k: v
+            for k, v in self._closed_entry_cache.items()
+            if k[1] >= cutoff
+        }
 
     def _maybe_emit_qty_zero_rejection(
         self,
@@ -2784,6 +4830,55 @@ class LiveRuntime:
         )
         return True
 
+    def _detect_capital_below_deployed(self) -> None:
+        """Flag a start where capital < already-deployed cost-basis.
+
+        Task 4.0b real-money guardrail. ``set_target_weight`` sizes
+        the target off ``self._initial``; if the runtime is (re)started
+        with capital well below the cost of positions that were built
+        under a larger account, every held position looks "overweight"
+        and the strategy would issue SELLs that trim REAL shares — a
+        surprise sell-off. Called once in ``run()`` after positions are
+        hydrated; sets ``self._capital_below_deployed`` and emits a
+        HIGH-severity ``capital_below_deployed`` event + WARNING when
+        tripped. The suppression itself lives in the
+        ``set_target_weight`` branch of ``_action_to_signal``.
+        """
+        deployed_cost = sum(
+            pos.qty * float(pos.avg_price)
+            for pos in self._positions.open_positions().values()
+        )
+        initial = float(self._initial)
+        if deployed_cost <= 0 or initial >= deployed_cost:
+            self._capital_below_deployed = False
+            return
+        self._capital_below_deployed = True
+        ratio = initial / deployed_cost if deployed_cost else 0.0
+        _logger.warning(
+            "LiveRuntime: start capital ₹%.2f is BELOW already-"
+            "deployed cost ₹%.2f (ratio=%.3f) — suppressing "
+            "rebalance-DOWN trims to avoid a surprise sell-off; set "
+            "ALGO_ALLOW_REBALANCE_DOWN_ON_SHRINK=1 to override",
+            initial,
+            deployed_cost,
+            ratio,
+        )
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="live",
+                type_="capital_below_deployed",
+                payload={
+                    "severity": "high",
+                    "initial": initial,
+                    "deployed_cost": deployed_cost,
+                    "ratio": ratio,
+                },
+            )
+        )
+
     def _action_to_signal(
         self,
         action: dict,
@@ -2841,6 +4936,17 @@ class LiveRuntime:
             existing = self._positions.open_positions().get(ticker)
             if not existing:
                 return None
+            # v5 trailing stop: GTT is the primary exit — suppress
+            # the AST's RSI-based exit while the GTT is live so the
+            # position can ride further before the trail fires.
+            if self._trailing_enabled and ticker in self._trailing_managers:
+                _logger.info(
+                    "trailing active — suppressing AST exit for %s "
+                    "(gtt_id=%s handles close)",
+                    ticker,
+                    self._gtt_ids.get(ticker),
+                )
+                return None
             return Signal(
                 strategy_id=self._strategy.id,
                 user_id=self._user_id,
@@ -2881,6 +4987,46 @@ class LiveRuntime:
                     reason=t,
                 )
             if diff < 0:
+                # Task 4.0b — capital-shrink guardrail. A trim-down
+                # SELL while started below already-deployed cost would
+                # liquidate REAL shares (the 2026-06-25 incident).
+                # Suppress it and surface why, UNLESS the operator
+                # opted in to genuinely reduce capital. Protective
+                # exits never reach here (separate reasons).
+                if (
+                    self._capital_below_deployed
+                    and not _env_truthy(
+                        "ALGO_ALLOW_REBALANCE_DOWN_ON_SHRINK"
+                    )
+                ):
+                    _logger.warning(
+                        "set_target_weight trim SUPPRESSED for %s "
+                        "(capital below deployed): target=%d "
+                        "current=%d — would sell %d real shares",
+                        ticker,
+                        target_qty,
+                        current_qty,
+                        -diff,
+                    )
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_=(
+                                "rebalance_down_suppressed_"
+                                "capital_shrink"
+                            ),
+                            payload={
+                                "severity": "high",
+                                "ticker": ticker,
+                                "target_qty": target_qty,
+                                "current_qty": current_qty,
+                            },
+                        )
+                    )
+                    return None
                 return Signal(
                     strategy_id=self._strategy.id,
                     user_id=self._user_id,

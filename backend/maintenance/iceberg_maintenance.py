@@ -437,6 +437,29 @@ def compact_table(table_name: str) -> dict:
             _SMALL_TABLE_COMPACT_BYTES / (1024 * 1024),
         )
 
+    # Arrow-memory ceiling — the primary OOM guard. Compressed
+    # on-disk bytes (the _MAX_SAFE_COMPACT_BYTES check below)
+    # under-estimate decompressed Arrow memory for row-heavy,
+    # highly-compressible feature data. compact_table loads the WHOLE
+    # table into Arrow (plus cast + overwrite copies), so we estimate
+    # that footprint from the live row count and route over-budget
+    # tables to per-month batching. 2026-06-24 incident:
+    # stocks.intraday_features was 491 MB on disk (under the 1 GiB
+    # disk guard) but ~5.3 GB in Arrow → OOM-killed the worker.
+    est_arrow = _estimated_arrow_bytes(table_name)
+    if (
+        est_arrow is not None
+        and est_arrow > _MAX_SAFE_COMPACT_ARROW_BYTES
+    ):
+        _logger.info(
+            "[maint] %s ≈ %.0f MB in Arrow (> %d MB in-process "
+            "limit) — routing to batched per-month compaction",
+            table_name,
+            est_arrow / (1024 * 1024),
+            _MAX_SAFE_COMPACT_ARROW_BYTES // (1024 * 1024),
+        )
+        return _compact_table_by_month(table_name)
+
     # Byte ceiling — applies to ALL tables that reached here
     # (incl. low-avg ones the file-count guards let through).
     # compact_table reads the whole table into Arrow; a byte-heavy
@@ -796,6 +819,61 @@ _SMALL_TABLE_COMPACT_BYTES = 512 * 1024 * 1024
 # file-count guard and OOM-killed the backend. Skip these; they
 # need batched per-partition compaction (ASETPLTFRM follow-up).
 _MAX_SAFE_COMPACT_BYTES = 1024 * 1024 * 1024
+
+# Per-cell byte estimate for the DECOMPRESSED Arrow table. 8 ≈ a
+# float64/int64 column; the compaction-enrolled tables are numeric-
+# heavy (OHLCV, intraday features). Deliberately does not model
+# variable-width strings — _MAX_SAFE_COMPACT_ARROW_BYTES carries
+# enough headroom for the scan→cast→overwrite copies.
+_ARROW_BYTES_PER_CELL = 8
+
+# Estimated in-memory Arrow ceiling for in-process compaction.
+# ``_MAX_SAFE_COMPACT_BYTES`` above measures *compressed on-disk*
+# bytes, which badly under-estimates decompressed Arrow memory for
+# highly-compressible feature data: the 2026-06-24 incident saw
+# stocks.intraday_features at 491 MB on disk (under the 1 GiB disk
+# guard) but 70.5M rows × 10 cols ≈ 5.3 GB in Arrow; the in-process
+# scan→cast→overwrite copies pushed peak RAM past the ~11.7 GiB VM
+# and the OOM-killer SIGKILLed the uvicorn worker (which
+# ``uvicorn --reload`` never respawns). We estimate Arrow size from
+# ``total-records`` (snapshot summary, no data scan) and route tables
+# above this ceiling to per-month batching. 2 GiB est → ~5 GiB peak
+# across copies, safe on the VM, and pins between intraday_bars
+# (1.1 GB est, stays in-process) and intraday_features (5.3 GB est).
+_MAX_SAFE_COMPACT_ARROW_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def _estimated_arrow_bytes(table_name: str) -> int | None:
+    """Estimate the decompressed Arrow size of the whole table.
+
+    Reads ``total-records`` from the current snapshot summary (a
+    metadata-only lookup — no data scan) and multiplies by the
+    column count and ``_ARROW_BYTES_PER_CELL``.
+
+    Returns ``None`` when the table can't be loaded or carries no
+    row-count summary (e.g. an empty table with no snapshot), so the
+    caller falls back to the on-disk byte guard.
+    """
+    try:
+        from tools._stock_shared import _require_repo
+
+        tbl = _require_repo().load_table(table_name)
+        snap = tbl.current_snapshot()
+        if snap is None:
+            return None
+        total = snap.summary.get("total-records")
+        if total is None:
+            return None
+        ncols = len(tbl.schema().fields)
+        return int(total) * ncols * _ARROW_BYTES_PER_CELL
+    except Exception:
+        _logger.warning(
+            "[maint] could not estimate Arrow size for %s — "
+            "falling back to on-disk byte guard",
+            table_name,
+            exc_info=True,
+        )
+        return None
 
 
 def _avg_files_per_partition(

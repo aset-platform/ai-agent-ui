@@ -484,9 +484,16 @@ class WatchlistStockRow(BaseModel):
     sma_200: float | None = None
     sma_50: float | None = None
     sma_20: float | None = None
+    current_sma_200: float | None = None
+    current_sma_50: float | None = None
+    current_sma_20: float | None = None
     sharpe_ratio: float | None = None
     atr_pct: float | None = None
     rs_6m: float | None = None
+    rs_3m: float | None = None
+    return_3m: float | None = None
+    blended_rs: float | None = None
+    mdd_6m: float | None = None
     dist_sma200: float | None = None
     score: float | None = None
 

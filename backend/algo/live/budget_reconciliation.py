@@ -39,19 +39,28 @@ SUBMITTED_HARD_TIMEOUT_S = 300
 
 
 async def _list_pending() -> list[BudgetReservation]:
-    """Pull reservations whose latest state is PENDING."""
+    """Pull reservations whose latest state is PENDING.
+
+    Computes the most-recent row per reservation_id first
+    (DISTINCT ON ordered by transitioned_at DESC, id DESC),
+    then filters — so a reservation that has since transitioned
+    to a terminal state (TIMEOUT, FILLED, …) is excluded even
+    though it has an older PENDING row in the ledger.
+    """
     async with disposable_pg_session() as session:
         result = await session.execute(
             text(
-                "SELECT DISTINCT ON (reservation_id) "
-                "  reservation_id, user_id, strategy_id, "
-                "  state, ticker, side, qty, reserved_inr, "
-                "  filled_qty, filled_inr, kite_order_id, "
-                "  transitioned_at, metadata, error_text "
-                "FROM algo.budget_reservations "
-                "WHERE state = 'PENDING' "
-                "ORDER BY reservation_id, "
-                "         transitioned_at DESC"
+                "SELECT * FROM ( "
+                "  SELECT DISTINCT ON (reservation_id) "
+                "    reservation_id, user_id, strategy_id, "
+                "    state, ticker, side, qty, reserved_inr, "
+                "    filled_qty, filled_inr, kite_order_id, "
+                "    transitioned_at, metadata, error_text "
+                "  FROM algo.budget_reservations "
+                "  ORDER BY reservation_id, "
+                "           transitioned_at DESC, id DESC "
+                ") latest "
+                "WHERE latest.state = 'PENDING'"
             ),
         )
         rows = result.mappings().all()
@@ -67,15 +76,17 @@ async def _list_submitted_and_partial() -> list[BudgetReservation]:
     async with disposable_pg_session() as session:
         result = await session.execute(
             text(
-                "SELECT DISTINCT ON (reservation_id) "
-                "  reservation_id, user_id, strategy_id, "
-                "  state, ticker, side, qty, reserved_inr, "
-                "  filled_qty, filled_inr, kite_order_id, "
-                "  transitioned_at, metadata, error_text "
-                "FROM algo.budget_reservations "
-                "WHERE state IN ('SUBMITTED', 'PARTIAL') "
-                "ORDER BY reservation_id, "
-                "         transitioned_at DESC"
+                "SELECT * FROM ( "
+                "  SELECT DISTINCT ON (reservation_id) "
+                "    reservation_id, user_id, strategy_id, "
+                "    state, ticker, side, qty, reserved_inr, "
+                "    filled_qty, filled_inr, kite_order_id, "
+                "    transitioned_at, metadata, error_text "
+                "  FROM algo.budget_reservations "
+                "  ORDER BY reservation_id, "
+                "           transitioned_at DESC, id DESC "
+                ") latest "
+                "WHERE latest.state IN ('SUBMITTED', 'PARTIAL')"
             ),
         )
         rows = result.mappings().all()
@@ -191,11 +202,20 @@ async def _timeout_synthetic_if_stale(res: BudgetReservation) -> None:
 async def reconcile_one(
     res: BudgetReservation,
     kite_client,
+    *,
+    order_book: dict[str, dict] | None = None,
 ) -> None:
     """Reconcile a single SUBMITTED/PARTIAL reservation against Kite.
 
     Only called for real (non-synthetic) Kite orders. Synthetic orders
     are handled by ``_timeout_synthetic_if_stale`` before this loop.
+
+    ``order_book`` is an optional pre-fetched ``{order_id: row}`` map
+    from ``kc._kc.orders()`` (one call per user in
+    ``reconcile_submitted``). When provided the map is consulted first;
+    per-order ``order_history`` is only called as a fallback (order not
+    found in today's book).  Passing ``order_book=None`` (default)
+    restores the original per-order-history behaviour.
     """
     if res.kite_order_id is None:
         return
@@ -205,11 +225,15 @@ async def reconcile_one(
         seconds=SUBMITTED_HARD_TIMEOUT_S,
     )
 
-    status_row = await _fetch_order_status_for_user(
-        kite_client,
-        res.kite_order_id,
-        res.user_id,
-    )
+    status_row: dict[str, Any] | None = None
+    if order_book is not None and res.kite_order_id is not None:
+        status_row = order_book.get(str(res.kite_order_id))
+    if status_row is None:
+        status_row = await _fetch_order_status_for_user(
+            kite_client,
+            res.kite_order_id,
+            res.user_id,
+        )
     if status_row is None:
         if res.transitioned_at < threshold:
             # Kite drops order history after 1 trading day. If filled_inr > 0
@@ -357,6 +381,25 @@ async def reconcile_submitted() -> dict:
                 "budget reconcile: no kite for user=%s: %s", uid, exc,
             )
 
+    # Batch-fetch each user's order book once (one orders() call/user).
+    # Falls back to per-order history for any user whose orders() fails.
+    order_books: dict[UUID, dict[str, dict]] = {}
+    for uid, kc in kite_clients.items():
+        try:
+            book = await asyncio.to_thread(kc._kc.orders)
+            order_books[uid] = {
+                str(o.get("order_id")): o for o in (book or [])
+            }
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "budget reconcile: orders() failed user=%s: %s — "
+                "falling back to per-order history",
+                uid,
+                exc,
+                exc_info=True,
+            )
+            # uid absent from order_books → reconcile_one falls back
+
     kite_checked = 0
     kite_errors = 0
     for i, res in enumerate(real, 1):
@@ -369,7 +412,9 @@ async def reconcile_submitted() -> dict:
                 i, len(real), time.monotonic() - t0,
             )
         try:
-            await reconcile_one(res, kc)
+            await reconcile_one(
+                res, kc, order_book=order_books.get(res.user_id)
+            )
             kite_checked += 1
         except Exception as exc:  # noqa: BLE001
             kite_errors += 1

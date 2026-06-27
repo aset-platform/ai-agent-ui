@@ -12,18 +12,42 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
 
-from backend.db.engine import get_session_factory
+from backend.db.engine import disposable_pg_session, get_session_factory
 
 _logger = logging.getLogger(__name__)
 
 UTC = timezone.utc
+
+
+def _parse_iso_date(raw: Any) -> date | None:
+    """Parse an ISO-8601 timestamp string → its UTC ``date``.
+
+    Returns ``None`` when ``raw`` is empty or unparseable so the
+    caller can fall back rather than crash. A naive timestamp is
+    treated as UTC; tz-aware stamps are normalised to UTC first.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    s = raw.strip()
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(s)
+    except ValueError:
+        _logger.warning(
+            "caps_repo: cannot parse fill timestamp %r", raw,
+        )
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC)
+    return parsed.date()
 
 
 class CapsRepo:
@@ -52,6 +76,7 @@ class CapsRepo:
                         "  last_walkforward_run_id, "
                         "  cumulative_inr_today, "
                         "  orders_count_today, "
+                        "  gtt_limit_headroom_pct, "
                         "  created_at, updated_at "
                         "FROM algo.live_caps "
                         "WHERE user_id = :uid "
@@ -88,6 +113,7 @@ class CapsRepo:
             "last_walkforward_run_id": None,
             "cumulative_inr_today": Decimal("0"),
             "orders_count_today": 0,
+            "gtt_limit_headroom_pct": Decimal("0.01"),
         }
 
     async def list_enabled(
@@ -126,6 +152,7 @@ class CapsRepo:
         max_orders_per_day: int,
         allowed_tickers: list[str],
         last_walkforward_run_id: UUID | None = None,
+        gtt_limit_headroom_pct: Decimal | None = None,
     ) -> dict[str, Any]:
         """Create or update the caps row (does NOT change
         live_orders_enabled — that requires a separate call).
@@ -142,18 +169,20 @@ class CapsRepo:
                     "  max_orders_per_day, allowed_tickers, "
                     "  live_orders_enabled, "
                     "  last_walkforward_run_id, "
+                    "  gtt_limit_headroom_pct, "
                     "  cumulative_inr_today, orders_count_today, "
                     "  created_at, updated_at) "
                     "VALUES ("
                     "  :uid, :sid, :max_inr, :max_ord, "
                     "  CAST(:tickers AS jsonb), false, "
-                    "  :wf_run_id, 0, 0, :now, :now) "
+                    "  :wf_run_id, :gtt_pct, 0, 0, :now, :now) "
                     "ON CONFLICT (user_id, strategy_id) "
                     "DO UPDATE SET "
                     "  max_inr = :max_inr, "
                     "  max_orders_per_day = :max_ord, "
                     "  allowed_tickers = CAST(:tickers AS jsonb), "
                     "  last_walkforward_run_id = :wf_run_id, "
+                    "  gtt_limit_headroom_pct = :gtt_pct, "
                     "  updated_at = :now"
                 ),
                 {
@@ -163,6 +192,11 @@ class CapsRepo:
                     "max_ord": max_orders_per_day,
                     "tickers": json.dumps(allowed_tickers),
                     "wf_run_id": last_walkforward_run_id,
+                    "gtt_pct": (
+                        gtt_limit_headroom_pct
+                        if gtt_limit_headroom_pct is not None
+                        else Decimal("0.01")
+                    ),
                     "now": now,
                 },
             )
@@ -410,12 +444,103 @@ class CapsRepo:
         }
         return set(locked) | submitted_buy_tickers
 
+    async def get_filled_buys_from_previous_runs(
+        self,
+        user_id: UUID,
+        strategy_id: UUID,
+        current_run_id: UUID,
+        *,
+        look_back: int = 10,
+    ) -> dict[str, dict]:
+        """Return filled BUY entries from recent previous live runs.
+
+        Scans up to ``look_back`` prior runs (ordered most-recent-first) and
+        collects all status='filled' BUY orders.  Used by
+        ``_recover_unhydrated_positions`` to re-inject positions that were
+        filled while the prior runtime was stopping (the postback arrived
+        after ``get_live_runtime`` returned None so no GTT or Redis state
+        was saved).  A short intermediate run with no orders (empty in_flight)
+        must not hide a fill from an earlier run — hence the multi-hop scan.
+
+        Returns dict keyed by ``TICKER.NS`` →
+        ``{fill_price: Decimal, qty: int, fill_date: date | None}``.
+        ``fill_date`` carries the ORIGINAL open date (parsed from the
+        in-flight entry's ``filled_at`` / ``submitted_at`` ISO-8601
+        stamp) so the recovery path can preserve ``opened_at`` across a
+        restart instead of resetting it to today — without that the
+        ``max_holding_days`` time-stop never fires for a recovered
+        position. ``fill_date`` is ``None`` when no stamp is parseable.
+
+        Only entries with status='filled', side='BUY', fill_price > 0,
+        qty > 0 are included.  If a ticker appears in multiple runs the
+        most-recent fill wins (rows are processed newest-first).
+        """
+        async with disposable_pg_session() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        "SELECT live_orders_in_flight "
+                        "FROM algo.runs "
+                        "WHERE user_id = :uid "
+                        "  AND strategy_id = :sid "
+                        "  AND mode = 'live' "
+                        "  AND id != :crid "
+                        "ORDER BY started_at DESC "
+                        "LIMIT :n"
+                    ),
+                    {
+                        "uid": user_id,
+                        "sid": strategy_id,
+                        "crid": current_run_id,
+                        "n": look_back,
+                    },
+                )
+            ).all()
+
+        result: dict[str, dict] = {}
+        for row in rows:
+            raw = row[0]
+            in_flight: list[dict] = (
+                json.loads(raw) if isinstance(raw, str) else (raw or [])
+            )
+            for e in in_flight:
+                if e.get("side") != "BUY" or e.get("status") != "filled":
+                    continue
+                sym = e.get("symbol") or ""
+                if not sym:
+                    continue
+                ticker = f"{sym}.NS" if "." not in sym else sym
+                if ticker in result:
+                    continue  # already found a more-recent fill
+                try:
+                    fp = Decimal(str(e.get("fill_price") or 0))
+                    qty = int(
+                        e.get("filled_qty") or e.get("qty") or 0
+                    )
+                except (TypeError, ValueError, InvalidOperation):
+                    continue
+                if fp > 0 and qty > 0:
+                    result[ticker] = {
+                        "fill_price": fp,
+                        "qty": qty,
+                        "fill_date": _parse_iso_date(
+                            e.get("filled_at")
+                            or e.get("submitted_at"),
+                        ),
+                    }
+        return result
+
     async def get_in_flight(
         self, user_id: UUID, run_id: UUID,
     ) -> list[dict]:
-        """Return the in-flight orders list for a run."""
-        factory = get_session_factory()
-        async with factory() as session:
+        """Return the in-flight orders list for a run.
+
+        Uses disposable_pg_session (NullPool) because this is called
+        every 30 s from _sync_fills_from_pg in the live runtime.
+        NullPool avoids accumulating idle-in-transaction pool connections
+        from repeated read-only SELECT calls that never commit.
+        """
+        async with disposable_pg_session() as session:
             row = (
                 await session.execute(
                     text(

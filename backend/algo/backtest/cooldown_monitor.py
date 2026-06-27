@@ -33,6 +33,8 @@ from typing import Iterable, Protocol
 # re-entering it next bar is the same broken thesis.
 _FAILED_EXIT_REASONS = frozenset({
     "time_stop", "stop_loss", "regime_exit",
+    # v5: phase1 exits are thesis failures; trail_stop is not.
+    "phase1_stop", "phase1_ratchet",
 })
 
 

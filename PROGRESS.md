@@ -2,6 +2,196 @@
 
 ---
 
+### 2026-06-27 — `/capture-learnings` doc-router command + algo.md parity/safety rules (branch `feature/rsi2-exit-strategy`)
+
+**What:** Built a project slash command to keep the always-loaded `CLAUDE.md` slim by routing new learnings into the right tier of the 3-tier docs system (established `1d66720`): CLAUDE.md hard rule · `.claude/rules/*.md` path-scoped · Serena memory.
+
+**Context:** Of the ~12.7k "memory files" loaded every session, ~11k is `CLAUDE.md` — the only real pressure point. PROGRESS.md and `.serena/` do NOT auto-load; only the two `CLAUDE.md` files + the AutoMem `MEMORY.md` index do.
+
+- **`b2d6091`** — new `.claude/commands/capture-learnings.md` (router, not auditor). Scans the session + git diff for new rules/patterns, classifies each by rubric, presents a confirm-first routing table with per-item CLAUDE.md line-delta, writes the approved placements. Memory tier hands off to `/promote-memory` (no duplication). Frontmatter matches the `promote-memory.md` house style.
+- **Dry-run on this session** validated it: correctly deduped 4 of 6 candidates, +0 CLAUDE.md lines — and exposed two skill bugs.
+- **`ac4123d`** — v1.1.0 fixes: (1) `dev..HEAD` over-captured a long-lived branch's already-shipped work → conversation is now primary, diff scoped to this session (`git diff HEAD` + today's commits); whole-branch sweep is opt-in only. (2) memory dedup silently no-op'd when Serena MCP was absent → documented the `.serena/memories/` on-disk grep fallback.
+- **`8e464d5`** — routed the two branch-historical `KEEP*` survivors into `.claude/rules/algo.md` (lazy-loaded, +0 CLAUDE.md): **paper/live parity** (MTM equity + `cash=nav−deployed` sizing, directional `ALGO_PAPER_SLIPPAGE_BPS`, `signal_rejected` over silent qty=0) and **live safety** (delete_gtt failure must never skip the emergency STOP_HIT SELL; routes through tracked `_submit_order`; → `algo-gtt-trailing-stop`).
+
+**NOT done (user decision):** PR to `dev` (squash-only; never push without confirm).
+
+---
+
+### 2026-06-27 — Live-trading hardening Phases 6–7 COMPLETE (branch `feature/rsi2-exit-strategy`)
+
+**What:** Finished the subagent-driven hardening from the 2026-06-24 review. Phase 6 (paper↔live parity) + Phase 7 (scale/memory/correctness) — every task implemented TDD, individually spec+quality reviewed, then a final whole-branch review + a definitive zero-regression sign-off. HEAD `24e638f`.
+
+**Phase 6 (paper↔live parity):**
+- **6.1** (`11ae79e`) mark-to-market paper equity/unrealised (`self._last_marks`) so caps/sizing match live; `cash = nav − deployed_cost`.
+- **6.2** (`15fc1dc`) directional `ALGO_PAPER_SLIPPAGE_BPS` slippage on paper fills (fees on unslipped price).
+- **6.3** (`eaf5489`+`24ee3f0`) paper qty=0 silent drop now emits live's `signal_rejected`/`insufficient_capital_qty_zero` (parity); fix: composer None-price = silent drop, not malformed event.
+- **6.4** (`0fd7c39`) periodic crash-safe batched event flush (size/time threshold; flush failure keeps events + doesn't kill the run).
+- **6.5** (`9aec3b5`+`ad6c128`) supervisor reaps completed/crashed runs + re-arm; done-callback **same-task identity guard** (late callback can't clobber a re-armed run); `rebuild_all` exc_info.
+
+**Phase 7 (scale/memory/correctness):**
+- **7.1** (`ea09953`) offload per-bar Iceberg reads off the event loop (`asyncio.to_thread`, awaited before assemble).
+- **7.2** (`f6456f0`) bound `_bars_by_ticker` (cap 300, in-place trim alias-preserving) + evict stale `_closed_entry_cache`.
+- **7.3** (`2fda280`) resampler time-driven flush — quiet ticker's bar emitted when any tick advances the clock.
+- **7.4** (`a785654`+`b93b6fa`) idempotent `flush_bars` (exact per-(ticker,interval,bar_open) OR-delete — NOT a cross-product that would lose data).
+- **7.5** (`7de0d84`) batch reconciliation: one `orders()` call/user, per-order history fallback. **Fixed 3 stale tests.**
+- **7.6** (`4ed70e8`+`75eb58a`) STOP_HIT emergency SELL via tracked `_submit_order` (concurrency guard vs deadlock); `sold`-flag retry (no abandon, no double-sell on timeout).
+- **7.7** (`71703cb`) MIS square-off cancels GTT first + prices off live LTP (cancel failure never skips the SELL).
+- **7.8** (`08bda87`) sizing guards: vol floor (clamp <5%), observable DD/cash-floor zero-drops, `peak≤0`→halt.
+- **7.9** (`ca049d5`+`64dcf2c`) `get_gtts` raises (activates the dead 3.3 fail-visible path), `delete_gtt` narrows (InputException=benign), `TokenExpiredError`; STOP_HIT GTT-cancel wrapped.
+- **7.10** (`7f66eef`) intraday warmup per-row isolation (one bad row ≠ universe wipe) + explicit pre-1980 epoch floor on both readers.
+- **7.11** (`378d9b2`) low-sev batch: `_iceberg_retry` releases lock during sleep, `quote()` BSE prefix, `_NSE_DEFAULTS` MappingProxyType, teardown exc_info, slippage env safe-parse. **3 risky items deferred to a ticket** (STT rate, NSE holiday calendar, order_timeout full-id tag).
+
+**Final whole-branch review (opus):** 1 Critical fixed (`24e638f`) — `backend/algo/tests/conftest.py` `kiteconnect` stub lacked an `exceptions` submodule, so 7.9's top-level import aborted whole-suite collection (invisible to per-task isolated runs). Zero runtime-correctness defects across all cross-task real-money paths.
+
+**Zero-regression sign-off:** full `backend/algo` suite (2095 tests) at pre-session `ed17408` = **68 failed/1942 passed**; at HEAD `24e638f` = **63 failed/2032 passed**. Per-file diff identical except the 5 I fixed (test_budget_reconciliation 3→0, test_kite_gtt 2→0). **+90 new passing tests, 0 new failures.** Remaining 63 are pre-existing (stub-leakage tech debt + the known 10 live + 2 backtest baseline).
+
+**Post-completion (2026-06-27, Sat — market closed):** backend RESTARTED (user-approved) → Phases 4–7 active. **GTT-protection path verified live** on the closed market: all 7 held positions hydrated (positions() empty on weekend → holdings fallback), `ensure_gtts` verified each vs live Kite (all protected, no duplicates), token valid (no `gtt_verification_failed`), `_cleanup_stale_protection` clean no-op, no `capital_below_deployed` (~₹100k), reconciliation clean. A live runtime is **running idle** — stop before Monday open if it shouldn't trade unattended. Filed ASETPLTFRM-453 (deferred 7.11 cleanups) and ASETPLTFRM-454 (same-user multi-strategy hardening: engine guard + position→strategy GTT ownership + scoped fill attribution; Relates 453).
+
+**⏭ PICK-UP ITEM — the full TRADING-guardrail re-test still wants Monday market hours.** The GTT/protective-exit lifecycle is verified, but **anti-churn, capital-shrink trim-suppression, and sizing guards only exercise on real bar-evals during NSE hours (Mon–Fri 09:15–15:30 IST)**. Re-test with the original ~₹100k capital (NOT ₹20k → capital-shrink would suppress trims). Watch for: `order_suppressed_churn`, `rebalance_down_suppressed_capital_shrink`, `signal_rejected`/`insufficient_capital_qty_zero`, and entries/exits routing through the tracked order path.
+
+**NOT done (user decision):** PR to `dev` (squash-only; never push without confirm).
+
+---
+
+### 2026-06-24 — fix: SOUTHBANK GTT missing + locked-but-not-hydrated recovery (branch `feature/rsi2-exit-strategy`)
+
+**Why:** SOUTHBANK.NS (50 shares, avg ₹45.56, filled 14:31:50 IST) had no GTT protecting it. Two-part root cause: (1) fill arrived while runtime `bb9d9161` was stopping — `get_live_runtime` returned None → `on_buy_fill_trailing` never called; (2) on subsequent restarts `kite.positions()['net']` returned 0 rows (intraday API timing race during market hours) → hydration only loaded overnight holdings → `ensure_gtts` never saw SOUTHBANK.
+
+**Three fixes:**
+
+- **`_recover_unhydrated_positions()`** (`runtime.py`) — new startup method called after ticker-lock restoration. Finds tickers in `_ticker_locked` not in `open_positions()`, reads filled BUY data from previous runs' `live_orders_in_flight` (multi-hop scan, up to 10 runs back), re-injects as synthetic fills. Handles the case where an intermediate run had empty in_flight (bb9d9161 fill data is 2 hops back from edadf678 via 8bf78023 which had []).
+
+- **`get_filled_buys_from_previous_runs()`** (`caps_repo.py`) — scans up to 10 prior live runs for status='filled' BUY entries with fill_price > 0. Returns dict `TICKER.NS → {fill_price, qty}` with newest-first dedup.
+
+- **`_load_trailing_state_from_redis()`** fix — now iterates `open_positions() ∪ _ticker_locked` (was only `open_positions()`). KTKBANK was in Redis with a valid trailing manager but wasn't being restored because positions() missed it.
+
+- **`position_hydration.py`** debug logging — WARNING when `positions()['net']` is empty; DEBUG log of all raw rows when non-empty. Will diagnose the API timing race on future intraday restarts.
+
+**Verification (16:41 IST restart):**
+- `7 position(s) hydrated (positions=4 holdings=3)` — positions() returned 4 rows (market closed, no timing race)
+- `ensure_gtts: placed GTT 324887204 for SOUTHBANK.NS stop=43.7376 phase=1 source=hydrated_algo`
+- Redis: 7 trailing entries confirmed (SOUTHBANK.NS added with `entry_price=45.56 gtt_id=324887204 current_stop=43.7376 atr=1.528`)
+
+**Remaining gap:** `positions=0` during intraday restarts — the timing race is now mitigated by the recovery path, but root cause (Kite API lag) not fixed. The `positions()` WARNING log will capture the next occurrence.
+
+---
+
+### 2026-06-24 — feat: intelligent qty sizing + live GTT verification (branch `feature/rsi2-exit-strategy`)
+
+**Why:** Live market run on 2026-06-24 surfaced two issues: (1) GTTs were placed correctly but the strategy was computing qty from equity × weight without checking available budget — SKYGOLD generated qty=5 when only ₹1,628 remained in the ₹10,000 strategy cap after three open positions (HSCL, NSLNISP, SHAILY). (2) The first fix (Kite live_balance) was too permissive — user keeps a cash buffer in Zerodha beyond the strategy allocation.
+
+**What (2 commits):**
+
+- **feat(live): cap BUY qty to Kite balance** (`60b8629`) — initial gate using `fetch_kite_available_cash`. Superseded by the next commit.
+
+- **fix(live): qty cap uses strategy budget (max_inr − deployed)** (`2266cb0`)
+  - Gate in `LiveRuntime._on_bar_close`, after `current_caps` + `committed_inr_now` are computed, before `pre_trade_check`
+  - `remaining = max_inr − committed_inr_now`; `affordable_qty = floor(remaining / last_price)`
+  - `affordable_qty < 1` → `signal_rejected(reason=insufficient_balance)` with full context
+  - `affordable_qty < signal.qty` → `signal_adjusted(reason=strategy_budget_cap)` with old_qty / new_qty / committed_inr / remaining_inr
+  - `max_inr = 0` → gate skipped (fail-open, no cap configured)
+  - 3 tests: `test_balance_cap.py` — full budget / partial / zero
+  - Serena memory: `algo-budget-qty-cap`
+
+**Live verification (market hours 2026-06-24):**
+- GTT placement confirmed: all 3 positions got GTTs at exactly −4% from Kite avg cost (HARD_STOP phase=1) at 09:18:50 IST
+- SHAILY.NS ratcheted at 09:30:00 IST: LTP hit ₹2828.70 (+3.25% above avg ₹2739.60), GTT 324758017 cancelled, new GTT 324765504 at ₹2684.808 (−2% from avg, RATCHETED phase=15)
+- HSCL and NSLNISP in HARD_STOP phase — neither crossed +2% trigger
+- algo.events query confirmed: `gtt_placed` × 3 at 09:18:50 + `gtt_ratcheted` × 1 at 09:30:00
+
+**TrailingPhase enum values (non-obvious):**
+- `HARD_STOP = 1` (NOT 0 — "phase=1" in logs = hard stop)
+- `RATCHETED = 15`
+- `ATR_TRAIL = 2`
+
+**Live strategy AST (actual DB values, not template):**
+- `stop_loss_pct = 4.0`, `phase1_ratchet_trigger_pct = 2.0`, `phase1_ratchet_new_stop_pct = 2.0`, `trailing_trigger_pct = 4.0`
+
+**Pending:**
+- GTT fill postback routing for exchange-side GTT triggers (no `in_flight` entry for exchange-triggered fills)
+- Walk-forward DSR gate for v5 paper→live promotion
+- PR to dev — end of this week
+
+---
+
+### 2026-06-23/24 — feat: GTT hydration, configurable buffer, Watchlist → Strategy modal (branch `feature/rsi2-exit-strategy`)
+
+**Why:** Live market testing on 2026-06-23 surfaced three gaps: (1) GTTs placed by our algo could be accidentally deleted from Kite (no re-hydration on restart); (2) the 1% GTT limit headroom was hardcoded and couldn't be tuned per-strategy; (3) the Watchlist Stocks page had no way to push a curated filtered list directly into a strategy's allowed_tickers.
+
+**What (4 tasks, 5 commits):**
+
+- **T1 — GTT hydration on startup** (`feat(live): GTT hydration on startup + panic-close GTT cancel`, `f0aa047`)
+  - `_ensure_gtts_for_hydrated_positions()` in `LiveRuntime.run()` — called after `_load_trailing_state_from_redis()`
+  - For every open position not yet in `_trailing_managers`: fetches Kite GTTs, queries `algo.events` for algo vs manual source, creates `TrailingStopManager`, places GTT if missing (emits `gtt_placed` with `source=hydrated_algo|hydrated_manual`) or registers existing (emits `trailing_stop_recovered`)
+  - Covers first promotion post-deploy and accidentally-deleted GTTs
+  - **Panic close GTT cancel**: `kill_switch.py` `panic_close_all()` now cancels ALL active Kite GTTs before submitting SELL orders; returns `gtts_cancelled` count in response
+
+- **T2 — Configurable GTT limit buffer** (`feat(live): make GTT limit buffer configurable via Settings tab`, `2668977`)
+  - Alembic migration `2026_06_23_gtt_headroom`: `gtt_limit_headroom_pct NUMERIC(5,4) DEFAULT 0.01` on `algo.live_caps`
+  - `CapsRepo` get/upsert/default updated; `UpsertCapsRequest` + `CapsResponse` in `live.py` updated
+  - `LiveRuntime.__init__` reads from caps; class constant `_GTT_LIMIT_HEADROOM_PCT` removed
+  - `LiveSafetyBeltsForm.tsx` — 4th column "GTT limit buffer %" (0–10%, default 1.0%)
+  - Confirmed: Live Test 3000 RSI updated to 0.50% → `0.0050` stored ✓
+
+- **T3 — Watchlist → Strategy "Add to Strategy" modal** (`feat(watchlist): add filtered tickers to strategy allowed list modal`, `9a312f2`)
+  - `frontend/components/algo-trading/AddToStrategyModal.tsx` — strategy dropdown (live+non-archived only), side-by-side existing vs filtered, Merge → final chip list → Save
+  - Preserves all other caps fields on save; Back button; Escape/backdrop close
+  - "Add to Strategy" button in Watchlist Stocks toolbar next to Copy Tickers
+
+- **T4 — Default filters + live-only dropdown** (`fix(watchlist): default filters + modal live-only strategies`, `ab02bda`)
+  - Watchlist Stocks default state: RSI(2)≤25, ATR 2–6%, Sharpe≥1, RS≥25%, Dist SMA200=[5–15%,15–35%,35–50%], Golden Cross + LTP>SMA50 + LTP>SMA200 ON
+  - Modal dropdown filtered to `mode==="live" && !archived_at`
+
+**Live SMA columns (shipped 2026-06-23, same session):**
+- `current_sma_200/50/20` on `WatchlistStockRow` — intraday live values shown as `prev | current` in blue
+- Filter chips use prev-day close for stability (NOT live LTP)
+
+**Manual testing:** All features verified in browser after full restart + Redis FLUSHALL. GTT buffer 0.50% confirmed stored as `0.0050`. Watchlist loads with default filters applied.
+
+**Pending (market hours tomorrow):**
+- GTT hydration end-to-end with live positions (RSI(2) Connors Daily v5 + 5% price stop)
+- GTT fill postback routing for exchange-side GTT triggers
+- Walk-forward DSR gate for v5 paper→live promotion
+
+---
+
+### 2026-06-21 — feat: RSI(2) Connors Daily v5 — three-phase GTT trailing stop (branch `feature/rsi2-exit-strategy`, worktree)
+
+**Why:** RSI(2) v3/v4 used an SMA5 bar-close exit which required holding overnight. v5 replaces it with a three-phase Kite GTT trailing stop: hard stop at entry×0.95, one-time ratchet to entry×0.97 when gain ≥ 2%, ATR×1.5 trailing stop once gain ≥ 5%. GTT fires intraday without monitoring — Kite's exchange-side trigger handles execution.
+
+**What (9 tasks across 3 sessions):**
+- **T1** `RiskPerTrade` 4 new optional fields (`phase1_ratchet_trigger_pct`, `phase1_ratchet_new_stop_pct`, `trailing_trigger_pct`, `trailing_atr_multiplier`)
+- **T2** `TrailingStopManager` pure state machine (`backend/algo/backtest/trailing_stop_manager.py`) — phases HARD_STOP/RATCHETED/ATR_TRAIL, `on_price_update()` returns `TrailingEvent(STOP_UPDATED|STOP_HIT)`, `to_dict()`/`from_dict()` for Redis serialisation; 22 unit tests
+- **T3** Backtest runner wires trailing manager — LOW-first (stop check) then HIGH (HWM advance) per bar; exits routed as `phase1_stop`/`phase1_ratchet`/`trail_stop` reasons; cooldown applies for phase1 exits only; 17 integration tests
+- **T4** `rsi2_connors_daily_v5.json` template — identical 5-condition entry to v3, `else: hold` (GTT owns all exits); 5 template tests
+- **T5** Paper runtime trailing evaluation — per-bar LOW/HIGH evaluation with same conservative ordering as backtest; v3 flat-stop path unchanged; dry-run logs GTT intents
+- **T6** `KiteClient.place_gtt / delete_gtt / get_gtts` — `GTT_TYPE_SINGLE`, strips `.NS`/`.BO`, dry-run guards, swallow-all on delete; 12 tests
+- **T7** Live runtime BUY fill → GTT init: `on_buy_fill_trailing` (ATR from factor cache, places GTT, saves to Redis 48h TTL, emits `gtt_placed`); `_save_trailing_state`/`_load_trailing_state_from_redis` (restart recovery called in `run()` after ticker-lock restore); `PaperSupervisor.get_live_runtime(user_id, strategy_id)`; postback handler COMPLETE BUY → `on_buy_fill_trailing`; 14 tests
+- **T8** 15-min GTT ratchet loop: `_trailing_ratchet_loop` aligned to bar boundaries 09:15–15:25 IST, `_ratchet_all_gtts` via `asyncio.to_thread`; STOP_UPDATED → delete+replace GTT + Redis + `gtt_ratcheted` event; STOP_HIT → emergency limit SELL; WS tick loop updates `_ws_hwm` (no GTT logic in hot path); 15 tests
+- **T9** Time-stop cleanup: cancels GTT before LIMIT SELL (double-exit prevention), emits `gtt_cancelled_for_time_stop`; `_on_sell_fill_trailing` clears all trailing state + Redis; postback handler COMPLETE SELL → `_on_sell_fill_trailing`; 14 integration tests (roundtrip, BUY fill, phase-2 ratchet, SELL cleanup)
+
+**Commits:** `3f17099` → `48cf8bb` (9 feature commits). Branch pushed, worktree cleaned.
+
+**Manual testing (2026-06-21, same session):**
+- Backtest v3 (7d cooldown): 311 trades, 838 cooldown-skips, trailing N/A — clean ✅
+- Backtest v4 (55d name / 7d AST, trailing enabled): 366 trades, 848 cooldown-skips, ~60 "insufficient bars for atr_14" warnings on thin-data tickers — expected ✅
+- Paper v4 run 1 (pre-fix): every BUY fill logged "missing atr_14" — trailing never activated ❌ → diagnosed: paper runtime was looking for `atr_14` in the algo.factors Iceberg store (not stored there); factor cache only has `adx_14`, `sma200_slope`, `distance_from_sma200`
+- Paper v4 run 2 (post-fix): 2 residual warnings (ADANIPOWER.NS, SANSERA.NS — genuine < 14-bar data); trailing SELL events firing (`DELHIVERY.NS phase=1`, `FEDERALBNK.NS phase=1`) ✅
+- Dry-run (source=replay, Saturday): 3015 ticks, 3006 bars, 0 fills — expected (markets closed, RSI(2) conditions not met on last trading day replay) ✅
+
+**Bug fixes shipped this session:**
+- `fix(paper)` — `_wilder_atr(history, 14)` replaces factor-cache ATR lookup; mirrors backtest runner exactly (`d6f7e66`)
+- `feat(levers)` — 4 v5 GTT trailing stop fields added to Strategy Levers panel with captions; stale editor after update fixed (SWR `mutate()` on individual strategy cache slots after `upsertStrategyMetadata`) (`8f7fdad`)
+
+**Follow-ups / known gaps:**
+- GTT fill postback routing for exchange-side GTT fills (no `live_orders_in_flight` entry → `_on_sell_fill_trailing` won't fire) — needs live market test
+- 3 tickers (GSPL.NS, AKZOINDIA.NS, CIGNITITEC.NS) missing `instrument_token` in token map — run instruments master refresh
+- `benchmark_return_pct` hardcoded 0 in outcomes job (pre-existing TODO)
+- Walk-forward DSR gate for v5 paper promotion (next session)
+- PR to dev only when user explicitly asks
+
+---
+
 ### 2026-06-21 — feat: batched per-month Iceberg compaction (ASETPLTFRM-442, branch `feature/batched-compaction`, worktree)
 
 **Why:** The OOM hotfix (#270) added a 1 GB `_MAX_SAFE_COMPACT_BYTES` ceiling that *skips* compaction for byte-heavy tables (`stocks.intraday_features`, 1.2 GB / 70M rows) — so they never fold their daily-append fragmentation. `compact_table` loads the whole table into Arrow (`scan().to_arrow()`), and PyIceberg 0.11.1 has no native `rewrite_data_files`.

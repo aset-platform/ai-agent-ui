@@ -31,6 +31,8 @@ class Resampler:
         # key = (ticker, interval) → in-progress bar dict.
         self._open: dict[tuple[str, int], dict] = {}
         self._completed: list[Bar] = []
+        # Tracks the most recent tick timestamp seen across all tickers.
+        self._latest_ts_ns: int = 0
 
     @staticmethod
     def _bar_open(ts_ns: int, interval_sec: int) -> int:
@@ -38,8 +40,27 @@ class Resampler:
         return ts_ns - (ts_ns % interval_ns)
 
     def feed(self, tick: Tick) -> None:
+        self._latest_ts_ns = max(self._latest_ts_ns, tick.ts_ns)
         for interval_sec in self._intervals:
             self._feed_one(tick, interval_sec)
+        self._sweep_stale(self._latest_ts_ns)
+
+    def _sweep_stale(self, ref_ns: int) -> None:
+        """Finalize any open bar whose full window has elapsed.
+
+        Iterates all in-progress bars and evicts those whose
+        ``bar_open + interval_ns <= ref_ns``.  The bar the latest
+        tick itself belongs to satisfies ``bar_open + interval_ns >
+        ref_ns`` and is therefore skipped (still open).
+        """
+        for key, state in list(self._open.items()):
+            ticker, interval_sec = key
+            interval_ns = interval_sec * 1_000_000_000
+            if state["bar_open"] + interval_ns <= ref_ns:
+                self._completed.append(
+                    self._finalize(ticker, interval_sec, state)
+                )
+                del self._open[key]
 
     def _feed_one(self, tick: Tick, interval_sec: int) -> None:
         key = (tick.ticker, interval_sec)

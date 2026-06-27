@@ -55,23 +55,28 @@ def retry_iceberg_op(
 
     The caller is responsible for loading the table fresh inside
     ``operation`` (so the retry reads the latest snapshot)."""
-    with _commit_lock:
-        last_exc: CommitFailedException | None = None
-        for attempt in range(_MAX_RETRIES + 1):
+    # Release the lock during backoff so competing writers can make
+    # progress. Holding the lock across time.sleep() is counter-
+    # productive: the conflicting committer is also blocked, so the
+    # snapshot never advances and we conflict again on the next try.
+    last_exc: CommitFailedException | None = None
+    for attempt in range(_MAX_RETRIES + 1):
+        with _commit_lock:
             try:
                 return operation()
             except CommitFailedException as exc:
                 last_exc = exc
-                if attempt < _MAX_RETRIES:
-                    delay = _BACKOFF_SECONDS[attempt]
-                    _logger.warning(
-                        "Iceberg commit conflict on %s "
-                        "(attempt %d/%d), retry in %.1fs",
-                        identifier,
-                        attempt + 1,
-                        _MAX_RETRIES,
-                        delay,
-                    )
-                    time.sleep(delay)
-        assert last_exc is not None
-        raise last_exc
+        # Lock released — sleep outside so the other writer can commit.
+        if attempt < _MAX_RETRIES:
+            delay = _BACKOFF_SECONDS[attempt]
+            _logger.warning(
+                "Iceberg commit conflict on %s "
+                "(attempt %d/%d), retry in %.1fs",
+                identifier,
+                attempt + 1,
+                _MAX_RETRIES,
+                delay,
+            )
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc

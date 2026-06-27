@@ -2246,8 +2246,9 @@ def create_insights_router() -> APIRouter:
             .date()
         )
 
-        # Fetch Nifty 50 6M return once for RS(6M) calculation.
+        # Fetch Nifty 50 returns once for RS calculations.
         _nifty_6m_return: float | None = None
+        _nifty_3m_return: float | None = None
         try:
             _nifty_df = query_iceberg_df(
                 "stocks.ohlcv",
@@ -2264,8 +2265,13 @@ def create_insights_router() -> APIRouter:
                 _nifty_6m_return = float(
                     (_nc.iloc[-1] - _nc.iloc[0]) / _nc.iloc[0] * 100
                 )
+                if len(_nc) >= 64:
+                    _nifty_3m_return = float(
+                        (_nc.iloc[-1] - _nc.iloc[-64])
+                        / _nc.iloc[-64] * 100
+                    )
         except Exception as _e:
-            _logger.debug("watchlist-stocks nifty 6m: %s", _e)
+            _logger.debug("watchlist-stocks nifty returns: %s", _e)
 
         # Only fetch live prices during NSE market hours (09:00–15:30 IST,
         # Mon–Fri). Off-hours current_rsi_2 == rsi_2 from OHLCV history.
@@ -2342,6 +2348,10 @@ def create_insights_router() -> APIRouter:
                 # Compute current_rsi_2: during market hours append a
                 # synthetic bar with today's LTP; off-hours reuse rsi_2.
                 _cur_rsi2: float | None = None
+                _cur_sma200: float | None = None
+                _cur_sma50: float | None = None
+                _cur_sma20: float | None = None
+                _live_ltp: float | None = None
                 if not _live_mode:
                     _cur_rsi2 = _safe(last.get("RSI_2"))
                 else:
@@ -2381,6 +2391,7 @@ def create_insights_router() -> APIRouter:
                                 close=_Dec(str(_ltp)),
                                 volume=0,
                             ))
+                            _live_ltp = _ltp
                         if _bars:
                             _imap = _ci(_bars)
                             if _imap:
@@ -2388,6 +2399,19 @@ def create_insights_router() -> APIRouter:
                                 _r2 = _li.get("rsi_2")
                                 if _r2 is not None:
                                     _cur_rsi2 = float(_r2)
+                                for _k, _ref in (
+                                    ("sma_200", "_cur_sma200"),
+                                    ("sma_50", "_cur_sma50"),
+                                    ("sma_20", "_cur_sma20"),
+                                ):
+                                    _sv = _li.get(_k)
+                                    if _sv is not None:
+                                        if _k == "sma_200":
+                                            _cur_sma200 = float(_sv)
+                                        elif _k == "sma_50":
+                                            _cur_sma50 = float(_sv)
+                                        else:
+                                            _cur_sma20 = float(_sv)
                     except Exception as _exc2:
                         _logger.debug(
                             "current_rsi_2 %s: %s",
@@ -2399,6 +2423,7 @@ def create_insights_router() -> APIRouter:
                 # trading days (≈6 months).
                 _sharpe: float | None = None
                 _stock_6m_return: float | None = None
+                _stock_3m_return: float | None = None
                 try:
                     _close_s = grp["close"].astype(float)
                     _rets = _close_s.pct_change().dropna()
@@ -2412,12 +2437,19 @@ def create_insights_router() -> APIRouter:
                                 * (252 ** 0.5),
                                 4,
                             )
-                    # 6M price return for RS calculation
+                    # 6M price return (~126 bars)
                     _c6 = _close_s.iloc[-127:]
                     if len(_c6) >= 2:
                         _stock_6m_return = float(
                             (_c6.iloc[-1] - _c6.iloc[0])
                             / _c6.iloc[0] * 100
+                        )
+                    # 3M price return (~63 bars)
+                    _c3 = _close_s.iloc[-64:]
+                    if len(_c3) >= 2:
+                        _stock_3m_return = float(
+                            (_c3.iloc[-1] - _c3.iloc[0])
+                            / _c3.iloc[0] * 100
                         )
                 except Exception:
                     pass
@@ -2431,6 +2463,34 @@ def create_insights_router() -> APIRouter:
                     _rs_6m = round(
                         _stock_6m_return - _nifty_6m_return, 4
                     )
+
+                # RS(3M) = stock 3M return − Nifty 3M return
+                _rs_3m: float | None = None
+                if (
+                    _stock_3m_return is not None
+                    and _nifty_3m_return is not None
+                ):
+                    _rs_3m = round(
+                        _stock_3m_return - _nifty_3m_return, 4
+                    )
+
+                # Blended RS = 0.6×RS3M + 0.4×RS6M
+                _blended_rs: float | None = None
+                if _rs_3m is not None and _rs_6m is not None:
+                    _blended_rs = round(
+                        0.6 * _rs_3m + 0.4 * _rs_6m, 4
+                    )
+
+                # MDD(6M): max drawdown over last ~126 trading days
+                _mdd_6m: float | None = None
+                try:
+                    _c6m = _close_s.iloc[-126:]
+                    if len(_c6m) >= 2:
+                        _peak = _c6m.cummax()
+                        _dd = (_c6m - _peak) / _peak * 100
+                        _mdd_6m = round(float(_dd.min()), 4)
+                except Exception:
+                    pass
 
                 # ATR% = ATR(14) / close * 100
                 _atr_pct: float | None = None
@@ -2467,15 +2527,18 @@ def create_insights_router() -> APIRouter:
                         ),
                         current_rsi_2=_cur_rsi2,
                         sma_200=_sma200,
-                        sma_50=_safe(
-                            last.get("SMA_50")
-                        ),
-                        sma_20=_safe(
-                            last.get("SMA_20")
-                        ),
+                        sma_50=_safe(last.get("SMA_50")),
+                        sma_20=_safe(last.get("SMA_20")),
+                        current_sma_200=_cur_sma200,
+                        current_sma_50=_cur_sma50,
+                        current_sma_20=_cur_sma20,
                         sharpe_ratio=_sharpe,
                         atr_pct=_atr_pct,
                         rs_6m=_rs_6m,
+                        rs_3m=_rs_3m,
+                        return_3m=_stock_3m_return,
+                        blended_rs=_blended_rs,
+                        mdd_6m=_mdd_6m,
                         dist_sma200=_dist_sma200,
                     )
                 )
@@ -2499,9 +2562,28 @@ def create_insights_router() -> APIRouter:
                 except Exception:
                     pass
 
-        # Compute cross-stock percentile ranks for Sharpe, RS and ATR,
-        # then score = 0.5×SharpePercentile + 0.3×RSPercentile
-        #              + 0.2×ATRPercentile
+        # Composite score:
+        #   Sharpe(6M) 30% + Blended RS 30% + MDD(6M) 20%  → percentile rank
+        #   ATR%       10% + SMA200 Distance 10%            → closeness score
+        #
+        # Percentile rank: cross-stock rank 0–100 (higher = better).
+        # MDD(6M) is negative; shallower drawdown → higher rank.
+        #
+        # Closeness score: fixed piecewise-linear curve (0–100) where
+        # the ideal range scores 100 and scores decay on both sides.
+        # ATR ideal: 3–4% (best risk-adjusted volatility for mean-rev).
+        # SMA200 ideal: 20–30% above (healthy trend, not overextended).
+        # Outside the defined range the curve is extrapolated linearly
+        # and clamped to [0, 100].
+        _ATR_PTS: list[tuple[float, float]] = [
+            (2, 90), (3, 100), (4, 100), (5, 90),
+            (6, 80), (7, 60), (8, 30), (10, 0),
+        ]
+        _SMA_PTS: list[tuple[float, float]] = [
+            (5, 70), (10, 90), (20, 100), (30, 100),
+            (40, 90), (50, 70), (70, 30), (90, 0),
+        ]
+
         def _pct_rank(
             vals: list[float], v: float, n: int
         ) -> float:
@@ -2509,38 +2591,77 @@ def create_insights_router() -> APIRouter:
                 return 50.0
             return sorted(vals).index(v) / (n - 1) * 100
 
+        def _closeness(
+            pts: list[tuple[float, float]], v: float
+        ) -> float:
+            """Piecewise-linear score; extrapolates + clamps to [0,100]."""
+            if v <= pts[0][0]:
+                x0, y0 = pts[0]
+                x1, y1 = pts[1]
+                s = (y1 - y0) / (x1 - x0)
+                return max(0.0, min(100.0, y0 + s * (v - x0)))
+            if v >= pts[-1][0]:
+                x0, y0 = pts[-2]
+                x1, y1 = pts[-1]
+                s = (y1 - y0) / (x1 - x0)
+                return max(0.0, min(100.0, y1 + s * (v - x1)))
+            for i in range(len(pts) - 1):
+                x0, y0 = pts[i]
+                x1, y1 = pts[i + 1]
+                if x0 <= v <= x1:
+                    t = (v - x0) / (x1 - x0)
+                    return max(0.0, min(100.0, y0 + t * (y1 - y0)))
+            return 0.0
+
         _sharpe_vals = [
             r.sharpe_ratio for r in rows
             if r.sharpe_ratio is not None
         ]
-        _rs_vals = [
-            r.rs_6m for r in rows if r.rs_6m is not None
+        _brs_vals = [
+            r.blended_rs for r in rows
+            if r.blended_rs is not None
         ]
-        _atr_vals = [
-            r.atr_pct for r in rows if r.atr_pct is not None
+        _mdd_vals = [
+            r.mdd_6m for r in rows if r.mdd_6m is not None
         ]
         _ns = len(_sharpe_vals)
-        _nr = len(_rs_vals)
-        _na = len(_atr_vals)
+        _nb = len(_brs_vals)
+        _nm = len(_mdd_vals)
         for row in rows:
             _sp = (
                 _pct_rank(_sharpe_vals, row.sharpe_ratio, _ns)
                 if row.sharpe_ratio is not None and _ns > 0
                 else None
             )
-            _rp = (
-                _pct_rank(_rs_vals, row.rs_6m, _nr)
-                if row.rs_6m is not None and _nr > 0
+            _bp = (
+                _pct_rank(_brs_vals, row.blended_rs, _nb)
+                if row.blended_rs is not None and _nb > 0
+                else None
+            )
+            _mp = (
+                _pct_rank(_mdd_vals, row.mdd_6m, _nm)
+                if row.mdd_6m is not None and _nm > 0
                 else None
             )
             _ap = (
-                _pct_rank(_atr_vals, row.atr_pct, _na)
-                if row.atr_pct is not None and _na > 0
+                _closeness(_ATR_PTS, row.atr_pct)
+                if row.atr_pct is not None
                 else None
             )
-            if _sp is not None and _rp is not None and _ap is not None:
+            _wp = (
+                _closeness(_SMA_PTS, row.dist_sma200)
+                if row.dist_sma200 is not None
+                else None
+            )
+            _parts = [
+                (_sp, 0.30), (_bp, 0.30), (_mp, 0.20),
+                (_ap, 0.10), (_wp, 0.10),
+            ]
+            _avail = [(v, w) for v, w in _parts if v is not None]
+            if _avail:
+                _tw = sum(w for _, w in _avail)
                 row.score = round(
-                    0.5 * _sp + 0.3 * _rp + 0.2 * _ap, 4
+                    sum(v * w for v, w in _avail) / _tw, 4
                 )
 
         result = WatchlistStocksResponse(stocks=rows)

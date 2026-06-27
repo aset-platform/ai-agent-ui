@@ -217,6 +217,45 @@ def create_kill_switch_router() -> APIRouter:
             dry_run=False,
         )
 
+        # 3b. Cancel ALL active GTTs before submitting SELLs.
+        # GTTs left active can re-fire after our SELL fills, creating
+        # a naked short. This applies to all GTTs on the account —
+        # the user has confirmed this account is 100% algo-managed.
+        gtts_cancelled = 0
+        gtt_cancel_errors: list[str] = []
+        try:
+            all_gtts = await asyncio.to_thread(kite._kc.get_gtts)
+            active_gtts = [
+                g for g in (all_gtts or [])
+                if g.get("status") == "active"
+            ]
+            for _g in active_gtts:
+                _gid = _g.get("id") or 0
+                if not _gid:
+                    continue
+                try:
+                    await asyncio.to_thread(
+                        kite._kc.delete_gtt,
+                        trigger_id=_gid,
+                    )
+                    gtts_cancelled += 1
+                    _logger.info(
+                        "panic_close: cancelled GTT %d", _gid
+                    )
+                except Exception as _ge:
+                    gtt_cancel_errors.append(
+                        f"gtt {_gid}: {_ge}"
+                    )
+                    _logger.warning(
+                        "panic_close: GTT %d cancel failed: %s",
+                        _gid, _ge,
+                    )
+        except Exception as exc:
+            gtt_cancel_errors.append(f"get_gtts: {exc}")
+            _logger.warning(
+                "panic_close: get_gtts failed: %s", exc
+            )
+
         # 4. Pull current Kite positions + holdings to find open
         # quantities. Holdings = T+1 settled (CNC); positions =
         # intraday net. Both can hold algo-opened qty depending on
@@ -465,7 +504,8 @@ def create_kill_switch_router() -> APIRouter:
         return {
             "tickers_closed": tickers_closed,
             "orders_submitted": orders_submitted,
-            "errors": errors,
+            "gtts_cancelled": gtts_cancelled,
+            "errors": errors + gtt_cancel_errors,
         }
 
     return router

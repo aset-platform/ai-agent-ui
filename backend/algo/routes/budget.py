@@ -32,7 +32,10 @@ from backend.algo.live.budget import (
     transition,
 )
 from backend.algo.live.budget_repo import BudgetRepo
-from backend.algo.live.budget_types import ReservationState
+from backend.algo.live.budget_types import (
+    ReservationState,
+    TerminalStateError,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -129,6 +132,7 @@ async def _list_reservations_impl(
     *,
     user_id: UUID,
     include_history: bool = False,
+    mode: str | None = None,
 ) -> dict:
     repo = BudgetRepo()
     factory = _session_factory()
@@ -136,6 +140,9 @@ async def _list_reservations_impl(
         if include_history:
             from sqlalchemy import text
 
+            mode_clause = (
+                "  AND (metadata->>'mode') = :mode " if mode else ""
+            )
             result = await session.execute(
                 text(
                     "SELECT reservation_id, user_id, "
@@ -146,11 +153,11 @@ async def _list_reservations_impl(
                     "       transitioned_at, metadata, "
                     "       error_text "
                     "FROM algo.budget_reservations "
-                    "WHERE user_id = :uid "
+                    f"WHERE user_id = :uid {mode_clause}"
                     "ORDER BY transitioned_at DESC "
                     "LIMIT 500"
                 ),
-                {"uid": user_id},
+                {"uid": user_id, **({"mode": mode} if mode else {})},
             )
             rows = result.mappings().all()
             return {
@@ -257,11 +264,21 @@ async def _force_release_impl(
             status_code=403,
             detail="Not owner of reservation",
         )
-    await transition(
-        reservation_id=reservation_id,
-        new_state=ReservationState.CANCELLED,
-        error_text="force-released by user",
-    )
+    try:
+        await transition(
+            reservation_id=reservation_id,
+            new_state=ReservationState.CANCELLED,
+            error_text="force-released by user",
+        )
+    except TerminalStateError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Cannot force-release a reservation in a "
+                f"terminal state ({exc.current_state.value}); "
+                "its capital is already settled/released."
+            ),
+        ) from exc
     return {"status": "released"}
 
 
@@ -301,11 +318,13 @@ def create_budget_router() -> APIRouter:
     @router.get("/reservations")
     async def list_reservations(
         include_history: bool = False,
+        mode: str | None = None,
         user: UserContext = Depends(pro_or_superuser),
     ):
         return await _list_reservations_impl(
             user_id=UUID(user.user_id),
             include_history=include_history,
+            mode=mode,
         )
 
     @router.post(

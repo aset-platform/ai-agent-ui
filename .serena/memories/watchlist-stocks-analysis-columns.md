@@ -44,3 +44,33 @@ Close on outside click via `mousedown` listener. "Clear all" shortcut.
 
 ### SortKey type
 "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sma_20" | "sharpe_ratio" | "atr_pct" | "rs_6m" | "dist_sma200" | "score"
+
+## Live SMA columns (added 2026-06-23)
+
+During market hours (`_is_indian_market_hours()`), `insights_routes.py` appends a synthetic LTP bar
+and computes intraday indicators. Three new fields on `WatchlistStockRow`:
+- `current_sma_200`, `current_sma_50`, `current_sma_20: float | None`
+
+Frontend shows `prev | current` in each SMA cell (blue pipe-separated live value).
+Filter chips (Golden Cross, LTP > SMA 50, LTP > SMA 200) use **prev-day close** (`_ltp_close = _safe(last["Close"])`),
+NOT the live LTP — keeps chips stable intraday.
+
+## Default filter state (set 2026-06-24 to match Abhay's working config)
+
+On page load: RSI(2) ≤ 25, ATR 2–6%, Sharpe ≥ 1, RS ≥ 25%,
+Dist SMA200 = ["gt5lte15", "gt15lte35", "gt35lte50"],
+Golden Cross + LTP > SMA 50 + LTP > SMA 200 = all ON.
+
+## Add to Strategy modal (`AddToStrategyModal.tsx`, added 2026-06-24)
+
+`frontend/components/algo-trading/AddToStrategyModal.tsx`
+"Add to Strategy" button in Watchlist Stocks toolbar (disabled when 0 filtered results).
+
+Flow:
+1. Strategy dropdown — **live + non-archived only** (`s.mode === "live" && !s.archived_at`)
+2. Two columns: existing `allowed_tickers` (left) vs current filter tickers (right); duplicates amber, new green
+3. Merge button → deduped union sorted alphabetically
+4. Final chip list (green = newly added) + Save button → `upsertLiveCaps`
+5. Back button to revise before saving; Escape/backdrop closes without saving
+
+Preserves all other caps fields (max_inr, max_orders_per_day, gtt_limit_headroom_pct) on save.

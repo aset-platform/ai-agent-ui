@@ -278,7 +278,21 @@ class _OrderTimeoutWatcher:
     def _do_cancel_sync(
         self, order: dict, age: float, status: str,
     ) -> None:
-        """Issue the cancel and emit the corresponding event."""
+        """Issue the cancel and emit the corresponding event.
+
+        After a successful cancel we re-fetch the single order's
+        latest state via ``kite._kc.order_history(order_id)`` to
+        detect the fill-during-cancel race window:
+
+        * COMPLETE / filled_qty == qty → ``order_filled_before_cancel``
+          (stops mislabelling a real fill as a cancel).
+        * CANCELLED (with or without partial fill) →
+          ``order_cancelled_timeout`` with re-fetched ``filled_qty``
+          so partial fills are surfaced accurately.
+        * Re-fetch fails → fall back to emitting
+          ``order_cancelled_timeout`` with the stale snapshot qty
+          and log a WARNING (never crash the watcher).
+        """
         order_id = order["order_id"]
         try:
             # KiteClient.cancel_order signature is
@@ -302,11 +316,68 @@ class _OrderTimeoutWatcher:
                 "exc_str": str(exc),
             })
             return
+
         _logger.info(
-            "order_timeout: cancelled stale order "
-            "kite_order_id=%s status=%s age=%.1fs ttl=%ds tag=%s",
+            "order_timeout: cancel accepted kite_order_id=%s "
+            "status=%s age=%.1fs ttl=%ds tag=%s — re-fetching "
+            "final state to detect fill-during-cancel race",
             order_id, status, age, self._ttl_seconds,
             order.get("tag"),
+        )
+
+        # --- Re-fetch the order's authoritative final state ----------
+        latest = self._refetch_order(order_id)
+
+        if latest is None:
+            # Re-fetch failed; fall back to stale snapshot values.
+            self._emit("order_cancelled_timeout", {
+                "kite_order_id": order_id,
+                "tag": order.get("tag"),
+                "status_at_cancel": status,
+                "age_seconds": age,
+                "ttl_seconds": self._ttl_seconds,
+                "symbol": order.get("tradingsymbol"),
+                "side": order.get("transaction_type"),
+                "qty": order.get("quantity"),
+                "filled_qty": order.get("filled_quantity"),
+                "reason": "ttl_exceeded",
+            })
+            return
+
+        final_status = (latest.get("status") or "").upper()
+        qty = latest.get("quantity") or order.get("quantity")
+        filled_qty = latest.get("filled_quantity") or 0
+        avg_price = latest.get("average_price") or 0.0
+
+        # Fully filled in the race window.
+        if final_status == "COMPLETE" or (
+            qty and filled_qty and filled_qty >= qty
+        ):
+            _logger.info(
+                "order_timeout: fill-during-cancel detected "
+                "kite_order_id=%s filled_qty=%s avg_price=%s",
+                order_id, filled_qty, avg_price,
+            )
+            self._emit("order_filled_before_cancel", {
+                "kite_order_id": order_id,
+                "tag": order.get("tag"),
+                "symbol": order.get("tradingsymbol"),
+                "side": order.get("transaction_type"),
+                "qty": qty,
+                "filled_qty": filled_qty,
+                "avg_price": avg_price,
+                "age_seconds": age,
+                "ttl_seconds": self._ttl_seconds,
+            })
+            return
+
+        # Cancelled (possibly with a partial fill) — surface real qty.
+        _logger.info(
+            "order_timeout: cancelled stale order "
+            "kite_order_id=%s status=%s age=%.1fs ttl=%ds "
+            "filled_qty=%s tag=%s",
+            order_id, final_status, age, self._ttl_seconds,
+            filled_qty, order.get("tag"),
         )
         self._emit("order_cancelled_timeout", {
             "kite_order_id": order_id,
@@ -316,10 +387,44 @@ class _OrderTimeoutWatcher:
             "ttl_seconds": self._ttl_seconds,
             "symbol": order.get("tradingsymbol"),
             "side": order.get("transaction_type"),
-            "qty": order.get("quantity"),
-            "filled_qty": order.get("filled_quantity"),
+            "qty": qty,
+            "filled_qty": filled_qty,
             "reason": "ttl_exceeded",
         })
+
+    def _refetch_order(self, order_id: str) -> dict | None:
+        """Re-fetch a single order's latest leg via ``_kc.order_history``.
+
+        Returns the last leg dict on success, or ``None`` if the call
+        fails or the history is empty (caller falls back to stale
+        snapshot).  Failures are logged as WARNING so ops can detect
+        intermittent Kite connectivity issues without crashing the loop.
+        """
+        try:
+            kc = getattr(self._kite, "_kc", None)
+            if kc is None:
+                _logger.warning(
+                    "order_timeout: refetch skipped — no _kc on "
+                    "kite_client for order_id=%s", order_id,
+                )
+                return None
+            history = kc.order_history(order_id)
+            if not history:
+                _logger.warning(
+                    "order_timeout: refetch returned empty history "
+                    "for order_id=%s — falling back to stale state",
+                    order_id,
+                )
+                return None
+            # Kite returns a list of legs; the last is the most recent.
+            return history[-1]
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "order_timeout: refetch failed for order_id=%s — "
+                "falling back to stale state exc=%s",
+                order_id, exc, exc_info=True,
+            )
+            return None
 
     # ----------------------------------------------------------------
     # Event emission

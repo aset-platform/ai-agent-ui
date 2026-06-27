@@ -124,6 +124,11 @@ class UpsertCapsRequest(BaseModel):
     max_orders_per_day: int = Field(ge=0, le=50)
     allowed_tickers: list[str] = Field(default_factory=list)
     last_walkforward_run_id: UUID | None = None
+    gtt_limit_headroom_pct: Decimal = Field(
+        default=Decimal("0.01"),
+        ge=Decimal("0"),
+        le=Decimal("0.10"),
+    )
 
 
 class CapsResponse(BaseModel):
@@ -138,6 +143,7 @@ class CapsResponse(BaseModel):
     last_walkforward_run_id: UUID | None = None
     cumulative_inr_today: Decimal
     orders_count_today: int
+    gtt_limit_headroom_pct: Decimal = Decimal("0.01")
 
 
 class GatesStatus(BaseModel):
@@ -760,7 +766,12 @@ async def _compute_strategy_commitment(
         return Decimal("0"), 0
 
     net = raw_pos.get("net", []) if isinstance(raw_pos, dict) else []
-    pos_rows = [r for r in net if int(r.get("quantity", 0)) != 0]
+    # Only long (positive-qty) net positions. Negative qty means a net
+    # intraday SELL of an overnight holding (e.g. sold 2 of 16 KTKBANK
+    # today → qty=-2 in positions()['net']). Counting those with abs()
+    # would (a) double-count the ticker alongside its holdings() entry
+    # and (b) show closed longs (SHAILY qty=-1) as open positions.
+    pos_rows = [r for r in net if int(r.get("quantity", 0)) > 0]
     hold_rows = [
         r for r in (raw_hold if isinstance(raw_hold, list) else [])
         if (
@@ -796,7 +807,7 @@ async def _compute_strategy_commitment(
             continue
         if attributed is None and sym not in attr:
             continue
-        qty = abs(int(r.get("quantity", 0)))
+        qty = int(r.get("quantity", 0))
         avg = Decimal(str(r.get("average_price", 0) or 0))
         committed += Decimal(qty) * avg
         count += 1
@@ -1108,6 +1119,7 @@ def create_live_router() -> APIRouter:
             max_orders_per_day=body.max_orders_per_day,
             allowed_tickers=body.allowed_tickers,
             last_walkforward_run_id=body.last_walkforward_run_id,
+            gtt_limit_headroom_pct=body.gtt_limit_headroom_pct,
         )
         return CapsResponse(
             **{k: row[k] for k in CapsResponse.model_fields if k in row}
