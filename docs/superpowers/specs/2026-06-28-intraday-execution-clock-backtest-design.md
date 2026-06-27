@@ -256,12 +256,16 @@ blob; confirm in plan.
 
 ## 13. Rollout / backward compatibility
 
-- Default behavior preserved: a daily strategy **with trailing disabled**
-  runs exactly as today (execution clock collapses to signal clock).
-- The two-clock path activates when **trailing is enabled** (or square-off/
-  intraday exits matter) **and** intraday coverage exists.
-- Feature-flag the two-clock path (`ALGO_TWO_CLOCK_BACKTEST`, default on
-  after tests) for safe rollback.
+- **Two-clock is the default** — no feature flag. The execution clock is
+  always the finest available grain for the covered window.
+- Behavior is preserved where it should be: a daily strategy **with
+  trailing disabled** runs exactly as today because the execution clock
+  collapses to the signal clock (no intraday exits to evaluate) — so there
+  is nothing to gate. The two-clock path simply adds intraday exit
+  resolution when trailing/square-off/intraday exits are in play and
+  coverage exists.
+- Safety comes from the regression tests (§12), not a flag: trailing-
+  disabled daily runs must be byte-identical pre/post.
 
 ## 14. Open questions (resolve in plan)
 
