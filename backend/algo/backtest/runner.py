@@ -15,11 +15,13 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from backend.algo.backtest.coverage import intraday_coverage
 from backend.algo.backtest.data_source import (
     load_intraday_bars_window,
     load_ohlcv_window,
 )
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
+from backend.algo.backtest.execution_simulator import ExecutionSimulator
 from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.indicators import (
     DEFAULT_WARMUP_BARS,
@@ -151,6 +153,32 @@ def run_backtest(
     # 60 / 300 / 900 → intraday loader; the runner walks
     # ``(bar_date, bar_open_ts_ns)`` tuples instead of dates.
     is_intraday = request.interval_sec != 86400
+
+    # §8 — block 1m/5m backtests when no preserved history exists.
+    # Only 15m (900s) history is stored today; a strategy requesting
+    # 60s or 300s cannot be backtested faithfully. Fail loudly so
+    # users switch to paper rather than silently receiving an empty
+    # result. The guard calls intraday_coverage (already imported at
+    # module top) and is skipped for daily (86400) and 15m (900)
+    # cadences so existing backtests are unaffected.
+    if request.interval_sec in (60, 300):
+        _cov = intraday_coverage(
+            tickers=universe,
+            period_start=request.period_start,
+            period_end=request.period_end,
+        )
+        if not any(
+            c.finest_interval_sec is not None
+            and c.finest_interval_sec <= request.interval_sec
+            for c in _cov.values()
+        ):
+            _label = "1m" if request.interval_sec == 60 else "5m"
+            raise ValueError(
+                f"No {_label} history for these tickers; faithful "
+                f"backtest unavailable. Run in paper to evaluate "
+                f"this cadence."
+            )
+
     if is_intraday:
         bars = load_intraday_bars_window(
             tickers=universe,
@@ -433,7 +461,131 @@ def run_backtest(
     # ticker → TrailingStopManager; created on confirmed BUY fill.
     _trailing_managers: dict[str, TrailingStopManager] = {}
 
-    for bar_date, ts_ns in timeline:
+    # ── Two-clock (ASETPLTFRM-4xx) ──────────────────────────────
+    # A *daily*-signal strategy with trailing enabled runs its
+    # exit checks on the finest available intraday grain (15m
+    # today) while signals still fire once per trading day. When
+    # there's no intraday coverage (or trailing is off) the
+    # execution clock collapses to the signal clock and behaviour
+    # is byte-identical to the pure-daily path.
+    execution_interval_sec = request.interval_sec
+    exec_bars: dict[str, list[Any]] = {}
+    if request.interval_sec == 86400 and _trailing_enabled:
+        # Probe finest intraday grain. A missing/absent
+        # ``stocks.intraday_bars`` Iceberg table (or any catalog/query
+        # failure) MUST NOT crash the run — collapse to pure-daily.
+        try:
+            cov = intraday_coverage(
+                tickers=universe,
+                period_start=request.period_start,
+                period_end=request.period_end,
+            )
+        except Exception:
+            _logger.warning(
+                "two-clock: intraday coverage probe failed; "
+                "daily fallback",
+                exc_info=True,
+            )
+            cov = {}
+        grains = {
+            c.finest_interval_sec
+            for c in cov.values()
+            if c.finest_interval_sec is not None
+        }
+        if grains:
+            execution_interval_sec = min(grains)  # 900 today
+            covered = [
+                t
+                for t, c in cov.items()
+                if c.finest_interval_sec == execution_interval_sec
+            ]
+            exec_bars = load_intraday_bars_window(
+                tickers=covered,
+                interval_sec=execution_interval_sec,
+                period_start=request.period_start,
+                period_end=request.period_end,
+                warmup_days=0,
+            )
+    # A ticker is "exec-covered" iff it has 15m bars in ``exec_bars``.
+    # Covered tickers route trailing through ``exec_sim`` and are
+    # evaluated on every execution bar. Uncovered tickers (in the
+    # universe but with no intraday coverage) fall back to the LEGACY
+    # daily ``_trailing_managers`` path — evaluated only on signal
+    # bars against the daily ``bars`` dict, filling via the daily
+    # ``sim``. Both paths may coexist in one run. ``daily_fallback_
+    # tickers`` is consumed by Task 6 (BacktestSummary field).
+    exec_covered: set[str] = set(exec_bars.keys())
+    daily_fallback_tickers = [
+        t for t in universe if t not in exec_covered
+    ]
+    if exec_bars:
+        _logger.debug(
+            "two-clock: execution_interval_sec=%d, exec-covered=%d, "
+            "daily-fallback=%d",
+            execution_interval_sec,
+            len(exec_bars),
+            len(daily_fallback_tickers),
+        )
+
+    # ExecutionSimulator owns the per-ticker TrailingStopManager
+    # lifecycle in two-clock mode (same class drives live, so
+    # behaviour cannot diverge). Instantiated always; only USED
+    # when ``two_clock`` is True.
+    exec_sim = ExecutionSimulator(strategy.risk.per_trade)
+
+    two_clock = bool(exec_bars)
+    exec_timeline: list[tuple[date, int]] = []
+    exec_by_ts: dict[str, dict[int, Any]] = {}
+    signal_bar_keys: set[tuple[date, int]] = set()
+    exec_sim_broker: SimBroker | None = None
+    if two_clock:
+        exec_timeline = sorted(
+            {
+                (b.date, b.bar_open_ts_ns)
+                for bl in exec_bars.values()
+                for b in bl
+                if b.bar_open_ts_ns is not None
+            },
+            key=lambda x: (x[1] or 0, x[0]),
+        )
+        exec_by_ts = {
+            t: {
+                b.bar_open_ts_ns: b
+                for b in bl
+                if b.bar_open_ts_ns is not None
+            }
+            for t, bl in exec_bars.items()
+        }
+        # The LAST execution bar of each trading day is that day's
+        # daily signal bar — AST/entry evaluation runs only there.
+        last_ns_of_day: dict[date, int] = {}
+        for d, ns in exec_timeline:
+            if ns is not None:
+                last_ns_of_day[d] = max(last_ns_of_day.get(d, ns), ns)
+        signal_bar_keys = {
+            (d, ns) for d, ns in last_ns_of_day.items()
+        }
+        # Exit fills must resolve on the CURRENT execution bar via
+        # the trigger-price path, so the exit broker is built from
+        # the intraday bars. Entries keep the daily ``sim``.
+        exec_sim_broker = SimBroker(
+            bars=exec_bars,
+            fee_as_of=request.period_start,
+            adtv_lookup=adtv_lookup,
+        )
+
+    # In two-clock mode the runner walks the execution timeline; the
+    # daily signal timeline is reduced to the per-day signal bars.
+    walk_timeline: list[tuple[date, int | None]] = (
+        exec_timeline if two_clock else timeline  # type: ignore[assignment]
+    )
+
+    for bar_date, ts_ns in walk_timeline:
+        # In two-clock mode AST/signal evaluation runs only on the
+        # day's signal bar; exit checks run on every execution bar.
+        is_signal_bar = (
+            (not two_clock) or (bar_date, ts_ns) in signal_bar_keys
+        )
         # Warmup-only bars feed the indicator engine but never
         # see strategy evaluation — the user asked to backtest
         # period_start..period_end, not the warmup range.
@@ -455,18 +607,28 @@ def run_backtest(
         closes_this_bar: dict[str, Decimal] = {}
         lows_this_bar: dict[str, Decimal] = {}
         highs_this_bar: dict[str, Decimal] = {}
-        for _t, _blist in bars.items():
-            if is_intraday:
-                _cur = bars_by_ts.get(_t, {}).get(ts_ns)
-            else:
-                _cur = next(
-                    (b for b in _blist if b.date == bar_date),
-                    None,
-                )
-            if _cur is not None:
-                closes_this_bar[_t] = _cur.close
-                lows_this_bar[_t] = _cur.low
-                highs_this_bar[_t] = _cur.high
+        if two_clock:
+            # Exit checks + intraday marks resolve against the
+            # current EXECUTION bar (15m), not the daily signal bar.
+            for _t, _ts_map in exec_by_ts.items():
+                _cur = _ts_map.get(ts_ns)
+                if _cur is not None:
+                    closes_this_bar[_t] = _cur.close
+                    lows_this_bar[_t] = _cur.low
+                    highs_this_bar[_t] = _cur.high
+        else:
+            for _t, _blist in bars.items():
+                if is_intraday:
+                    _cur = bars_by_ts.get(_t, {}).get(ts_ns)
+                else:
+                    _cur = next(
+                        (b for b in _blist if b.date == bar_date),
+                        None,
+                    )
+                if _cur is not None:
+                    closes_this_bar[_t] = _cur.close
+                    lows_this_bar[_t] = _cur.low
+                    highs_this_bar[_t] = _cur.high
         stop_loss_skip: set[str] = set()
         if not _trailing_enabled:
             # Flat %-stop (v1/v2/v3 unchanged).
@@ -535,16 +697,46 @@ def run_backtest(
                     float(trig.stop_loss_pct),
                 )
         else:
-            # v5 trailing stop evaluation.
-            # Conservative daily ordering: LOW first (stop-hit
-            # check), then update HWM with HIGH.
-            for _t, _mgr in list(_trailing_managers.items()):
+            # v5 trailing stop evaluation. Two routing paths may
+            # coexist in one run:
+            #   • LEGACY daily ``_trailing_managers`` — pure-daily
+            #     runs, AND two-clock tickers with NO 15m coverage
+            #     (``daily_fallback_tickers``). Evaluated only on
+            #     signal bars against the daily ``bars`` dict, filling
+            #     via the daily ``sim``. Byte-identical to the
+            #     pre-two-clock engine in pure-daily mode.
+            #   • Two-clock ``exec_sim`` — exec-covered tickers,
+            #     evaluated on every 15m execution bar.
+            # Legacy path: skip entirely on non-signal exec bars
+            # (two-clock) so uncovered tickers exit at the daily grain.
+            if (not two_clock) or is_signal_bar:
+                _legacy_mgrs = list(_trailing_managers.items())
+            else:
+                _legacy_mgrs = []
+            for _t, _mgr in _legacy_mgrs:
                 _pos = open_pos_now.get(_t)
                 if _pos is None or _pos.qty <= 0:
                     del _trailing_managers[_t]
                     continue
-                _bar_low = lows_this_bar.get(_t)
-                _bar_high = highs_this_bar.get(_t)
+                if two_clock:
+                    # Uncovered ticker on a signal bar: source the
+                    # day's DAILY low/high (the exec-bar maps only
+                    # carry covered tickers).
+                    _dbar = next(
+                        (
+                            b
+                            for b in bars.get(_t, [])
+                            if b.date == bar_date
+                        ),
+                        None,
+                    )
+                    _bar_low = _dbar.low if _dbar is not None else None
+                    _bar_high = (
+                        _dbar.high if _dbar is not None else None
+                    )
+                else:
+                    _bar_low = lows_this_bar.get(_t)
+                    _bar_high = highs_this_bar.get(_t)
                 if _bar_low is None or _bar_high is None:
                     continue
                 # Check stop-hit via LOW first.
@@ -570,12 +762,16 @@ def run_backtest(
                     if _stop_ev.phase.value == 15
                     else "phase1_stop"
                 )
+                # Legacy fills on the daily ``sim`` (T+1 daily open).
+                # In two-clock mode pass ts_ns=None so the intent uses
+                # the daily date-keyed path — the daily ``sim`` has no
+                # exec ts_ns index and would otherwise never fill.
                 _tr_intent = OrderIntent(
                     ticker=_t,
                     side="SELL",
                     qty=_pos.qty,
                     intent_emitted_at=bar_date,
-                    intent_emitted_ts_ns=ts_ns,
+                    intent_emitted_ts_ns=None if two_clock else ts_ns,
                     exit_reason=_exit_reason,
                 )
                 try:
@@ -625,6 +821,97 @@ def run_backtest(
                     float(_bar_low),
                     _exit_reason,
                 )
+            # Two-clock trailing exits — exec-covered tickers only,
+            # evaluated on EVERY 15m execution bar via the
+            # ExecutionSimulator. The same TrailingStopManager class
+            # drives live, so behaviour cannot diverge. Exit fills
+            # resolve on the CURRENT execution bar via the
+            # trigger-price path.
+            if two_clock:
+                for _t in list(open_pos_now.keys()):
+                    if not exec_sim.has(_t):
+                        continue
+                    _lo = lows_this_bar.get(_t)
+                    _hi = highs_this_bar.get(_t)
+                    if _lo is None or _hi is None:
+                        continue
+                    _dec = exec_sim.evaluate_bar(_t, _lo, _hi)
+                    if _dec is None:
+                        continue
+                    _pos = open_pos_now[_t]
+                    _intent = OrderIntent(
+                        ticker=_t,
+                        side="SELL",
+                        qty=_pos.qty,
+                        intent_emitted_at=bar_date,
+                        intent_emitted_ts_ns=ts_ns,
+                        exit_reason=_dec.exit_reason,
+                        trigger_price=_dec.trigger_price,
+                        # Fee product reflects the strategy's TRUE
+                        # product, not the exec-bar grain. A CNC daily
+                        # strategy's intraday-detected exit is still a
+                        # delivery sell.
+                        product=(
+                            "DELIVERY"
+                            if strategy.product == "CNC"
+                            else "INTRADAY"
+                        ),
+                    )
+                    try:
+                        _fill = (
+                            exec_sim_broker.execute(_intent)
+                            if exec_sim_broker is not None
+                            else None
+                        )
+                    except NoBarAvailableError:
+                        _fill = None
+                    if _fill is None:
+                        continue
+                    pt.apply_fill(_fill)
+                    total_fees += _fill.fees_inr
+                    fee_rates_version = _fill.fee_rates_version
+                    events.append(
+                        event_row(
+                            session_id=session_id,
+                            user_id=user_id,
+                            strategy_id=strategy.id,
+                            mode="backtest",
+                            type_="order_filled",
+                            payload={
+                                "ticker": _fill.ticker,
+                                "side": _fill.side,
+                                "qty": _fill.qty,
+                                "fill_price": str(_fill.fill_price),
+                                "fill_date": (
+                                    _fill.fill_date.isoformat()
+                                ),
+                                "fees_inr": str(_fill.fees_inr),
+                                "fee_rates_version": (
+                                    _fill.fee_rates_version
+                                ),
+                                "exit_reason": _dec.exit_reason,
+                                "trailing_phase": _dec.phase,
+                                "trailing_hwm": _dec.hwm,
+                                "trigger_price": str(
+                                    _dec.trigger_price
+                                ),
+                                "execution_interval_sec": (
+                                    execution_interval_sec
+                                ),
+                            },
+                        )
+                    )
+                    exec_sim.drop(_t)
+                    stop_loss_skip.add(_t)
+                    _logger.debug(
+                        "two_clock trailing %s phase=%d trigger=%.4f "
+                        "bar_low=%.4f exit=%s",
+                        _t,
+                        _dec.phase,
+                        float(_dec.trigger_price),
+                        float(_lo),
+                        _dec.exit_reason,
+                    )
 
         # Time-based stop (ASETPLTFRM-430 Exp.3). Same pattern as
         # the price stop above but triggers on holding_days
@@ -654,9 +941,25 @@ def run_backtest(
                 intent_emitted_at=bar_date,
                 intent_emitted_ts_ns=ts_ns,
                 exit_reason="time_stop",
+                # Two-clock exits route through exec_sim_broker (exec
+                # bar grain) — book fees against the strategy's TRUE
+                # product so a CNC daily strategy bills DELIVERY.
+                product=(
+                    "DELIVERY"
+                    if strategy.product == "CNC"
+                    else "INTRADAY"
+                ),
+            )
+            # Two-clock: market exits fill on the next EXECUTION bar
+            # (the daily ``sim`` has no exec ts_ns index → would never
+            # fill). No trigger_price → normal next-exec-bar-open path.
+            _ts_broker = (
+                exec_sim_broker
+                if two_clock and exec_sim_broker is not None
+                else sim
             )
             try:
-                ts_fill = sim.execute(ts_intent)
+                ts_fill = _ts_broker.execute(ts_intent)
             except NoBarAvailableError:
                 ts_fill = None
             if ts_fill is None:
@@ -747,9 +1050,25 @@ def run_backtest(
                         intent_emitted_at=bar_date,
                         intent_emitted_ts_ns=ts_ns,
                         exit_reason="regime_exit",
+                        # Two-clock exits route through
+                        # exec_sim_broker — book fees against the
+                        # strategy's TRUE product (CNC → DELIVERY).
+                        product=(
+                            "DELIVERY"
+                            if strategy.product == "CNC"
+                            else "INTRADAY"
+                        ),
+                    )
+                    # Two-clock: market exit fills on the next
+                    # EXECUTION bar (daily ``sim`` lacks the exec
+                    # ts_ns index → would silently never fill).
+                    _re_broker = (
+                        exec_sim_broker
+                        if two_clock and exec_sim_broker is not None
+                        else sim
                     )
                     try:
-                        re_fill = sim.execute(re_intent)
+                        re_fill = _re_broker.execute(re_intent)
                     except NoBarAvailableError:
                         re_fill = None
                     if re_fill is None:
@@ -802,7 +1121,21 @@ def run_backtest(
             pt.closed_positions() if cooldown_days else []
         )
 
-        for ticker in universe:
+        # Two-clock marks: refresh last_close from the current
+        # execution bar so the intraday equity curve tracks the
+        # 15m path even on non-signal bars (note 6). On signal
+        # bars the per-ticker entry loop below also refreshes from
+        # the daily bar — same close, so no conflict.
+        if two_clock:
+            for _t, _c in closes_this_bar.items():
+                last_close[_t] = _c
+
+        # AST/signal evaluation (entries + rebalances) fires once
+        # per trading day — on the daily signal bar. Exit checks
+        # above already ran on this execution bar. ``is_signal_bar``
+        # is always True outside two-clock mode, so the daily and
+        # intraday paths are unchanged.
+        for ticker in (universe if is_signal_bar else []):
             if ticker in stop_loss_skip:
                 continue
             # ASETPLTFRM-434 Exp.2 — pre-AST repeat-offender gate.
@@ -935,6 +1268,11 @@ def run_backtest(
                     (p.bar_date, p.equity_inr) for p in equity_points
                 ],
             )
+            # Two-clock entries fill on the DAILY ``sim`` (daily
+            # signal clock), so the intent must key off the daily
+            # date path — pass ts_ns=None so SimBroker resolves
+            # the next daily bar's open (T+1), not an exec bar.
+            _entry_ts_ns = None if two_clock else ts_ns
             intent = _action_to_intent(
                 action,
                 ticker=ticker,
@@ -943,7 +1281,7 @@ def run_backtest(
                 last_price=current.close,
                 current_equity=current_equity,
                 sizing_ctx=sizing_ctx,
-                bar_open_ts_ns=ts_ns,
+                bar_open_ts_ns=_entry_ts_ns,
             )
             if intent is None:
                 continue
@@ -1081,7 +1419,16 @@ def run_backtest(
             # v5 trailing: init manager on BUY; clean up on SELL.
             # ATR computed from raw bars — compute_indicators only
             # produces RSI/SMA; atr_14 lives in the factor store.
+            # Routing is PER-TICKER on exec-coverage: an exec-covered
+            # ticker (15m bars present) owns its manager in
+            # ``exec_sim`` (evaluated every exec bar); an uncovered
+            # ticker uses the LEGACY ``_trailing_managers`` daily
+            # path. In pure-daily mode ``exec_covered`` is empty, so
+            # every ticker takes the legacy path (byte-identical).
+            # The same ``_atr`` value feeds both so geometry can't
+            # diverge.
             if _trailing_enabled:
+                _t_covered = fill.ticker in exec_covered
                 if fill.side == "BUY":
                     _blist = bars.get(fill.ticker, [])
                     _bars_up = [
@@ -1093,18 +1440,30 @@ def run_backtest(
                         if _atr_series and _atr_series[-1] is not None
                         else 0.0
                     )
-                    if _atr > 0 and fill.ticker not in _trailing_managers:
+                    _has_mgr = (
+                        exec_sim.has(fill.ticker)
+                        if _t_covered
+                        else fill.ticker in _trailing_managers
+                    )
+                    if _atr > 0 and not _has_mgr:
                         # One manager per position — don't overwrite
                         # when accumulating lots (averaging-in doesn't
                         # reset the stop set at first entry).
-                        _trailing_managers[fill.ticker] = (
-                            TrailingStopManager(
-                                strategy.risk.per_trade,
-                                entry_price=float(fill.fill_price),
-                                atr=_atr,
-                                ticker=fill.ticker,
+                        if _t_covered:
+                            exec_sim.on_buy_fill(
+                                fill.ticker,
+                                float(fill.fill_price),
+                                _atr,
                             )
-                        )
+                        else:
+                            _trailing_managers[fill.ticker] = (
+                                TrailingStopManager(
+                                    strategy.risk.per_trade,
+                                    entry_price=float(fill.fill_price),
+                                    atr=_atr,
+                                    ticker=fill.ticker,
+                                )
+                            )
                     else:
                         _logger.warning(
                             "trailing: insufficient bars for "
@@ -1112,7 +1471,10 @@ def run_backtest(
                             fill.ticker, bar_date,
                         )
                 elif fill.side == "SELL":
-                    _trailing_managers.pop(fill.ticker, None)
+                    if _t_covered:
+                        exec_sim.drop(fill.ticker)
+                    else:
+                        _trailing_managers.pop(fill.ticker, None)
 
             events.append(
                 event_row(
@@ -1304,6 +1666,9 @@ def run_backtest(
         fee_rates_version=fee_rates_version or "n/a",
         # ASETPLTFRM-400 slice 7 — surface cadence to the UI.
         interval_sec=request.interval_sec,
+        # Task 6 — execution-resolution metadata.
+        execution_interval_sec=execution_interval_sec,
+        daily_fallback_tickers=daily_fallback_tickers,
         equity_curve=equity_points,
         trade_list=trade_rows,
     )

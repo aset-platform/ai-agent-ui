@@ -114,6 +114,18 @@ class OrderIntent(BaseModel):
     # "period_end_mtm". Default "signal" keeps existing AST-emit
     # code backwards-compat.
     exit_reason: str = "signal"
+    # GTT trigger price — when set, SimBroker fills on the current
+    # (emitted) bar at this price ± flat-bps slippage instead of
+    # the next bar's open. Models the live broker's GTT execution.
+    trigger_price: Decimal | None = None
+    # Explicit fee product ("DELIVERY" / "INTRADAY"). When set, the
+    # SimBroker books fees against THIS product rather than inferring
+    # it from ``intent_emitted_ts_ns`` (bar grain). Two-clock exits
+    # set this from the strategy's true product so a CNC daily
+    # strategy's intraday-detected exit still bills DELIVERY fees.
+    # Left None on AST/entry intents → backward-compatible ts_ns
+    # inference.
+    product: str | None = None
 
 
 class Fill(BaseModel):
@@ -137,6 +149,10 @@ class Fill(BaseModel):
     # "signal" so AST-emitted intents that don't set the field
     # serialise as ordinary strategy exits.
     exit_reason: str = "signal"
+    # Echoes the trigger price from the originating OrderIntent so
+    # the trade table and position tracker can distinguish GTT fills
+    # from ordinary next-bar-open fills.
+    trigger_price: Decimal | None = None
 
 
 class Position(BaseModel):
@@ -261,6 +277,11 @@ class BacktestSummary(BaseModel):
     # historical runs serialised before slice 7 deserialise
     # cleanly as daily.
     interval_sec: int = 86400
+    # Task 6 — execution-resolution metadata so results are honest
+    # about fidelity.  Defaults allow old serialised runs to
+    # deserialise cleanly (pure-daily assumed).
+    execution_interval_sec: int = 86400
+    daily_fallback_tickers: list[str] = Field(default_factory=list)
     equity_curve: list[EquityPoint] = Field(default_factory=list)
     trade_list: list[TradeRow] = Field(default_factory=list)
     error_text: str | None = None

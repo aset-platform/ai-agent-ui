@@ -79,6 +79,7 @@ nav:
   - Algo Trading:
       - Overview: algo-trading/overview.md
       - Backtest engine: algo-trading/backtest.md
+      - Intraday execution clock: algo-trading/intraday-execution-clock.md
       - Paper trading: algo-trading/paper-trading.md
       - Strategies & Levers: algo-trading/strategies.md
       - Live Dry-Run: algo-trading/live-dry-run.md

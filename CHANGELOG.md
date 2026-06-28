@@ -5,6 +5,37 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.18.0] — 2026-06-28: Intraday execution-clock backtest (Piece A)
+
+Decouples a strategy's **signal cadence** (daily/15m) from a finer **execution clock** that drives ATR trailing, hard/time/regime stops, and MIS square-off in the backtest and walkforward engines — so a daily strategy receives ~25 intraday exit checks per day and faithfully replicates live behaviour. Delivered via subagent-driven-development (7 tasks, per-task reviews + fixes, final whole-branch review). 16 commits, ~20 new tests.
+
+### Added
+
+- **Two-clock backtest/walkforward engine** — signal bars (entry/rebalance) and execution bars (exits/trailing/square-off) are independent timelines. A daily strategy with 15m coverage evaluates exits on every 15m bar while entries still fire once per day.
+- **`intraday_coverage()` helper** (`backend/algo/backtest/coverage.py`) — single batched `stocks.intraday_bars` query returning `TickerCoverage` (finest interval, covered dates, missing days) per ticker per window. Single source of truth for execution resolution; shared by the engine and by the deferred Piece C transparency UI.
+- **`ExecutionSimulator`** (`backend/algo/backtest/execution_simulator.py`) — wraps the **same `TrailingStopManager` the live runtime uses**; manages per-ticker TSM lifecycle, evaluates stops on each exec bar, emits typed `ExitDecision` objects. Parity with live is structural, not coincidental.
+- **Trigger-price stop fills** — `SimBroker._execute_trigger_fill` fills stop/trailing/square-off exits at `trigger ± directional slippage` (models the live GTT), not pessimistic bar-low.
+- **Result metadata** — `BacktestSummary` gains `execution_interval_sec` and `daily_fallback_tickers: list[str]` so every run is self-documenting about the execution resolution that backed it. Stored in the existing JSON result blob (no schema migration).
+- **Walkforward inherits two-clock** — `run_walkforward` calls the refactored `run_backtest` per fold; each fold records its own execution resolution automatically.
+- **1m/5m-cadence backtest block** — strategies whose signal grain is finer than any available execution history are blocked with a clear error ("Run in paper to evaluate this cadence") rather than silently running at the wrong grain.
+
+### Fixed
+
+- **Fee-product on two-clock exits** — exit `OrderIntent`s now carry `strategy.product` (CNC → DELIVERY, MIS → INTRADAY) so CNC daily-strategy exits are billed delivery STT, not cheaper intraday rates. Previously the exec-bar timestamp caused `SimBroker` to infer INTRADAY product on CNC exits, producing optimistic P&L.
+- **Per-ticker coverage routing** — covered tickers route through `ExecutionSimulator` on every exec bar; uncovered tickers remain on the legacy daily path with a `daily_fallback` flag; no double-management across the two paths.
+- **Coverage-probe guard** — `intraday_coverage` is wrapped in `try/except Exception` (exc_info) so a missing catalog or DuckDB error degrades to daily-fallback rather than aborting the run.
+
+### Changed
+
+- Covered daily-signal + trailing-enabled runs now report **intra-bar drawdown** (equity snapshots at each 15m exec bar) rather than daily-close equity only. Pure-daily and trailing-disabled runs are byte-identical to pre-0.18.0.
+
+### Dev tooling
+
+- New `/capture-learnings` project command (routes session learnings into the 3-tier docs system; CLAUDE.md · `.claude/rules/*.md` · Serena memory) and `/audit-claude-md` command (token-budget-aware CLAUDE.md optimiser) landed alongside on `dev`.
+- `PreToolUse` Serena-preference hook added to project settings (also on `dev`).
+
+---
+
 ## [0.17.0] — 2026-05-09: Algo Trading v2 — Live-trading-readiness vertical
 
 5-slice vertical that promotes v1's research-only platform into a single-user, single-strategy live trader on Zerodha Kite, with safety belts that make it materially harder to lose money to a bug than to lose money to a bad strategy. Code ships **default-OFF** at three layers (schema default, runtime guard, UI 4-gate disable) — every user including superuser must explicitly opt in per-strategy via cap form + 2-step retype-confirm modal.

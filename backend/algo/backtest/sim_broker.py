@@ -16,6 +16,7 @@ slippage falls back to the 5bps minimum on every leg.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import date
 from decimal import Decimal
 
@@ -47,6 +48,20 @@ def estimate_slippage_bps(
         return SLIPPAGE_MIN_BPS
     impact = SLIPPAGE_IMPACT_BPS * (order_value_inr / ticker_adtv_inr)
     return max(SLIPPAGE_MIN_BPS, impact)
+
+
+def _flat_slip(trigger: Decimal, side: str) -> Decimal:
+    """Directional flat-bps slippage on a trigger price (live GTT)."""
+    try:
+        bps = int(os.getenv("ALGO_PAPER_SLIPPAGE_BPS", "0"))
+    except (TypeError, ValueError):
+        bps = 0
+    if bps <= 0:
+        return trigger
+    factor = Decimal(bps) / Decimal("10000")
+    if side == "BUY":
+        return trigger * (Decimal("1") + factor)
+    return trigger * (Decimal("1") - factor)
 
 
 class NoBarAvailableError(KeyError):
@@ -104,6 +119,9 @@ class SimBroker:
         """
         if intent.ticker not in self._bars:
             raise NoBarAvailableError(intent.ticker)
+
+        if intent.trigger_price is not None:
+            return self._execute_trigger_fill(intent)
 
         # ASETPLTFRM-400 slice 3 — when the intent carries
         # ``intent_emitted_ts_ns`` (intraday cadence), resolve T+1
@@ -171,7 +189,10 @@ class SimBroker:
         # use the INTRADAY schedule: capped brokerage (₹20 / leg
         # max), sell-side-only STT @ 0.025 %, sell-side-only no
         # DP charges. Daily strategies keep the DELIVERY schedule.
-        product = (
+        # An explicit ``intent.product`` (set by two-clock exits)
+        # overrides the bar-grain inference so a CNC daily strategy's
+        # intraday-detected exit still bills DELIVERY fees.
+        product = intent.product or (
             "INTRADAY"
             if intent.intent_emitted_ts_ns is not None
             else "DELIVERY"
@@ -198,4 +219,58 @@ class SimBroker:
             fee_rates_version=breakdown.rates_version,
             exit_reason=intent.exit_reason,
             fill_ts_ns=next_bar.bar_open_ts_ns,
+        )
+
+    def _execute_trigger_fill(
+        self, intent: OrderIntent
+    ) -> Fill | None:
+        """Fill a stop/trailing exit on its own bar at the trigger.
+
+        Resolves the CURRENT (emitted) bar rather than T+1.
+        Fees are computed on the unslipped trigger price to mirror
+        the live GTT execution model.
+        """
+        if intent.intent_emitted_ts_ns is not None:
+            idx = self._ts_index.get(intent.ticker, {}).get(
+                intent.intent_emitted_ts_ns
+            )
+        else:
+            idx = self._index.get(intent.ticker, {}).get(
+                intent.intent_emitted_at
+            )
+        if idx is None:
+            return None
+        bar = self._bars[intent.ticker][idx]
+        trigger = intent.trigger_price  # type: ignore[assignment]
+        fill_price = _flat_slip(trigger, intent.side)
+        # Explicit ``intent.product`` (two-clock exits) overrides the
+        # bar-grain inference — a CNC strategy's intraday trailing
+        # exit must still bill DELIVERY fees.
+        product = intent.product or (
+            "INTRADAY"
+            if intent.intent_emitted_ts_ns is not None
+            else "DELIVERY"
+        )
+        breakdown = self._fees.compute(
+            Trade(
+                symbol=intent.ticker,
+                exchange="NSE",
+                side=intent.side,
+                product=product,
+                qty=intent.qty,
+                price=trigger,  # fees on unslipped trigger
+            ),
+        )
+        return Fill(
+            intent_id=intent.intent_id,
+            ticker=intent.ticker,
+            side=intent.side,
+            qty=intent.qty,
+            fill_price=fill_price,
+            fill_date=bar.date,
+            fees_inr=breakdown.total_inr,
+            fee_rates_version=breakdown.rates_version,
+            exit_reason=intent.exit_reason,
+            fill_ts_ns=bar.bar_open_ts_ns,
+            trigger_price=trigger,
         )
