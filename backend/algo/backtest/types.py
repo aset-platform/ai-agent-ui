@@ -118,6 +118,14 @@ class OrderIntent(BaseModel):
     # (emitted) bar at this price ± flat-bps slippage instead of
     # the next bar's open. Models the live broker's GTT execution.
     trigger_price: Decimal | None = None
+    # Explicit fee product ("DELIVERY" / "INTRADAY"). When set, the
+    # SimBroker books fees against THIS product rather than inferring
+    # it from ``intent_emitted_ts_ns`` (bar grain). Two-clock exits
+    # set this from the strategy's true product so a CNC daily
+    # strategy's intraday-detected exit still bills DELIVERY fees.
+    # Left None on AST/entry intents → backward-compatible ts_ns
+    # inference.
+    product: str | None = None
 
 
 class Fill(BaseModel):

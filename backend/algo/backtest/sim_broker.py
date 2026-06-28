@@ -189,7 +189,10 @@ class SimBroker:
         # use the INTRADAY schedule: capped brokerage (₹20 / leg
         # max), sell-side-only STT @ 0.025 %, sell-side-only no
         # DP charges. Daily strategies keep the DELIVERY schedule.
-        product = (
+        # An explicit ``intent.product`` (set by two-clock exits)
+        # overrides the bar-grain inference so a CNC daily strategy's
+        # intraday-detected exit still bills DELIVERY fees.
+        product = intent.product or (
             "INTRADAY"
             if intent.intent_emitted_ts_ns is not None
             else "DELIVERY"
@@ -240,7 +243,10 @@ class SimBroker:
         bar = self._bars[intent.ticker][idx]
         trigger = intent.trigger_price  # type: ignore[assignment]
         fill_price = _flat_slip(trigger, intent.side)
-        product = (
+        # Explicit ``intent.product`` (two-clock exits) overrides the
+        # bar-grain inference — a CNC strategy's intraday trailing
+        # exit must still bill DELIVERY fees.
+        product = intent.product or (
             "INTRADAY"
             if intent.intent_emitted_ts_ns is not None
             else "DELIVERY"

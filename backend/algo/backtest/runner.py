@@ -847,6 +847,15 @@ def run_backtest(
                         intent_emitted_ts_ns=ts_ns,
                         exit_reason=_dec.exit_reason,
                         trigger_price=_dec.trigger_price,
+                        # Fee product reflects the strategy's TRUE
+                        # product, not the exec-bar grain. A CNC daily
+                        # strategy's intraday-detected exit is still a
+                        # delivery sell.
+                        product=(
+                            "DELIVERY"
+                            if strategy.product == "CNC"
+                            else "INTRADAY"
+                        ),
                     )
                     try:
                         _fill = (
@@ -932,6 +941,14 @@ def run_backtest(
                 intent_emitted_at=bar_date,
                 intent_emitted_ts_ns=ts_ns,
                 exit_reason="time_stop",
+                # Two-clock exits route through exec_sim_broker (exec
+                # bar grain) — book fees against the strategy's TRUE
+                # product so a CNC daily strategy bills DELIVERY.
+                product=(
+                    "DELIVERY"
+                    if strategy.product == "CNC"
+                    else "INTRADAY"
+                ),
             )
             # Two-clock: market exits fill on the next EXECUTION bar
             # (the daily ``sim`` has no exec ts_ns index → would never
@@ -1033,6 +1050,14 @@ def run_backtest(
                         intent_emitted_at=bar_date,
                         intent_emitted_ts_ns=ts_ns,
                         exit_reason="regime_exit",
+                        # Two-clock exits route through
+                        # exec_sim_broker — book fees against the
+                        # strategy's TRUE product (CNC → DELIVERY).
+                        product=(
+                            "DELIVERY"
+                            if strategy.product == "CNC"
+                            else "INTRADAY"
+                        ),
                     )
                     # Two-clock: market exit fills on the next
                     # EXECUTION bar (daily ``sim`` lacks the exec

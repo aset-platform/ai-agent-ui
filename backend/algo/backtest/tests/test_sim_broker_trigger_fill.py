@@ -45,3 +45,38 @@ def test_trigger_fill_applies_sell_slippage(monkeypatch):
     fill = sim.execute(intent)
     # SELL receives less: 100 * (1 - 0.01) = 99.00
     assert fill.fill_price == Decimal("99.00")
+
+
+def test_explicit_delivery_product_books_higher_fees(monkeypatch):
+    """Two-clock CNC exit: an exec-bar trigger fill (ts_ns set) with
+    explicit ``product='DELIVERY'`` must book DELIVERY fees, NOT the
+    cheaper INTRADAY fees the bar grain would otherwise infer.
+
+    Delivery sell STT (~0.1%) > intraday sell STT (~0.025%) and
+    delivery adds DP charges, so the DELIVERY fill MUST have strictly
+    higher total fees than the product=None (INTRADAY-inferred) fill.
+    """
+    monkeypatch.setenv("ALGO_PAPER_SLIPPAGE_BPS", "0")
+    bars = {"X.NS": [_bar(date(2026, 6, 1), "100", "101", "94", "95",
+                          ts=1)]}
+    sim = SimBroker(bars=bars, fee_as_of=date(2026, 6, 1))
+
+    # ts_ns set → bar-grain inference would say INTRADAY.
+    intraday = sim.execute(OrderIntent(
+        ticker="X.NS", side="SELL", qty=10,
+        intent_emitted_at=date(2026, 6, 1), intent_emitted_ts_ns=1,
+        exit_reason="trail_stop", trigger_price=Decimal("100.00"),
+        product=None,
+    ))
+    # Same exec bar, but explicit DELIVERY product (true CNC product).
+    delivery = sim.execute(OrderIntent(
+        ticker="X.NS", side="SELL", qty=10,
+        intent_emitted_at=date(2026, 6, 1), intent_emitted_ts_ns=1,
+        exit_reason="trail_stop", trigger_price=Decimal("100.00"),
+        product="DELIVERY",
+    ))
+    assert intraday is not None and delivery is not None
+    # Identical fill price (only the fee schedule differs).
+    assert intraday.fill_price == delivery.fill_price
+    # Delivery exit must underbill nothing: strictly higher fees.
+    assert delivery.fees_inr > intraday.fees_inr
