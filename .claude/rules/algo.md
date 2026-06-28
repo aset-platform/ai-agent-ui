@@ -32,3 +32,11 @@ paper-fill realism, so divergence makes promotion meaningless.
 ## Live execution safety (GTT / STOP_HIT)
 
 - **Emergency STOP_HIT SELL is sacrosanct**: when WS HWM detects `STOP_HIT` (the GTT may not have fired), the pre-SELL `delete_gtt` is wrapped — a cancel failure MUST NOT skip the emergency SELL (`live/runtime.py` ~L1496). Emergency SELL routes through the tracked `_submit_order` path, never a raw order. → `algo-gtt-trailing-stop`
+
+## Intraday execution clock (backtest / walkforward)
+
+- **Two-clock engine**: a strategy's SIGNAL cadence (daily/15m) is decoupled from a finer EXECUTION clock that drives ATR trailing / hard+time+regime stops / MIS square-off — so a daily strategy gets intraday exit resolution, replicating live. Daily-signal + trailing-enabled + coverage → exits evaluate every exec bar; entries still fire once/day. Trailing-disabled OR no-coverage collapses to the daily clock (byte-identical). Shared `ExecutionSimulator` wraps the live `TrailingStopManager` (parity is structural).
+- **Execution grain is data-driven, NOT assumed**: `intraday_coverage()` picks the finest grain present per (ticker, window) in `stocks.intraday_bars`. **Reality: 15m only** (~497 tickers, 2022-06+); NO 1m/5m history exists. Uncovered tickers → daily-fallback (flagged `daily_fallback_tickers`). **1m/5m-cadence backtests are BLOCKED** (no history) → paper only.
+- **Eval engines make ZERO Kite/network calls** — backtest, walkforward, AND paper read only preserved Iceberg; coverage gaps degrade/flag, never live-fetch (the coverage probe is wrapped → daily-fallback on catalog error).
+- **Stop fills at trigger ± slippage**: `SimBroker._execute_trigger_fill` fills on the CURRENT exec bar at the trailing trigger (models the live GTT), not next-bar-open.
+- **★ Fee-product gotcha**: `SimBroker` infers fee product from `intent_emitted_ts_ns` (ts set → INTRADAY). Two-clock exits carry an exec-bar ts but a daily CNC position is a DELIVERY sell — so exit `OrderIntent`s MUST set `product` from `strategy.product` (CNC→DELIVERY, MIS→INTRADAY) or the CNC strategy is mis-billed cheap intraday STT (optimistic P&L). Entries fill DELIVERY via the daily `sim`.
