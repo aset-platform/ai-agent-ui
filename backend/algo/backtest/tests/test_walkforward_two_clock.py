@@ -93,7 +93,7 @@ def test_walk_windows_cover_period():
 def test_walk_windows_no_partial_windows():
     """Trailing partial windows are dropped, not truncated."""
     # 30-day train + 15-day test = 45 days minimum per window.
-    # A 44-day period can't fit even one complete window.
+    # A 43-day period can't fit even one complete window.
     wins = walk_windows(
         date(2026, 1, 1), date(2026, 2, 13),  # 43 days span
         train_days=30, test_days=15, step_days=15,
@@ -127,7 +127,6 @@ def test_fold_summary_carries_execution_interval():
     child_run_id = uuid.uuid4()
 
     original = _minimal_summary(execution_interval_sec=900)
-    assert original.run_id == original_run_id or True  # run_id is random
 
     # Exercise the exact operation walkforward.py line ~685 performs.
     copied = original.model_copy(update={"run_id": child_run_id})
