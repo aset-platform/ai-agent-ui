@@ -2,6 +2,40 @@
 
 ---
 
+### 2026-06-28 — Intraday execution-clock (Piece A) + doc-tier tooling (branch `feature/intraday-execution-clock`)
+
+**What:** Two independent tracks delivered in one session.
+
+**Track 1 — Two-clock backtest/walkforward engine (the main feature):**
+
+Built via `superpowers:subagent-driven-development` (7 tasks, per-task spec + quality reviews + fix loops, final whole-branch opus review). Decouples a strategy's signal cadence from a finer execution clock — a daily strategy now gets ~25 intraday exit checks/day from `stocks.intraday_bars` 15m data (~497 tickers, 2022-06+), faithfully replicating the live GTT/trailing behaviour in the backtest/walkforward engines.
+
+- **Task 1** (`2cefcd8`) — `intraday_coverage()` helper; batched single query; returns `TickerCoverage` per (ticker, window). SQL parameterisation hardened after security finding (daaa47c).
+- **Task 2** (`a3c742b`) — trigger-price stop fills in `SimBroker._execute_trigger_fill`: fills at `trigger ± directional slippage`, modelling the live GTT.
+- **Task 3** (`01923d0` + `8323006`) — `ExecutionSimulator`: wraps the live `TrailingStopManager`, per-ticker lifecycle, `ExitDecision` typed output. Parity with live is structural.
+- **Task 4** (`64679ad` + `a0dd0b0`) — two-clock runner wiring. opus review: 1 Critical + 2 Important, all fixed: time-stop/regime-exit now fill via exec sim broker; per-ticker coverage routing (covered vs uncovered, no double-management); coverage-probe guard wraps `intraday_coverage` for daily-fallback on catalog error.
+- **Task 5** (`a2dc0ee` + `71d8adc`) — 1m/5m-cadence backtest block (no history → clear error → paper-only); 5m branch tests added.
+- **Task 6** (`aedaf08`) — result metadata: `BacktestSummary.execution_interval_sec` + `daily_fallback_tickers`; stored in existing JSON blob, no schema migration.
+- **Task 7** (`7adf390` + `6008c8c`) — walkforward inheritance verified; strengthened propagation test exercises `model_copy`; `assert … or True` no-op removed.
+- **Final whole-branch review** (opus, d28ebca..6008c8c, 15 commits): 1 Important fixed (`ccb0282`) — two-clock CNC/delivery exits were billed INTRADAY fees (exec-bar ts_ns inference → optimistic P&L). `OrderIntent.product` now threads `strategy.product` through the three two-clock exit intents; `SimBroker` honors `intent.product` with ts_ns fallback (backward-compatible). New delivery-vs-intraday fee test. 266 passed / 2 pre-existing.
+
+Regression sign-off: trailing-disabled / no-coverage daily runs byte-identical pre/post. Zero Kite calls in the eval path. 16 commits, ~20 new tests. HEAD `ccb0282`.
+
+**Track 2 — Doc-tier tooling (landed on `dev` alongside):**
+
+- `/capture-learnings` project command: routes session learnings into the 3-tier docs system (CLAUDE.md hard rule · `.claude/rules/*.md` path-scoped · Serena memory). Includes v1.1.0 fixes (diff scope, Serena fallback).
+- `/audit-claude-md` command: token-budget-aware CLAUDE.md auditor.
+- `PreToolUse` Serena-preference hook in project settings.
+
+**Deferred:**
+- Piece B — paper runtime two-clock (separate spec).
+- Piece C — transparency UI chip (separate spec).
+- Minor follow-ups from final review: `bar_ist_time` None in two-clock (latent/harmless), last-exec-bar next-bar-fill edge test, type-ignore/env-per-call cosmetics.
+
+**NOT done (user decision):** PR to `dev` (squash-only; never push without confirm).
+
+---
+
 ### 2026-06-27 — `/capture-learnings` doc-router command + algo.md parity/safety rules (branch `feature/rsi2-exit-strategy`)
 
 **What:** Built a project slash command to keep the always-loaded `CLAUDE.md` slim by routing new learnings into the right tier of the 3-tier docs system (established `1d66720`): CLAUDE.md hard rule · `.claude/rules/*.md` path-scoped · Serena memory.
