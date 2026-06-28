@@ -648,3 +648,125 @@ def test_flush_force_on_empty_events_does_not_crash() -> None:
     assert calls == [0], (
         "flush_events called with empty list on force; must not crash"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 2 (paper-parity) — adopt the shared ExecutionSimulator and route
+# trailing exits through the trigger-fill path.
+# ---------------------------------------------------------------------------
+from datetime import date as _date2  # noqa: E402
+from decimal import Decimal as _Dec2  # noqa: E402
+from types import SimpleNamespace as _NS2  # noqa: E402
+from uuid import uuid4 as _uuid4_2  # noqa: E402
+
+from backend.algo.backtest.execution_simulator import (  # noqa: E402
+    ExecutionSimulator as _ExecSim2,
+)
+from backend.algo.backtest.positions import (  # noqa: E402
+    PositionTracker as _PT2,
+)
+from backend.algo.backtest.types import Fill as _Fill2  # noqa: E402
+from backend.algo.paper.broker import PaperBroker as _PB2  # noqa: E402
+from backend.algo.paper.runtime import PaperRuntime as _PR2  # noqa: E402
+from backend.algo.strategy.ast import RiskPerTrade as _RPT2  # noqa: E402
+
+
+def _t2_risk():
+    return _RPT2(
+        stop_loss_pct=5.0, max_qty=100,
+        trailing_trigger_pct=4.0, trailing_atr_multiplier=1.5,
+    )
+
+
+def _t2_seed_runtime(product="CNC"):
+    r = object.__new__(_PR2)
+    r._trailing_enabled = True
+    r._exec_sim = _ExecSim2(_t2_risk())
+    r._broker = _PB2(
+        fee_as_of=_date2(2026, 6, 1),
+        product="DELIVERY" if product == "CNC" else "INTRADAY",
+    )
+    r._positions = _PT2()
+    r._strategy = _NS2(
+        id=_uuid4_2(), risk=_NS2(per_trade=_t2_risk()),
+        product=product,
+    )
+    r._user_id = _uuid4_2()
+    r._session_id = _uuid4_2()
+    r._events = []
+    r._last_marks = {}
+    return r
+
+
+def _t2_bar(ticker, low, high, ts):
+    return _NS2(
+        ticker=ticker, low=_Dec2(str(low)), high=_Dec2(str(high)),
+        close=_Dec2(str(high)), bar_open_ts_ns=ts,
+    )
+
+
+def test_paper_trailing_exit_fills_at_trigger(monkeypatch):
+    monkeypatch.setenv("ALGO_PAPER_SLIPPAGE_BPS", "0")
+    r = _t2_seed_runtime(product="CNC")
+    buy = _Fill2(
+        intent_id=_uuid4_2(), ticker="X.NS", side="BUY", qty=10,
+        fill_price=_Dec2("100"), fill_date=_date2(2026, 6, 1),
+        fees_inr=_Dec2("0"), fee_rates_version="t",
+    )
+    r._positions.apply_fill(buy)
+    r._exec_sim.on_buy_fill("X.NS", 100.0, atr=1.0)
+    pos = r._positions.open_positions()["X.NS"]
+    fill = r._evaluate_trailing_exit(
+        bar=_t2_bar("X.NS", 94, 96, ts=1),
+        existing_pos=pos, last_price=_Dec2("94"),
+        bar_date_obj=_date2(2026, 6, 1),
+    )
+    assert fill is not None
+    assert fill.side == "SELL"
+    assert fill.fill_price == _Dec2("95.0")
+    assert fill.exit_reason == "phase1_stop"
+    assert not r._exec_sim.has("X.NS")
+    # event_row stores the payload as a JSON string under
+    # ``payload_json`` (not ``payload``) — parse it.
+    import json as _json2
+    assert any(
+        e["type"] == "order_filled"
+        and _json2.loads(e["payload_json"])["exit_reason"]
+        == "phase1_stop"
+        for e in r._events
+    )
+
+
+def test_paper_trailing_decision_matches_backtest_exec_sim():
+    ref = _ExecSim2(_t2_risk())
+    ref.on_buy_fill("X.NS", 100.0, atr=1.0)
+    ref_dec = ref.evaluate_bar("X.NS", _Dec2("94"), _Dec2("96"))
+
+    r = _t2_seed_runtime()
+    r._positions.apply_fill(_Fill2(
+        intent_id=_uuid4_2(), ticker="X.NS", side="BUY", qty=10,
+        fill_price=_Dec2("100"), fill_date=_date2(2026, 6, 1),
+        fees_inr=_Dec2("0"), fee_rates_version="t"))
+    r._exec_sim.on_buy_fill("X.NS", 100.0, atr=1.0)
+    fill = r._evaluate_trailing_exit(
+        bar=_t2_bar("X.NS", 94, 96, ts=1),
+        existing_pos=r._positions.open_positions()["X.NS"],
+        last_price=_Dec2("94"), bar_date_obj=_date2(2026, 6, 1))
+    assert ref_dec is not None
+    assert fill.exit_reason == ref_dec.exit_reason
+    assert fill.trigger_price == ref_dec.trigger_price
+
+
+def test_no_exit_when_bar_above_stop():
+    r = _t2_seed_runtime()
+    r._exec_sim.on_buy_fill("X.NS", 100.0, atr=1.0)
+    r._positions.apply_fill(_Fill2(
+        intent_id=_uuid4_2(), ticker="X.NS", side="BUY", qty=10,
+        fill_price=_Dec2("100"), fill_date=_date2(2026, 6, 1),
+        fees_inr=_Dec2("0"), fee_rates_version="t"))
+    fill = r._evaluate_trailing_exit(
+        bar=_t2_bar("X.NS", 99, 104, ts=1),
+        existing_pos=r._positions.open_positions()["X.NS"],
+        last_price=_Dec2("99"), bar_date_obj=_date2(2026, 6, 1))
+    assert fill is None
+    assert r._exec_sim.has("X.NS")

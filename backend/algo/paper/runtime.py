@@ -48,8 +48,8 @@ from backend.algo.backtest.stop_loss_monitor import (
 from backend.algo.backtest.time_stop_monitor import (
     check_time_stop_triggers,
 )
-from backend.algo.backtest.trailing_stop_manager import (
-    TrailingStopManager,
+from backend.algo.backtest.execution_simulator import (
+    ExecutionSimulator,
 )
 
 # REGIME-2a — pre-computed nightly factor library overlay.
@@ -191,7 +191,14 @@ class PaperRuntime:
         self._strategy = strategy
         self._user_id = user_id
         self._initial = initial_capital_inr
-        self._broker = PaperBroker(fee_as_of=fee_as_of)
+        self._broker = PaperBroker(
+            fee_as_of=fee_as_of,
+            product=(
+                "DELIVERY"
+                if strategy.product == "CNC"
+                else "INTRADAY"
+            ),
+        )
         self._evaluator = Evaluator()
         self._risk = RiskEngine()
         self._resampler = Resampler(intervals=(60,))
@@ -304,7 +311,9 @@ class PaperRuntime:
             strategy.risk.per_trade.trailing_trigger_pct is not None
             and strategy.risk.per_trade.trailing_atr_multiplier is not None
         )
-        self._trailing_managers: dict[str, TrailingStopManager] = {}
+        self._exec_sim = ExecutionSimulator(
+            strategy.risk.per_trade
+        )
         # REGIME-1 — regime_label + stress_prob lookup, loaded
         # lazily on first bar so paper sessions resolve regime
         # features identically to backtest.
@@ -565,6 +574,92 @@ class PaperRuntime:
                     )
         return fills
 
+    def _evaluate_trailing_exit(
+        self,
+        *,
+        bar,  # noqa: ANN001 — resampler bar (duck-typed)
+        existing_pos,  # noqa: ANN001
+        last_price: Decimal,
+        bar_date_obj: date,
+    ) -> "Fill | None":
+        """Evaluate the shared ExecutionSimulator for one bar; on an
+        ExitDecision, fill the SELL at the trigger and emit events.
+
+        Returns the resulting ``Fill`` on a trailing exit, else
+        ``None``. The shared simulator wraps the same
+        ``TrailingStopManager`` that drives live, so the paper exit
+        decision is structurally identical to backtest/live.
+        """
+        if not (
+            self._trailing_enabled
+            and self._exec_sim.has(bar.ticker)
+        ):
+            return None
+        dec = self._exec_sim.evaluate_bar(
+            bar.ticker, bar.low, bar.high
+        )
+        if dec is None:
+            return None
+        sig = Signal(
+            strategy_id=self._strategy.id,
+            user_id=self._user_id,
+            ticker=bar.ticker,
+            side="SELL",
+            qty=existing_pos.qty,
+            emitted_at_ns=bar.bar_open_ts_ns,
+            reason=dec.exit_reason,
+        )
+        try:
+            fill = self._broker.execute(
+                signal=sig,
+                last_price=last_price,
+                fill_date=bar_date_obj,
+                trigger_price=dec.trigger_price,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.error(
+                "paper trailing fill failed for %s: %s",
+                bar.ticker, exc, exc_info=True,
+            )
+            return None
+        self._positions.apply_fill(fill)
+        _emit_paper_budget_lifecycle(
+            user_id=self._user_id,
+            strategy_id=self._strategy.id,
+            fill=fill,
+        )
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="paper",
+                type_="order_filled",
+                payload={
+                    "ticker": fill.ticker,
+                    "side": fill.side,
+                    "qty": fill.qty,
+                    "fill_price": str(fill.fill_price),
+                    "fill_date": fill.fill_date.isoformat(),
+                    "fees_inr": str(fill.fees_inr),
+                    "fee_rates_version": fill.fee_rates_version,
+                    "exit_reason": dec.exit_reason,
+                    "trailing_phase": dec.phase,
+                    "trailing_hwm": dec.hwm,
+                    "trigger_price": str(dec.trigger_price),
+                },
+            )
+        )
+        self._exec_sim.drop(bar.ticker)
+        _logger.info(
+            "paper trailing SELL %s phase=%d stop=%s reason=%s",
+            bar.ticker,
+            dec.phase,
+            dec.trigger_price,
+            dec.exit_reason,
+        )
+        return fill
+
     def _on_bar_close(
         self,
         *,
@@ -683,114 +778,32 @@ class PaperRuntime:
         stop_loss_triggered = False
         if existing_pos is not None and existing_pos.qty > 0:
             if self._trailing_enabled:
-                # v5 path: evaluate TrailingStopManager using
-                # bar.low (stop-hit) then bar.high (HWM update).
-                _mgr = self._trailing_managers.get(bar.ticker)
-                if _mgr is not None:
-                    _bar_low = float(bar.low)
-                    _bar_high = float(bar.high)
-                    _stop_event = None
-                    if _bar_low <= _mgr.current_stop:
-                        _stop_event = _mgr.on_price_update(_bar_low)
-                    else:
-                        _mgr.on_price_update(_bar_high)
-                    if _stop_event and _stop_event.event_type == "STOP_HIT":
-                        _exit_reason = (
-                            "phase1_stop"
-                            if _stop_event.phase.value == 1
-                            else "phase1_ratchet"
-                            if _stop_event.phase.value == 15
-                            else "trail_stop"
+                # v5 path: evaluate the shared ExecutionSimulator
+                # (same TrailingStopManager that drives live) for
+                # this bar; on an exit it fills the SELL at the
+                # trigger and emits the lifecycle/order_filled events.
+                _ts_fill = self._evaluate_trailing_exit(
+                    bar=bar,
+                    existing_pos=existing_pos,
+                    last_price=last_price,
+                    bar_date_obj=bar_date_obj,
+                )
+                if _ts_fill is not None:
+                    from backend.algo.backtest \
+                        .cooldown_hydration import (
+                        _HydratedClose,
+                    )
+                    if _ts_fill.exit_reason in (
+                        "phase1_stop", "phase1_ratchet"
+                    ):
+                        self._cooldown_history.append(
+                            _HydratedClose(
+                                ticker=bar.ticker,
+                                exit_reason=_ts_fill.exit_reason,
+                                closed_at=bar_date_obj,
+                            )
                         )
-                        _ts_sig = Signal(
-                            strategy_id=self._strategy.id,
-                            user_id=self._user_id,
-                            ticker=bar.ticker,
-                            side="SELL",
-                            qty=existing_pos.qty,
-                            emitted_at_ns=bar.bar_open_ts_ns,
-                            reason=_exit_reason,
-                        )
-                        try:
-                            _ts_fill = self._broker.execute(
-                                signal=_ts_sig,
-                                last_price=last_price,
-                                fill_date=bar_date_obj,
-                            )
-                        except Exception as exc:
-                            _logger.error(
-                                "paper trailing fill failed for "
-                                "%s: %s",
-                                bar.ticker, exc, exc_info=True,
-                            )
-                            _ts_fill = None
-                        if _ts_fill is not None:
-                            self._positions.apply_fill(_ts_fill)
-                            _emit_paper_budget_lifecycle(
-                                user_id=self._user_id,
-                                strategy_id=self._strategy.id,
-                                fill=_ts_fill,
-                            )
-                            self._events.append(
-                                event_row(
-                                    session_id=self._session_id,
-                                    user_id=self._user_id,
-                                    strategy_id=self._strategy.id,
-                                    mode="paper",
-                                    type_="order_filled",
-                                    payload={
-                                        "ticker": _ts_fill.ticker,
-                                        "side": _ts_fill.side,
-                                        "qty": _ts_fill.qty,
-                                        "fill_price": str(
-                                            _ts_fill.fill_price
-                                        ),
-                                        "fill_date": (
-                                            _ts_fill.fill_date
-                                            .isoformat()
-                                        ),
-                                        "fees_inr": str(
-                                            _ts_fill.fees_inr
-                                        ),
-                                        "fee_rates_version": (
-                                            _ts_fill.fee_rates_version
-                                        ),
-                                        "exit_reason": _exit_reason,
-                                        "trailing_phase": (
-                                            _stop_event.phase.value
-                                        ),
-                                        "trailing_hwm": (
-                                            _stop_event.hwm
-                                        ),
-                                    },
-                                )
-                            )
-                            self._trailing_managers.pop(
-                                bar.ticker, None
-                            )
-                            from backend.algo.backtest \
-                                .cooldown_hydration import (
-                                _HydratedClose,
-                            )
-                            if _exit_reason in (
-                                "phase1_stop", "phase1_ratchet"
-                            ):
-                                self._cooldown_history.append(
-                                    _HydratedClose(
-                                        ticker=bar.ticker,
-                                        exit_reason=_exit_reason,
-                                        closed_at=bar_date_obj,
-                                    )
-                                )
-                            _logger.info(
-                                "paper trailing SELL %s phase=%d "
-                                "stop=%.4f reason=%s",
-                                bar.ticker,
-                                _stop_event.phase.value,
-                                _stop_event.new_stop,
-                                _exit_reason,
-                            )
-                            stop_loss_triggered = True
+                    stop_loss_triggered = True
             else:
                 # v3 flat stop-loss path (unchanged).
                 sl_triggers = check_stop_loss_triggers(
@@ -917,7 +930,7 @@ class PaperRuntime:
                     continue
                 self._positions.apply_fill(ts_fill)
                 if self._trailing_enabled:
-                    self._trailing_managers.pop(trig.ticker, None)
+                    self._exec_sim.drop(trig.ticker)
                 _emit_paper_budget_lifecycle(
                     user_id=self._user_id,
                     strategy_id=self._strategy.id,
@@ -1139,14 +1152,11 @@ class PaperRuntime:
                     if _atr_series and _atr_series[-1] is not None
                     else 0.0
                 )
-                if _atr > 0 and fill.ticker not in self._trailing_managers:
-                    self._trailing_managers[fill.ticker] = (
-                        TrailingStopManager(
-                            self._strategy.risk.per_trade,
-                            entry_price=float(fill.fill_price),
-                            atr=_atr,
-                            ticker=fill.ticker,
-                        )
+                if _atr > 0 and not self._exec_sim.has(fill.ticker):
+                    self._exec_sim.on_buy_fill(
+                        fill.ticker,
+                        float(fill.fill_price),
+                        _atr,
                     )
                 else:
                     _logger.warning(
@@ -1155,7 +1165,7 @@ class PaperRuntime:
                         fill.ticker,
                     )
             elif fill.side == "SELL":
-                self._trailing_managers.pop(fill.ticker, None)
+                self._exec_sim.drop(fill.ticker)
         _emit_paper_budget_lifecycle(
             user_id=self._user_id,
             strategy_id=self._strategy.id,
@@ -1386,7 +1396,7 @@ class PaperRuntime:
                 return None
             # v5 trailing stop: GTT/simulated trail is the primary exit —
             # suppress AST exit signal while trailing manager is active.
-            if self._trailing_enabled and ticker in self._trailing_managers:
+            if self._trailing_enabled and self._exec_sim.has(ticker):
                 _logger.info(
                     "trailing active — suppressing AST exit for %s",
                     ticker,
