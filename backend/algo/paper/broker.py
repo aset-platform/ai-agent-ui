@@ -14,8 +14,8 @@ price penalty to improve promotion-gate realism:
 - BUY:  fill_price = last_price * (1 + bps/10_000)  — buyer pays up.
 - SELL: fill_price = last_price * (1 - bps/10_000)  — seller receives
         less.
-Fees are always computed on ``last_price`` (the unslipped price) per
-the specification — the slippage only affects the reported fill_price.
+Fees are computed on the unslipped base price (``trigger_price`` when
+set, else ``last_price``).
 """
 from __future__ import annotations
 

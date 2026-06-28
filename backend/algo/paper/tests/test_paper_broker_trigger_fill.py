@@ -34,6 +34,15 @@ def test_trigger_fill_applies_sell_slippage(monkeypatch):
     )
     # SELL receives less: 100 * (1 - 0.01) = 99.00
     assert fill.fill_price == Decimal("99.00")
+    # Fees computed on unslipped trigger (100), not slipped fill (99)
+    ref = PaperBroker(
+        fee_as_of=date(2026, 6, 1), product="DELIVERY"
+    )
+    ref_fill = ref.execute(
+        signal=_sell(), last_price=Decimal("100.00"),
+        fill_date=date(2026, 6, 1),
+    )
+    assert fill.fees_inr == ref_fill.fees_inr
 
 
 def test_no_trigger_is_unchanged_market_fill(monkeypatch):
