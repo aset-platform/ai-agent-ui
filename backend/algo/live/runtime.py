@@ -3474,6 +3474,45 @@ class LiveRuntime:
             )
             return 0
 
+        # Allowed-tickers gate — BUY only. Runs here (before
+        # signal_generated) so a ticker outside the user's allow-list
+        # never appears as a generated signal in the UI. Uses the
+        # startup-loaded caps (self._caps) — no async I/O needed.
+        # Mirrors the suffix-tolerant compare in safety.py Cap 2.
+        if signal.side == "BUY":
+            _allowed = self._caps.get("allowed_tickers") or []
+            if _allowed:
+                def _bare_sym(t: str) -> str:
+                    for _suf in (".NS", ".BO", ".NSI"):
+                        if t.endswith(_suf):
+                            return t[: -len(_suf)]
+                    return t
+
+                _allowed_bare = {_bare_sym(t).upper() for t in _allowed}
+                if _bare_sym(signal.ticker).upper() not in _allowed_bare:
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="signal_rejected",
+                            payload={
+                                **({"dry_run": True} if self._dry_run else {}),
+                                "reason": "ticker_not_allowed",
+                                "ticker": signal.ticker,
+                                "side": signal.side,
+                                "qty": signal.qty,
+                            },
+                        )
+                    )
+                    _logger.debug(
+                        "live allow-list gate: %s not in allowed_tickers=%s",
+                        signal.ticker,
+                        _allowed,
+                    )
+                    return 0
+
         # ASETPLTFRM-381 — also emit ``symbol`` (canonical, no .NS)
         # alongside ``ticker`` so attribution.trades can pair
         # signals with fills (fills carry payload.symbol only). The
