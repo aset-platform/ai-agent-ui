@@ -14,8 +14,8 @@ price penalty to improve promotion-gate realism:
 - BUY:  fill_price = last_price * (1 + bps/10_000)  — buyer pays up.
 - SELL: fill_price = last_price * (1 - bps/10_000)  — seller receives
         less.
-Fees are always computed on ``last_price`` (the unslipped price) per
-the specification — the slippage only affects the reported fill_price.
+Fees are computed on the unslipped base price (``trigger_price`` when
+set, else ``last_price``).
 """
 from __future__ import annotations
 
@@ -55,8 +55,11 @@ def _slipped_price(last_price: Decimal, side: str) -> Decimal:
 class PaperBroker:
     """Synchronous, pure-Python at-tick broker."""
 
-    def __init__(self, *, fee_as_of: date) -> None:
+    def __init__(
+        self, *, fee_as_of: date, product: str = "DELIVERY"
+    ) -> None:
         self._fees = IndianFeeModel(as_of=fee_as_of)
+        self._product = product
 
     def execute(
         self,
@@ -64,23 +67,27 @@ class PaperBroker:
         signal: Signal,
         last_price: Decimal,
         fill_date: date,
+        trigger_price: Decimal | None = None,
     ) -> Fill:
-        """Fill the signal with optional directional slippage.
+        """Fill the signal with directional slippage.
 
-        Fees are computed on the unslipped ``last_price`` per spec.
-        The returned ``Fill.fill_price`` includes the slippage penalty.
+        When ``trigger_price`` is set (stop/trailing exit, modelling the
+        live GTT), the fill is based on the trigger; otherwise on
+        ``last_price``. Fees are computed on the UNSLIPPED base price;
+        ``fill_price`` includes the slippage penalty.
         """
+        base = trigger_price if trigger_price is not None else last_price
         breakdown = self._fees.compute(
             Trade(
                 symbol=signal.ticker,
                 exchange="NSE",
                 side=signal.side,
-                product="DELIVERY",
+                product=self._product,
                 qty=signal.qty,
-                price=last_price,
+                price=base,
             ),
         )
-        fill_price = _slipped_price(last_price, signal.side)
+        fill_price = _slipped_price(base, signal.side)
         return Fill(
             intent_id=uuid4(),
             ticker=signal.ticker,
@@ -91,4 +98,5 @@ class PaperBroker:
             fees_inr=breakdown.total_inr,
             fee_rates_version=breakdown.rates_version,
             exit_reason=signal.reason or "signal",
+            trigger_price=trigger_price,
         )
