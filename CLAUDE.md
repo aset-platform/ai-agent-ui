@@ -211,7 +211,7 @@ Pre-PR `npm run perf:check` (LHCI on /login); full 34-route containerized Lighth
 
 ### 6.2 Backend restart triggers (uvicorn --reload isn't enough)
 
-New routes/Pydantic fields/routers/jobs all need `restart`; `add_column()` needs `restart` + Redis FLUSHALL; new env var needs `up -d --force-recreate`. Sleep 5s before auth calls after restart (asyncpg shutdown race). → `backend-restart-triggers`
+New routes/Pydantic fields/routers/jobs all need `restart`; `add_column()` needs `restart` + Redis FLUSHALL; new env var needs `up -d --force-recreate`. Sleep 5s before auth calls after restart (asyncpg shutdown race). **`restart backend` also kills the live Kite WS session** — user must manually reconnect from Algo Trading UI. → `backend-restart-triggers`
 
 ### 6.3 Cookie hostname
 

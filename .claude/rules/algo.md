@@ -33,6 +33,8 @@ paper-fill realism, so divergence makes promotion meaningless.
 ## Live execution safety (GTT / STOP_HIT)
 
 - **Emergency STOP_HIT SELL is sacrosanct**: when WS HWM detects `STOP_HIT` (the GTT may not have fired), the pre-SELL `delete_gtt` is wrapped — a cancel failure MUST NOT skip the emergency SELL (`live/runtime.py` ~L1496). Emergency SELL routes through the tracked `_submit_order` path, never a raw order. → `algo-gtt-trailing-stop`
+- **Backend restart kills the Kite WS session** — `./run.sh restart backend` tears down the live runtime; ticks stop and no bar evals fire until the user manually clicks Start/Resume in the Algo Trading UI. Never restart mid-session without warning the user first.
+- **eval_node KeyError MUST emit `signal_rejected`** — if a feature is absent from `EvalContext.features` at eval time, append a `signal_rejected` event (`reason="missing_feature"`, `missing_key=str(exc)`) before returning 0. Silent returns mask triage and leave the UI showing no activity for oversold tickers.
 
 ## Intraday execution clock (backtest / walkforward)
 
