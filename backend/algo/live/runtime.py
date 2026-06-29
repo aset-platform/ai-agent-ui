@@ -1111,6 +1111,17 @@ class LiveRuntime:
                         str(rh.stress_prob),
                     )
                 self._regime_by_date[rh.bar_date] = entry
+            # Forward-fill stress_prob for days where the pipeline
+            # wrote regime_label but not stress_prob (e.g. FinBERT
+            # failed). Without this, any ticker that passes conditions
+            # 1-3 hits a KeyError on stress_prob and silently drops.
+            _last_stress: Decimal | None = None
+            for _d in sorted(self._regime_by_date):
+                _e = self._regime_by_date[_d]
+                if "stress_prob" in _e:
+                    _last_stress = _e["stress_prob"]
+                elif _last_stress is not None:
+                    _e["stress_prob"] = _last_stress
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
                 "LiveRuntime: regime_history load failed: %s — "
@@ -3220,6 +3231,21 @@ class LiveRuntime:
                 {k: v for k, v in (features or {}).items()
                  if k in ("rsi_2", "distance_from_sma50", "distance_from_sma200",
                           "stress_prob", "nifty_above_sma200", "nifty_30d_return_pct")},
+            )
+            self._events.append(
+                event_row(
+                    session_id=self._session_id,
+                    user_id=self._user_id,
+                    strategy_id=self._strategy.id,
+                    mode="live",
+                    type_="signal_rejected",
+                    payload={
+                        **({"dry_run": True} if self._dry_run else {}),
+                        "reason": "missing_feature",
+                        "missing_key": str(exc),
+                        "ticker": bar.ticker,
+                    },
+                )
             )
             return 0
 
