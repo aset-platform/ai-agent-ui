@@ -77,7 +77,7 @@ DB inventory: 19 PG OLTP + 12 Iceberg OLAP → `db-table-inventory`. Data home: 
 25. Update `PROGRESS.md` per session (dated); `git add .serena/` before push. Doc triggers: `docs/` for API changes · new Serena memory per new pattern · `README.md` env-vars table for new config.
 26. Test-after-feature — write immediately after smoke test passes; happy + 1 error path minimum.
 27. **PR merge on `dev`: squash only** (merge-commit + rebase blocked).
-28. Jira 3-phase: create → In Progress → comment+Done. Both `customfield_10016` (numeric) + `customfield_10036` (string) for story points. → `jira-3phase-lifecycle`
+28. Jira 3-phase: create → In Progress → comment+Done. Both `customfield_10016` + `customfield_10036` for story points — BOTH numeric (API rejects a string for 10036). → `jira-3phase-lifecycle`
 
 ### 4.5 Infra & config
 
