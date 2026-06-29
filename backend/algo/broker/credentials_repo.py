@@ -82,6 +82,31 @@ class BrokerCredentialsRepo:
         )
         await session.commit()
 
+    async def revoke_access_token(
+        self,
+        session: AsyncSession,
+        user_id: UUID,
+    ) -> None:
+        """Clear only the access token + expiry fields; keep api_key intact.
+
+        After this call the row still exists (status → key_set) so the user
+        can reconnect with one click without re-entering the API key.
+        """
+        now = datetime.now(timezone.utc)
+        await session.execute(
+            text(
+                "UPDATE algo.broker_credentials SET "
+                "access_token_fernet = NULL, "
+                "access_token_expires_at = NULL, "
+                "kite_user_id = NULL, "
+                "last_login_at = NULL, "
+                "updated_at = :updated_at "
+                "WHERE user_id = :user_id"
+            ),
+            {"user_id": user_id, "updated_at": now},
+        )
+        await session.commit()
+
     async def load(
         self,
         session: AsyncSession,

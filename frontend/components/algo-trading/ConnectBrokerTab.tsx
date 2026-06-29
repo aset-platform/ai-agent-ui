@@ -12,8 +12,8 @@
 import { useCallback, useState } from "react";
 
 import {
-  disconnectBroker,
   getLoginUrl,
+  removeApiKey,
   saveApiKey,
   useBrokerStatus,
 } from "@/hooks/useBrokerStatus";
@@ -52,11 +52,12 @@ export function ConnectBrokerTab() {
     }
   }, []);
 
-  const handleDisconnect = useCallback(async () => {
+  const handleReconnect = useCallback(async () => {
     setBusy(true);
     setActionError(null);
     try {
-      await disconnectBroker();
+      const url = await getLoginUrl();
+      window.location.href = url;
     } catch (e) {
       setActionError((e as Error).message);
     } finally {
@@ -64,7 +65,19 @@ export function ConnectBrokerTab() {
     }
   }, []);
 
-  if (loading && !value) {
+  const handleRemoveKey = useCallback(async () => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await removeApiKey();
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+if (loading && !value) {
     return <p className="text-sm text-gray-500">Loading…</p>;
   }
   if (error) {
@@ -112,6 +125,7 @@ export function ConnectBrokerTab() {
         </div>
       )}
 
+      {/* disconnected — must enter API key first */}
       {status === "disconnected" && (
         <div className="space-y-2 max-w-md">
           <label className="block text-xs font-semibold text-gray-700 dark:text-gray-200">
@@ -137,28 +151,76 @@ export function ConnectBrokerTab() {
         </div>
       )}
 
-      {(status === "key_set" || status === "expired") && (
-        <button
-          type="button"
-          onClick={handleConnect}
-          disabled={busy}
-          data-testid="algo-broker-connect"
-          className="rounded-md bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 text-sm disabled:opacity-40"
-        >
-          {busy ? "Opening Kite login…" : "Connect Zerodha"}
-        </button>
+      {/* key_set — API key saved, not yet authed */}
+      {status === "key_set" && (
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleConnect}
+            disabled={busy}
+            data-testid="algo-broker-connect"
+            className="rounded-md bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 text-sm disabled:opacity-40"
+          >
+            {busy ? "Opening Kite login…" : "Connect Zerodha"}
+          </button>
+          <button
+            type="button"
+            onClick={handleRemoveKey}
+            disabled={busy}
+            data-testid="algo-broker-remove-key"
+            className="rounded-md border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1.5 text-sm disabled:opacity-40"
+          >
+            Remove API key
+          </button>
+        </div>
       )}
 
-      {(status === "connected" || status === "key_set" || status === "expired") && (
-        <button
-          type="button"
-          onClick={handleDisconnect}
-          disabled={busy}
-          data-testid="algo-broker-disconnect"
-          className="ml-2 rounded-md border border-gray-300 dark:border-gray-700 px-3 py-1.5 text-sm disabled:opacity-40"
-        >
-          Disconnect
-        </button>
+      {/* connected — Reconnect (re-auth) + Remove API key (nuclear) */}
+      {status === "connected" && (
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleReconnect}
+            disabled={busy}
+            data-testid="algo-broker-reconnect"
+            className="rounded-md bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 text-sm disabled:opacity-40"
+          >
+            {busy ? "Opening Kite login…" : "Reconnect"}
+          </button>
+          <button
+            type="button"
+            onClick={handleRemoveKey}
+            disabled={busy}
+            data-testid="algo-broker-remove-key"
+            className="rounded-md border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1.5 text-sm disabled:opacity-40"
+          >
+            Remove API key
+          </button>
+        </div>
+      )}
+
+      {/* expired — token gone, API key still present → one-click re-auth */}
+      {status === "expired" && (
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleReconnect}
+            disabled={busy}
+            data-testid="algo-broker-reconnect"
+            className="rounded-md bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 text-sm disabled:opacity-40"
+          >
+            {busy ? "Opening Kite login…" : "Reconnect"}
+          </button>
+          <button
+            type="button"
+            onClick={handleRemoveKey}
+            disabled={busy}
+            data-testid="algo-broker-remove-key"
+            className="rounded-md border border-red-300 dark:border-red-700 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-1.5 text-sm disabled:opacity-40"
+          >
+            Remove API key
+          </button>
+        </div>
       )}
     </div>
   );
