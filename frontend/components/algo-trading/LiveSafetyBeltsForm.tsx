@@ -1,18 +1,6 @@
 "use client";
-/**
- * LiveSafetyBeltsForm — V2-5.
- *
- * Form for setting per-strategy live trading caps:
- *   • max daily ₹ notional (max_inr)
- *   • max orders per day
- *   • allowed tickers (comma-separated list)
- *
- * Caps can be changed at any time; they take effect on the NEXT
- * bar evaluation (not retroactively).  The form does NOT touch
- * live_orders_enabled — that is controlled by LiveModeToggle.
- */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { upsertLiveCaps, useLiveCaps } from "@/hooks/useLiveCaps";
 import { useLiveStatus } from "@/hooks/useLiveStatus";
@@ -21,13 +9,136 @@ interface Props {
   strategyId: string;
 }
 
+// ── Ticker chip ───────────────────────────────────────────────────
+
+function TickerChip({
+  ticker,
+  onRemove,
+}: {
+  ticker: string;
+  onRemove: () => void;
+}) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border
+        border-indigo-200 bg-indigo-100 pl-2.5 pr-1 py-0.5
+        text-[11px] font-mono font-medium text-indigo-800
+        dark:border-indigo-700 dark:bg-indigo-900/40
+        dark:text-indigo-300"
+    >
+      {ticker}
+      <button
+        type="button"
+        onClick={onRemove}
+        className="ml-0.5 flex h-4 w-4 items-center justify-center
+          rounded-full hover:bg-black/10 dark:hover:bg-white/15
+          transition-colors"
+        aria-label={`Remove ${ticker}`}
+        data-testid={`live-caps-ticker-remove-${ticker}`}
+      >
+        <svg
+          className="h-2.5 w-2.5"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+        >
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
+      </button>
+    </span>
+  );
+}
+
+// ── Tag input (chips + inline add) ───────────────────────────────
+
+function TickerTagInput({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (v: string[]) => void;
+}) {
+  const [input, setInput] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function commit(raw: string) {
+    const parts = raw
+      .split(",")
+      .map((t) => t.trim().toUpperCase())
+      .filter(Boolean);
+    const next = [...value];
+    for (const t of parts) {
+      if (!next.includes(t)) next.push(t);
+    }
+    onChange(next);
+    setInput("");
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      if (input.trim()) commit(input);
+    } else if (e.key === "Backspace" && !input && value.length > 0) {
+      onChange(value.slice(0, -1));
+    }
+  }
+
+  function handlePaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    const text = e.clipboardData.getData("text");
+    if (text.includes(",")) {
+      e.preventDefault();
+      commit(text);
+    }
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="flex flex-wrap gap-1.5 rounded border border-slate-300
+        bg-white p-2 dark:border-slate-600 dark:bg-slate-800
+        cursor-text min-h-[40px]"
+      onClick={() => inputRef.current?.focus()}
+      data-testid="live-caps-allowed-tickers"
+    >
+      {value.map((t) => (
+        <TickerChip
+          key={t}
+          ticker={t}
+          onRemove={() => onChange(value.filter((x) => x !== t))}
+        />
+      ))}
+      <input
+        ref={inputRef}
+        value={input}
+        onChange={(e) => setInput(e.target.value.toUpperCase())}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        onBlur={() => {
+          if (input.trim()) commit(input);
+        }}
+        placeholder={
+          value.length === 0 ? "Type NSE symbol + Enter to add…" : ""
+        }
+        className="min-w-[160px] flex-1 bg-transparent text-sm
+          outline-none text-slate-800 dark:text-slate-100
+          placeholder:text-slate-400"
+        data-testid="live-caps-ticker-input"
+      />
+    </div>
+  );
+}
+
+// ── Form ──────────────────────────────────────────────────────────
+
 export function LiveSafetyBeltsForm({ strategyId }: Props) {
   const { caps, loading } = useLiveCaps(strategyId);
   const { revalidate: revalidateStatus } = useLiveStatus(strategyId);
 
   const [maxInr, setMaxInr] = useState<string>("");
   const [maxOrders, setMaxOrders] = useState<string>("");
-  const [tickers, setTickers] = useState<string>("");
+  const [tickerList, setTickerList] = useState<string[]>([]);
   const [gttHeadroomPct, setGttHeadroomPct] = useState<string>("1.0");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -37,7 +148,7 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
     if (caps) {
       setMaxInr(String(caps.max_inr ?? 0));
       setMaxOrders(String(caps.max_orders_per_day ?? 0));
-      setTickers((caps.allowed_tickers ?? []).join(", "));
+      setTickerList(caps.allowed_tickers ?? []);
       setGttHeadroomPct(
         String(((caps.gtt_limit_headroom_pct ?? 0.01) * 100).toFixed(2)),
       );
@@ -49,10 +160,6 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
     setSaved(false);
     setErr(null);
     try {
-      const tickerList = tickers
-        .split(",")
-        .map((t) => t.trim().toUpperCase())
-        .filter(Boolean);
       await upsertLiveCaps(strategyId, {
         max_inr: Number(maxInr),
         max_orders_per_day: Math.min(50, Math.max(0, Number(maxOrders))),
@@ -63,7 +170,6 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
         ),
       });
       setSaved(true);
-      // Invalidate gate-status so the toggle re-evaluates caps_set
       await revalidateStatus();
     } catch (exc) {
       setErr(
@@ -153,13 +259,15 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
           </span>
         </label>
 
-        {/* Currently committed (read-only, exposure-based) */}
+        {/* Currently committed (read-only) */}
         <div className="flex flex-col gap-0.5">
           <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
             Currently committed (read-only)
           </span>
-          <div className="rounded border border-slate-200 px-2 py-1 text-sm
-            dark:border-slate-700 dark:text-slate-300">
+          <div
+            className="rounded border border-slate-200 px-2 py-1 text-sm
+              dark:border-slate-700 dark:text-slate-300"
+          >
             ₹{caps?.cumulative_inr_today?.toLocaleString("en-IN") ?? 0}
             {" · "}
             {caps?.orders_count_today ?? 0} open
@@ -171,25 +279,21 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
         </div>
       </div>
 
-      {/* Allowed tickers */}
-      <label className="flex flex-col gap-0.5">
+      {/* Allowed tickers — chip tag input */}
+      <div className="flex flex-col gap-0.5">
         <span className="text-[11px] font-medium text-slate-600 dark:text-slate-400">
-          Allowed tickers (comma-separated, NSE symbols)
+          Allowed tickers
+          <span className="ml-1 font-normal text-slate-400">
+            ({tickerList.length} NSE symbols)
+          </span>
         </span>
-        <input
-          type="text"
-          value={tickers}
-          onChange={(e) => setTickers(e.target.value)}
-          placeholder="RELIANCE, TCS, INFY"
-          className="rounded border border-slate-300 px-2 py-1 text-sm
-            dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-          data-testid="live-caps-allowed-tickers"
-        />
+        <TickerTagInput value={tickerList} onChange={setTickerList} />
         <span className="text-[10px] text-slate-400">
-          Empty list = all signals rejected. At least one ticker is
-          required before enabling live trading.
+          Type symbol + Enter (or comma) to add · × to remove ·
+          paste comma-separated to bulk-add. Empty = all signals
+          rejected.
         </span>
-      </label>
+      </div>
 
       <div className="flex items-center gap-3">
         <button
