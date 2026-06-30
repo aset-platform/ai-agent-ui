@@ -68,3 +68,18 @@ await expect(page.locator("[data-testid=chart]"))
 - UI rendering + navigation: well covered (173 tests)
 - Business workflows: portfolio CRUD, payments, subscription lifecycle, admin CRUD
 - Performance: Lighthouse thresholds (LCP < 2.5s, FCP < 1.8s, TBT < 300ms, CLS < 0.1)
+
+## React 19 Controlled Input Gotcha
+
+`fill()` does **NOT** reliably trigger React 19's synthetic `onChange` on controlled
+`<input>` / `<textarea>` with `value={state}` + `onChange={handler}`.
+
+**Always use `pressSequentially` with a delay for controlled inputs:**
+```typescript
+await input.click();  // focus first
+await input.pressSequentially("my text", { delay: 30 });
+```
+
+This simulates real keystrokes → fires native `input` events → React picks up
+via `e.target.value`. The `fill()` method bypasses the native event chain and
+leaves the React state out of sync.

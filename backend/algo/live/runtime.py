@@ -36,7 +36,7 @@ import logging
 import os
 import time as _time
 from datetime import date, datetime, time, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -1457,9 +1457,23 @@ class LiveRuntime:
 
             if event.event_type == "STOP_UPDATED":
                 old_gtt_id = self._gtt_ids.get(ticker)
-                stop = mgr.current_stop
-                limit = stop * (
-                    1.0 - self._gtt_limit_headroom_pct
+                _tick = get_tick_size(
+                    kc=self._kite,
+                    redis_client=self._kite._get_redis(),
+                    symbol=ticker,
+                )
+                stop = float(
+                    (Decimal(str(mgr.current_stop)) / _tick)
+                    .quantize(Decimal("1"), rounding=ROUND_DOWN)
+                    * _tick
+                )
+                limit = float(
+                    (
+                        Decimal(str(mgr.current_stop))
+                        * (1 - Decimal(str(self._gtt_limit_headroom_pct)))
+                        / _tick
+                    ).quantize(Decimal("1"), rounding=ROUND_DOWN)
+                    * _tick
                 )
                 try:
                     if old_gtt_id:
@@ -1764,8 +1778,24 @@ class LiveRuntime:
             atr=atr,
             ticker=ticker,
         )
-        stop = mgr.current_stop
-        limit = stop * (1.0 - self._gtt_limit_headroom_pct)
+        _tick = get_tick_size(
+            kc=self._kite,
+            redis_client=self._kite._get_redis(),
+            symbol=ticker,
+        )
+        stop = float(
+            (Decimal(str(mgr.current_stop)) / _tick)
+            .quantize(Decimal("1"), rounding=ROUND_DOWN)
+            * _tick
+        )
+        limit = float(
+            (
+                Decimal(str(mgr.current_stop))
+                * (1 - Decimal(str(self._gtt_limit_headroom_pct)))
+                / _tick
+            ).quantize(Decimal("1"), rounding=ROUND_DOWN)
+            * _tick
+        )
         try:
             gtt_id = self._kite.place_gtt(
                 ticker=ticker,
@@ -2258,8 +2288,24 @@ class LiveRuntime:
             if ltp > avg_price:
                 mgr.on_price_update(ltp)
 
-            stop = mgr.current_stop
-            limit = stop * (1.0 - self._gtt_limit_headroom_pct)
+            _tick = get_tick_size(
+                kc=self._kite,
+                redis_client=self._kite._get_redis(),
+                symbol=ticker,
+            )
+            stop = float(
+                (Decimal(str(mgr.current_stop)) / _tick)
+                .quantize(Decimal("1"), rounding=ROUND_DOWN)
+                * _tick
+            )
+            limit = float(
+                (
+                    Decimal(str(mgr.current_stop))
+                    * (1 - Decimal(str(self._gtt_limit_headroom_pct)))
+                    / _tick
+                ).quantize(Decimal("1"), rounding=ROUND_DOWN)
+                * _tick
+            )
 
             # No GTT on Kite — place a fresh one.
             # ltp captured in closure so lambda binds the right value

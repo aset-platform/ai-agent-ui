@@ -214,6 +214,24 @@ def create_broker_router() -> APIRouter:
     async def disconnect(
         user: UserContext = Depends(pro_or_superuser),
     ) -> None:
+        """Revoke the current access token but keep the API key.
+
+        After this call broker status transitions to key_set so the user
+        can reconnect with one click without re-entering their API key.
+        """
+        factory = _get_session_factory()
+        async with factory() as session:
+            await repo.revoke_access_token(session, UUID(user.user_id))
+
+    @router.delete("/key", status_code=status.HTTP_204_NO_CONTENT)
+    async def remove_api_key(
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> None:
+        """Fully remove the broker credentials row (API key + token).
+
+        Use this when the user wants to switch to a different Kite app or
+        fully unlink Zerodha from their account.
+        """
         factory = _get_session_factory()
         async with factory() as session:
             await repo.delete(session, UUID(user.user_id))

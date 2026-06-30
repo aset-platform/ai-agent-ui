@@ -51,8 +51,16 @@ export async function getLoginUrl(): Promise<string> {
   return body.url;
 }
 
-export async function disconnectBroker(): Promise<void> {
+export async function revokeToken(): Promise<void> {
   const r = await apiFetch(`${API_URL}/algo/broker`, {
+    method: "DELETE",
+  });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  await mutate(KEY);
+}
+
+export async function removeApiKey(): Promise<void> {
+  const r = await apiFetch(`${API_URL}/algo/broker/key`, {
     method: "DELETE",
   });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);

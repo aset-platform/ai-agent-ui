@@ -139,9 +139,7 @@ Aggregating N entities with stale inputs → amber chip in panel title with hove
 ### 5.6 ★ Modals
 
 z-index ladder: slideovers `z-[60]` · modals `z-[70]` · tooltips/popovers `z-[80]` · toasts `z-[90]`.
-
 Cross-page portfolio modals mounted ONCE in `(authenticated)/layout.tsx` via `PortfolioActionsProvider`. Dispatch via `usePortfolioActions()`. NEVER route-redirect to open a modal.
-
 View-first edit-from-within: eye icon → view modal; edit pencil INSIDE view modal per-row. Confirm-modal DELETE handlers MUST treat 404 as success alongside 204. → `modal-stacking-pattern`, `portfolio-management`, `portfolio-watchlist-sync`
 
 ### 5.7 ★ Admin scope-aware (pro vs superuser)
@@ -154,15 +152,7 @@ View-first edit-from-within: eye icon → view modal; edit pencil INSIDE view mo
 
 ### 5.9 Insights ticker scoping (3-tier)
 
-`insights_routes.py::_scoped_tickers(user, scope)`. Scope ∈ `{discovery, watchlist, portfolio}`:
-
-| Tab → scope | Who sees what |
-|---|---|
-| `discovery` (Screener, ScreenQL, Sectors, Piotroski) | Pro/superuser: full universe (`stock`+`etf`); General: watchlist ∪ holdings |
-| `watchlist` (Risk, Targets, Dividends) | Watchlist ∪ holdings |
-| `portfolio` (Correlation, Quarterly) | Holdings only (`quantity > 0`) |
-
-Full-universe filter: `ticker_type IN ('stock', 'etf')`. Per-user cache key MUST include `user_id`.
+3-scope `_scoped_tickers()` (discovery/watchlist/portfolio) → `.claude/rules/insights.md`.
 
 ### 5.10 Forecast pipeline
 
@@ -242,7 +232,6 @@ New routes/Pydantic fields/routers/jobs all need `restart`; `add_column()` needs
 - Mount-gate (`if (!mounted) return <Spinner/>`) in layout floors LCP. Audit providers for SSR safety. → `auth-layout-ssr-unlock`
 - **LCP regression**: Render Delay = 100% w/ FCP healthy → loading-gate or `<Suspense fallback={null}>`. → `loading-gate-lcp-anti-pattern`, `suspense-fallback-null-ssr-hole`
 - **Sign Out bounces to /dashboard** — must POST `/v1/auth/logout` before `clearTokens()`. See §5.3.
-- React `set-state-in-effect` rule: see §5.3 (queueMicrotask pattern).
 
 ### 6.7 Sync→async migration
 
