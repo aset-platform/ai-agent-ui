@@ -3088,7 +3088,7 @@ function WatchlistStocksTab() {
             {/* Score — multi-select */}
             <div className="flex items-center gap-1.5">
               <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
-                Score
+                QMScore
               </label>
               <ScoreMultiSelect
                 selected={scoreFilter}
@@ -3299,9 +3299,9 @@ function WatchlistStocksTab() {
                   },
                   {
                     key: "score",
-                    label: "Score",
+                    label: "QMScore",
                     tooltip:
-                      "Composite score (0–100), higher = stronger quality + momentum.\n\n" +
+                      "Quality Momentum Score (QMScore) — composite 0–100, higher = stronger quality + momentum.\n\n" +
                       "Percentile-ranked cross-stock (higher rank = better):\n" +
                       "  Sharpe (6M)        30%\n" +
                       "  Blended RS         30%\n" +
