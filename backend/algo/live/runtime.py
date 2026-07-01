@@ -1826,6 +1826,37 @@ class LiveRuntime:
             "(gtt_id=%s, lock released)", ticker, gtt_id,
         )
 
+    def _apply_gtt_triggered_sell_fill(
+        self,
+        *,
+        ticker: str,
+        fill_price: float,
+        qty: int,
+    ) -> None:
+        """Apply a synthetic SELL fill for a Kite-fired GTT.
+
+        Called from the postback webhook when a GTT SELL has no
+        in-flight entry.  Safe to call a second time — SELL on an
+        already-closed position is a no-op in PositionTracker.
+        """
+        from backend.algo.backtest.types import Fill
+        _fill = Fill(
+            intent_id=uuid4(),
+            ticker=ticker,
+            side="SELL",
+            qty=qty,
+            fill_price=Decimal(str(fill_price)),
+            fill_date=datetime.now(timezone.utc).date(),
+            fees_inr=Decimal("0"),
+            fee_rates_version="gtt_postback",
+        )
+        self._positions.apply_fill(_fill)
+        _logger.info(
+            "gtt-postback: synthetic SELL fill applied "
+            "%s qty=%d @₹%.4f",
+            ticker, qty, fill_price,
+        )
+
     def on_buy_fill_trailing(
         self,
         *,

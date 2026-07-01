@@ -320,6 +320,34 @@ class PaperSupervisor:
             return None
         return entry.get("runtime")
 
+    def find_live_runtime_with_gtt(
+        self,
+        *,
+        user_id: UUID,
+        ticker: str,
+    ) -> tuple[Any, UUID | None]:
+        """Return (LiveRuntime, strategy_id) for the active live run
+        that tracks a GTT for ``ticker``.
+
+        Used by the postback webhook to attribute a GTT-triggered SELL
+        to its owning strategy when no in-flight entry exists.
+        Returns (None, None) when no matching live run is found.
+        """
+        for (uid, strat_id), entry in self._runs.items():
+            if uid != user_id:
+                continue
+            task: asyncio.Task = entry["task"]
+            if task.done():
+                continue
+            if entry.get("mode") != "live":
+                continue
+            rt = entry.get("runtime")
+            if rt is None:
+                continue
+            if ticker in getattr(rt, "_gtt_ids", {}):
+                return rt, strat_id
+        return None, None
+
     @staticmethod
     def _public_row(entry: dict[str, Any]) -> dict[str, Any]:
         task: asyncio.Task = entry["task"]
