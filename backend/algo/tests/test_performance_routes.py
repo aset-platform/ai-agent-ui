@@ -113,3 +113,137 @@ def test_list_runs_handles_pending_with_no_summary(app):
     rows = r.json()
     assert rows[0]["total_pnl_inr"] is None
     assert rows[0]["status"] == "pending"
+
+
+def test_summary_requires_valid_mode(app):
+    a, _ = app
+    client = TestClient(a)
+    r = client.get("/v1/algo/performance/summary?mode=bogus")
+    assert r.status_code == 422
+
+
+def test_summary_backtest_mode_aggregates_trade_list(app, monkeypatch):
+    a, fake_session = app
+    sid = uuid4()
+    row = {
+        "strategy_id": sid,
+        "strategy_name": "RSI(2) v5",
+        "summary_json": {
+            "max_drawdown_pct": "4.2",
+            "trade_list": [
+                {
+                    "ticker": "ITC", "realised_pnl_inr": 500,
+                    "closed_at": "2026-06-10",
+                },
+                {
+                    "ticker": "TCS", "realised_pnl_inr": -200,
+                    "closed_at": "2026-06-12",
+                },
+            ],
+        },
+    }
+
+    class _Res:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [row]
+    fake_session.execute = AsyncMock(return_value=_Res())
+
+    import backend.algo.routes.performance as perf_mod
+    monkeypatch.setattr(
+        perf_mod, "get_cache",
+        lambda: MagicMock(get=lambda k: None, set=lambda *a, **k: None),
+    )
+
+    client = TestClient(a)
+    r = client.get(
+        f"/v1/algo/performance/summary?mode=backtest"
+        f"&strategy_id={sid}&lookback=all",
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["mode"] == "backtest"
+    assert len(body["strategies"]) == 1
+    s = body["strategies"][0]
+    assert s["total_trades"] == 2
+    assert s["wins"] == 1
+    assert s["losses"] == 1
+    assert s["win_rate_pct"] == 50.0
+    assert s["biggest_win"]["ticker"] == "ITC"
+    assert s["biggest_loss"]["ticker"] == "TCS"
+    assert s["max_drawdown_pct"] == 4.2
+    assert len(body["trades"]) == 2
+
+
+def test_summary_live_mode_reads_closed_trades(app, monkeypatch):
+    a, fake_session = app
+    sid = uuid4()
+    row = {
+        "strategy_id": sid,
+        "strategy_name": "RSI(2) v5",
+        "ticker": "SHAILY",
+        "realised_pnl_inr": -890.0,
+        "closed_at": date(2026, 6, 25),
+        "qty": 3,
+        "avg_price": 1200.0,
+        "fill_price": 903.33,
+        "opened_at": date(2026, 6, 20),
+        "return_pct": -24.7,
+        "exit_reason": "stop_loss",
+        "opened_at_ts_ns": None,
+        "closed_at_ts_ns": None,
+    }
+
+    class _Res:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [row]
+    fake_session.execute = AsyncMock(return_value=_Res())
+
+    import backend.algo.routes.performance as perf_mod
+    monkeypatch.setattr(
+        perf_mod, "get_cache",
+        lambda: MagicMock(get=lambda k: None, set=lambda *a, **k: None),
+    )
+
+    client = TestClient(a)
+    r = client.get(
+        f"/v1/algo/performance/summary?mode=live"
+        f"&strategy_id={sid}&lookback=30d",
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    s = body["strategies"][0]
+    assert s["total_trades"] == 1
+    assert s["losses"] == 1
+    assert s["max_drawdown_pct"] is None
+    assert body["trades"][0]["ticker"] == "SHAILY"
+    assert body["trades"][0]["holding_days"] == 5
+
+
+def test_summary_no_strategy_id_omits_trades_list(app, monkeypatch):
+    a, fake_session = app
+
+    class _Res:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return []
+    fake_session.execute = AsyncMock(return_value=_Res())
+
+    import backend.algo.routes.performance as perf_mod
+    monkeypatch.setattr(
+        perf_mod, "get_cache",
+        lambda: MagicMock(get=lambda k: None, set=lambda *a, **k: None),
+    )
+
+    client = TestClient(a)
+    r = client.get("/v1/algo/performance/summary?mode=live")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["trades"] == []
