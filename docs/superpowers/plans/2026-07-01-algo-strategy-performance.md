@@ -1090,7 +1090,6 @@ def main() -> None:
         {"window_days": _BACKFILL_WINDOW_DAYS},
     )
     _logger.info("backfill result: %s", result)
-    print(result)
 
 
 if __name__ == "__main__":
