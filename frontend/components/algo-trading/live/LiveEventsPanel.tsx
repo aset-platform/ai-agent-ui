@@ -118,6 +118,11 @@ const TYPE_BADGE: Record<string, BadgeStyle> = {
     text: "text-orange-800 dark:text-orange-200",
     label: "ADJUSTED",
   },
+  gtt_triggered: {
+    bg: "bg-amber-100 dark:bg-amber-900/40",
+    text: "text-amber-800 dark:text-amber-200",
+    label: "GTT-HIT",
+  },
 };
 
 const FALLBACK_BADGE: BadgeStyle = {
@@ -207,6 +212,13 @@ function summarise(
       const oldQty = payload["old_qty"];
       const newQty = payload["new_qty"];
       return `${sym} ${side} qty ${oldQty} → ${newQty}`;
+    }
+    case "gtt_triggered": {
+      const stop = payload["stop_price"];
+      const source = String(payload["source"] ?? "");
+      return `${sym} SELL × ${qty}`
+        + (stop != null ? ` @ ₹${stop}` : "")
+        + (source ? ` [${source}]` : "");
     }
     default:
       return sym || "—";

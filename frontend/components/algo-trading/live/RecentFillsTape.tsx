@@ -1,30 +1,37 @@
 "use client";
 
+import { useMemo } from "react";
+
 import { formatIstTime, todayIstIso } from "@/lib/datetime";
 import { usePaperEvents } from "@/hooks/usePaperEvents";
 
 /**
  * Footer-zone tape: latest LIVE fills today (real money only).
  *
- * Backend event type is `order_filled_live` (not `order_filled` —
- * that's paper) and the payload keys are `symbol` / `side` / `qty`
- * / `price` (see backend/algo/live/runtime.py). Timestamp is
- * nanoseconds since epoch on `ts_ns`.
+ * Pulls two event types and merges them:
+ *   - ``order_filled_live`` — exchange fills placed by the runtime
+ *   - ``gtt_triggered`` — GTT exits detected by the 15-min ratchet
+ *     poll or the postback fallback (both paths emit this type so
+ *     GTT exits always appear here even without a matching in-flight
+ *     entry)
  *
- * Server-side filters keep the panel scoped to what the trader
- * actually wants to see on the Live page:
- *   - ``type=order_filled_live`` — only real fills
- *   - ``mode=live`` — never paper / backtest
- *   - ``dry_run=false`` — never synthetic rehearsal fills
- *   - ``since_date=<today IST>`` — never yesterday's session
- * Previously the panel pulled every type+mode+day mixed and
- * filtered client-side, which leaked dry-run fills + prior
- * sessions into the visible list.
+ * Scoped to: mode=live, dry_run=false, today IST.
  */
 export function RecentFillsTape() {
-  const { events: fills } = usePaperEvents(
-    20, 0, "live", false, "order_filled_live", todayIstIso(),
+  const today = todayIstIso();
+  const { events: normalFills } = usePaperEvents(
+    20, 0, "live", false, "order_filled_live", today,
   );
+  const { events: gttFills } = usePaperEvents(
+    20, 0, "live", false, "gtt_triggered", today,
+  );
+
+  const fills = useMemo(() => {
+    return [...normalFills, ...gttFills]
+      .sort((a, b) => b.ts_ns - a.ts_ns)
+      .slice(0, 20);
+  }, [normalFills, gttFills]);
+
   return (
     <div
       className="rounded-md border border-slate-200 dark:border-slate-700 p-3"
@@ -43,13 +50,29 @@ export function RecentFillsTape() {
           const p = e.payload;
           const tsMs = Math.floor(Number(e.ts_ns) / 1_000_000);
           const time = formatIstTime(tsMs);
+          // Normalise across order_filled_live (symbol/price) and
+          // gtt_triggered (ticker/stop_price) payload shapes.
+          const sym = String(p.symbol ?? p.ticker ?? "");
+          const side = e.type === "gtt_triggered"
+            ? "SELL"
+            : String(p.side ?? "");
+          const price = String(p.price ?? p.stop_price ?? "");
+          const isGtt = e.type === "gtt_triggered";
           return (
             <li
               key={e.event_id}
               className="text-slate-700 dark:text-slate-300"
             >
-              {time} · {String(p.side ?? "")} {String(p.qty ?? "")}{" "}
-              {String(p.symbol ?? "")} @ ₹{String(p.price ?? "")}
+              {time} · {side} {String(p.qty ?? "")}{" "}
+              {sym} @ ₹{price}
+              {isGtt && (
+                <span
+                  className="ml-1 text-[9px] text-amber-600
+                    dark:text-amber-400 font-semibold uppercase"
+                >
+                  GTT
+                </span>
+              )}
             </li>
           );
         })}

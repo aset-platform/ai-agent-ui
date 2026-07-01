@@ -324,6 +324,7 @@ async def kite_postback(request: Request) -> dict:
     # submission but no resolution, even after Kite confirms.
     status = str(payload.get("status", "")).upper()
     matched_strategy_id: Any = None
+    matched_entry: dict[str, Any] | None = None
     _side = str(payload.get("transaction_type", "")).upper()
     _sym = str(payload.get("tradingsymbol", ""))
     _qty = int(payload.get("filled_quantity", 0) or 0)
@@ -332,20 +333,24 @@ async def kite_postback(request: Request) -> dict:
         our_user_id is not None
     ):
         try:
-            matched_strategy_id = await _reconcile_terminal_with_in_flight(
-                user_id=our_user_id,
-                status=status,
-                kite_order_id=str(payload.get("order_id", "")),
-                tradingsymbol=_sym,
-                side=_side,
-                qty=_qty,
-                avg_price=_avg,
-                status_message=str(
-                    payload.get("status_message")
-                    or payload.get("status_message_raw")
-                    or "",
-                ),
-                rows_to_persist=rows_to_persist,
+            matched_strategy_id, matched_entry = (
+                await _reconcile_terminal_with_in_flight(
+                    user_id=our_user_id,
+                    status=status,
+                    kite_order_id=str(
+                        payload.get("order_id", "")
+                    ),
+                    tradingsymbol=_sym,
+                    side=_side,
+                    qty=_qty,
+                    avg_price=_avg,
+                    status_message=str(
+                        payload.get("status_message")
+                        or payload.get("status_message_raw")
+                        or "",
+                    ),
+                    rows_to_persist=rows_to_persist,
+                )
             )
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
@@ -415,6 +420,81 @@ async def kite_postback(request: Request) -> dict:
                 _sym, exc, exc_info=True,
             )
 
+    # GTT-triggered SELL fallback: Kite fires our GTT autonomously
+    # so there is no in-flight entry → matched_strategy_id is None
+    # and the block above is skipped.  Find the live runtime that
+    # owns the GTT for this symbol and handle accounting here.
+    # Piece A (_ratchet_all_gtts) is the 15-min backup; whichever
+    # runs first wins — both paths are idempotent.
+    if (
+        status == "COMPLETE"
+        and _side == "SELL"
+        and our_user_id is not None
+        and matched_strategy_id is None
+        and _qty > 0
+        and _avg > 0
+    ):
+        try:
+            from backend.algo.paper.supervisor import get_supervisor
+            _ticker_ns = (
+                _sym + ".NS" if "." not in _sym else _sym
+            )
+            _gtt_rt, _gtt_strat_id = (
+                get_supervisor().find_live_runtime_with_gtt(
+                    user_id=our_user_id,
+                    ticker=_ticker_ns,
+                )
+            )
+            if _gtt_rt is not None and _gtt_strat_id is not None:
+                # Capture gtt_id before _on_sell_fill_trailing pops it.
+                _captured_gtt_id = (
+                    _gtt_rt._gtt_ids.get(_ticker_ns, 0)
+                )
+                # Apply synthetic fill to position tracker.
+                _gtt_rt._apply_gtt_triggered_sell_fill(
+                    ticker=_ticker_ns,
+                    fill_price=_avg,
+                    qty=_qty,
+                )
+                # Clear trailing state (delete GTT on Kite, release lock).
+                _gtt_rt._on_sell_fill_trailing(
+                    _ticker_ns, reason="gtt_triggered",
+                )
+                # Emit attribution event.
+                from backend.algo.backtest.event_writer import (
+                    event_row as _event_row,
+                )
+                rows_to_persist.append(
+                    _event_row(
+                        session_id=_NULL_UUID,
+                        user_id=our_user_id,
+                        strategy_id=_gtt_strat_id,
+                        mode="live",
+                        type_="gtt_triggered",
+                        payload={
+                            "ticker": _ticker_ns,
+                            "qty": _qty,
+                            "stop_price": str(_avg),
+                            "gtt_id": _captured_gtt_id,
+                            "dry_run": False,
+                            "source": "postback",
+                        },
+                    )
+                )
+                _logger.info(
+                    "kite postback: GTT-triggered SELL "
+                    "attributed to strategy %s for %s "
+                    "qty=%d @₹%.2f gtt_id=%s",
+                    _gtt_strat_id, _ticker_ns,
+                    _qty, _avg, _captured_gtt_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "kite postback: GTT SELL fallback failed "
+                "for %s: %s",
+                _sym, exc, exc_info=True,
+            )
+
     await asyncio.to_thread(flush_events, rows_to_persist)
 
     # Cache invalidation per CLAUDE.md §5.13.
@@ -446,7 +526,7 @@ async def _reconcile_terminal_with_in_flight(
     avg_price: float,
     status_message: str,
     rows_to_persist: list[dict],
-) -> UUID | None:
+) -> tuple[UUID | None, dict[str, Any] | None]:
     """Find the matching in-flight order across this user's
     live runs, transition it to the terminal status, and append
     the matching derived event to ``rows_to_persist``.
@@ -610,7 +690,7 @@ async def _reconcile_terminal_with_in_flight(
             "(panic-close or out-of-band order)",
             kite_order_id, status, tradingsymbol, qty,
         )
-    return matched_strategy_id
+    return matched_strategy_id, matched_entry
 
 
 def create_webhooks_router() -> APIRouter:

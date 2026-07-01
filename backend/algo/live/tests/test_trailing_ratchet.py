@@ -278,6 +278,111 @@ class TestRatchetAllGtts:
         assert "INFY.NS" in rt._trailing_managers
 
 
+# ── Tests: GTT-triggered detection ───────────────────────────────────────────
+
+class TestGttTriggeredDetection:
+    """_ratchet_all_gtts: GTT poll detects Kite-triggered exits."""
+
+    def test_triggered_clears_state_and_emits_event(self):
+        """GTT ID gone from Kite → state cleared + gtt_triggered emitted.
+
+        Note: _seed_manager mocks open_positions() but leaves
+        PositionTracker._open empty, so apply_fill is a no-op (SELL
+        with no open position). In production the tracker IS populated
+        from the real BUY fill. We verify the event payload and state
+        cleanup — that is the observable contract of this code path.
+        """
+        import json
+        rt = _make_runtime()
+        _seed_manager(
+            rt, entry_price=1000.0, atr=20.0, gtt_id=55, qty=10,
+        )
+        rt._dry_run = False  # __init__ reads kite.dry_run (no _); fix here
+        rt._ticker_locked.add("INFY.NS")
+        rt._ws_hwm["INFY.NS"] = 0.0  # no WS price → HWM path won't fire
+
+        # Kite only knows an unrelated GTT — our gtt_id=55 is gone
+        rt._kite.get_gtts.return_value = [
+            {"id": 999, "status": "active"},
+        ]
+
+        with patch.object(
+            rt, "_sync_ticker_lock_to_redis"
+        ) as mock_sync:
+            rt._ratchet_all_gtts()
+
+        # Trailing state fully cleaned up
+        assert "INFY.NS" not in rt._trailing_managers
+        assert "INFY.NS" not in rt._gtt_ids
+        assert "INFY.NS" not in rt._ws_hwm
+        assert "INFY.NS" not in rt._ticker_locked
+
+        # Lock flushed to Redis
+        mock_sync.assert_called()
+
+        # gtt_triggered event in the buffer with correct payload
+        gtt_events = [
+            e for e in rt._events
+            if e.get("type") == "gtt_triggered"
+        ]
+        assert len(gtt_events) == 1
+        payload = json.loads(gtt_events[0]["payload_json"])
+        assert payload["ticker"] == "INFY.NS"
+        assert payload["source"] == "gtt_poll"
+        assert payload["gtt_id"] == 55
+        assert payload["qty"] == 10
+
+        # No emergency SELL placed (Kite already handled it)
+        rt._kite.place_order.assert_not_called()
+        rt._kite.place_gtt.assert_not_called()
+
+    def test_gtt_still_active_not_treated_as_triggered(self):
+        """GTT ID still in active list → no triggered handling."""
+        rt = _make_runtime()
+        rt._dry_run = False
+        _seed_manager(rt, entry_price=1000.0, atr=20.0, gtt_id=55)
+        rt._ws_hwm["INFY.NS"] = 0.0  # no HWM change
+
+        rt._kite.get_gtts.return_value = [
+            {"id": 55, "status": "active"},
+        ]
+
+        rt._ratchet_all_gtts()
+
+        assert "INFY.NS" in rt._trailing_managers
+        assert rt._gtt_ids.get("INFY.NS") == 55
+        assert not any(
+            e.get("type") == "gtt_triggered" for e in rt._events
+        )
+
+    def test_get_gtts_failure_skips_detection_no_crash(self):
+        """get_gtts raises → detection skipped, no crash, HWM eval runs."""
+        rt = _make_runtime()
+        rt._dry_run = False
+        _seed_manager(rt, entry_price=1000.0, atr=20.0, gtt_id=55)
+        rt._ws_hwm["INFY.NS"] = 0.0  # no price → HWM path is no-op
+
+        rt._kite.get_gtts.side_effect = RuntimeError("API down")
+
+        rt._ratchet_all_gtts()  # must not raise
+
+        assert "INFY.NS" in rt._trailing_managers
+        assert not any(
+            e.get("type") == "gtt_triggered" for e in rt._events
+        )
+
+    def test_dry_run_skips_get_gtts(self):
+        """In dry-run mode, get_gtts is never called."""
+        rt = _make_runtime()
+        rt._dry_run = True
+        _seed_manager(rt, gtt_id=0)  # dry-run uses gtt_id=0
+        rt._ws_hwm["INFY.NS"] = 0.0
+
+        rt._ratchet_all_gtts()
+
+        rt._kite.get_gtts.assert_not_called()
+
+
 # ── Tests: WS HWM tick update ──────────────────────────────────────────────
 
 class TestWsHwmUpdate:
