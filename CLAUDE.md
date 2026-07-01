@@ -74,6 +74,7 @@ DB inventory: 19 PG OLTP + 12 Iceberg OLAP → `db-table-inventory`. Data home: 
 
 23. Branch off `dev`; never push to `dev`/`qa`/`release`/`main`. Hotfix: branch off `main`, PR to `main`, sync DOWN. Keep feature branch until sprint history stale.
 24. Co-Authored-By: `Abhay Kumar Singh <asequitytrading@gmail.com>`.
+24a. **Pipeline seed scripts are source-of-truth** — they `DELETE FROM pipeline_steps` then reinsert only their `STEPS` list; any Admin-UI-added steps not in `STEPS` are silently wiped on re-seed. Backport UI changes to the script before re-running.
 25. Update `PROGRESS.md` per session (dated); `git add .serena/` before push. Doc triggers: `docs/` for API changes · new Serena memory per new pattern · `README.md` env-vars table for new config.
 26. Test-after-feature — write immediately after smoke test passes; happy + 1 error path minimum.
 27. **PR merge on `dev`: squash only** (merge-commit + rebase blocked).
@@ -201,7 +202,7 @@ Pre-PR `npm run perf:check` (LHCI on /login); full 34-route containerized Lighth
 
 ### 6.2 Backend restart triggers (uvicorn --reload isn't enough)
 
-New routes/Pydantic fields/routers/jobs all need `restart`; `add_column()` needs `restart` + Redis FLUSHALL; new env var needs `up -d --force-recreate`. Sleep 5s before auth calls after restart (asyncpg shutdown race). **`restart backend` also kills the live Kite WS session** — user must manually reconnect from Algo Trading UI. → `backend-restart-triggers`
+New routes/Pydantic fields/routers/jobs all need `restart`; `add_column()` needs `restart` + Redis FLUSHALL; new env var needs `up -d --force-recreate`. Sleep 5s before auth calls after restart (asyncpg shutdown race). **`restart backend` also kills the live Kite WS session** — user must manually reconnect from Algo Trading UI. **Direct DB changes to `pipeline_steps`/`pipelines` also need restart** — `scheduler_service.list_pipelines()` reads in-memory `self._pipelines` loaded at startup (no reload endpoint). → `backend-restart-triggers`
 
 ### 6.3 Cookie hostname
 
