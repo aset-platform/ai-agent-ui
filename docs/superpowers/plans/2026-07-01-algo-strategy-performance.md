@@ -1754,7 +1754,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `GET /v1/algo/performance/summary` (Task 6).
-- Produces: `useStrategyPerformance({mode, strategyId, lookback, start, end})` returning `{strategies, trades, window, loading, error}`. Task 9 (PerformanceTab rebuild) depends on this hook's exact return shape and the `PerformanceMode` / `StrategyPerfRow` / `PerfTradeRow` types it exports.
+- Produces: `useStrategyPerformance({mode, strategyId, lookback, start, end})` returning `{strategies, trades, window, loading, error}`. Task 9 (PerformanceTab rebuild) depends on this hook's exact return shape and the `PerformanceMode` / `StrategyPerfRow` types it exports (`trades` is typed `TradeRow[]`, reused from `useBacktestRuns` — there is no separate `PerfTradeRow` type).
 
 - [ ] **Step 1: Write the hook**
 
