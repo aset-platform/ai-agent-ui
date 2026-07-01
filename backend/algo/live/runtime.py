@@ -1439,7 +1439,104 @@ class LiveRuntime:
         the WS HWM (i.e. the GTT fired but the postback hasn't
         arrived yet, or the GTT missed).
         """
+        # ── GTT-triggered detection ──────────────────────────────
+        # Poll the live Kite GTT book once per ratchet tick. Any of
+        # our tracked GTT IDs no longer "active" were triggered by
+        # Kite (stop price hit on exchange). Accounting is done here
+        # because the Kite postback for a GTT-fired order never
+        # matches an in-flight entry (_submit_order didn't place it),
+        # so _on_sell_fill_trailing is never called via the postback.
+        # Skipped in dry-run: all gtt_ids are 0, no real GTTs exist.
+        _triggered_tickers: set[str] = set()
+        if not self._dry_run and self._gtt_ids:
+            try:
+                _all_kite_gtts = self._kite.get_gtts()
+                _active_gtt_ids: set[int] = {
+                    int(_g["id"])
+                    for _g in _all_kite_gtts
+                    if _g.get("status") == "active"
+                }
+                for _tk, _gid in self._gtt_ids.items():
+                    if _gid > 0 and _gid not in _active_gtt_ids:
+                        _triggered_tickers.add(_tk)
+                if _triggered_tickers:
+                    _logger.info(
+                        "ratchet: GTT-triggered detection: "
+                        "%d ticker(s) no longer active on "
+                        "Kite: %s",
+                        len(_triggered_tickers),
+                        _triggered_tickers,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "ratchet: get_gtts failed — skipping "
+                    "triggered-GTT detection this tick: %s",
+                    exc, exc_info=True,
+                )
+
         for ticker, mgr in list(self._trailing_managers.items()):
+            # ── GTT-triggered accounting ──────────────────────────
+            if ticker in _triggered_tickers:
+                _pos = self._positions.open_positions().get(ticker)
+                _fill_qty = _pos.qty if _pos is not None else 0
+                _stop_price = mgr.current_stop
+                _gtt_id = self._gtt_ids.get(ticker, 0)
+                _phase = mgr.state.phase.value
+                if _fill_qty > 0:
+                    from backend.algo.backtest.types import Fill
+                    _fill = Fill(
+                        intent_id=uuid4(),
+                        ticker=ticker,
+                        side="SELL",
+                        qty=_fill_qty,
+                        fill_price=Decimal(str(_stop_price)),
+                        fill_date=datetime.now(timezone.utc).date(),
+                        fees_inr=Decimal("0"),
+                        fee_rates_version="gtt_poll",
+                    )
+                    self._positions.apply_fill(_fill)
+                self._trailing_managers.pop(ticker, None)
+                self._gtt_ids.pop(ticker, None)
+                self._ws_hwm.pop(ticker, None)
+                self._ticker_locked.discard(ticker)
+                try:
+                    from backend.cache import get_cache
+                    get_cache().invalidate_exact(
+                        f"trailing:{self._user_id}:"
+                        f"{self._strategy.id}:{ticker}"
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+                self._sync_ticker_lock_to_redis()
+                self._events.append(
+                    event_row(
+                        session_id=self._session_id,
+                        user_id=self._user_id,
+                        strategy_id=self._strategy.id,
+                        mode="live",
+                        type_="gtt_triggered",
+                        payload={
+                            "ticker": ticker,
+                            "phase": _phase,
+                            "stop_price": _stop_price,
+                            "qty": _fill_qty,
+                            "gtt_id": _gtt_id,
+                            "dry_run": self._dry_run,
+                            "source": "gtt_poll",
+                        },
+                    )
+                )
+                _logger.info(
+                    "ratchet: GTT triggered for %s "
+                    "stop=%.4f qty=%d gtt_id=%s "
+                    "— position closed, state cleared",
+                    ticker,
+                    _stop_price,
+                    _fill_qty,
+                    _gtt_id,
+                )
+                continue
+
             pos = self._positions.open_positions().get(ticker)
             if pos is None or pos.qty <= 0:
                 self._trailing_managers.pop(ticker, None)
