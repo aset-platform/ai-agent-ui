@@ -405,6 +405,28 @@ class HoldingsResponse(BaseModel):
     ledger_drift: bool = False
 
 
+class UserExitRequest(BaseModel):
+    # Kite holdings API returns tradingsymbols without exchange
+    # suffix ("EQUITASBNK"); the route normalises to "EQUITASBNK.NS"
+    # before passing to the runtime so ws_hwm / _gtt_ids / _positions
+    # lookups hit the right keys.
+    ticker: str
+    strategy_id: UUID
+    qty: int         # from UI holdings row — safety anchor
+    # UI-displayed LTP: used as last-resort price if both kite.ltp()
+    # and ws_hwm are unavailable (e.g. first bar after restart).
+    price_hint: Decimal | None = None
+
+
+class UserExitResponse(BaseModel):
+    ok: bool
+    ticker: str
+    qty: int
+    price: str
+    gtt_id_cancelled: int
+    kite_order_id: str | None = None
+
+
 # ---------------------------------------------------------------
 # Live-dashboard helpers (shared by /dashboard-summary,
 # /positions, /holdings).
@@ -1565,6 +1587,74 @@ def create_live_router() -> APIRouter:
                 exc_info=True,
             )
         return out
+
+    # ----------------------------------------------------------
+    # User-initiated position exit.
+    # ----------------------------------------------------------
+    @router.post("/positions/exit", response_model=UserExitResponse)
+    async def exit_position(
+        body: UserExitRequest,
+        user: UserContext = Depends(pro_or_superuser),
+    ) -> UserExitResponse:
+        """Cancel the active GTT (if any), clear trailing state,
+        and place a LIMIT SELL for an individual holding.
+
+        Finds the live runtime via strategy_id.  If the runtime
+        does not track the position in _positions (untracked
+        holding), qty from the request body is used as the safety
+        anchor so we never over-sell.
+        """
+        from backend.algo.paper.supervisor import get_supervisor
+
+        uid = UUID(user.user_id)
+        # Kite holdings API returns bare tradingsymbols ("EQUITASBNK").
+        # Runtime keys always carry the ".NS" suffix — normalise once
+        # at the boundary so ws_hwm / _gtt_ids / _positions all hit.
+        ticker = body.ticker
+        if "." not in ticker:
+            ticker = ticker + ".NS"
+
+        rt = get_supervisor().get_live_runtime(
+            user_id=uid, strategy_id=body.strategy_id,
+        )
+        if rt is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No active live runtime for "
+                    f"strategy_id={body.strategy_id}"
+                ),
+            )
+        try:
+            result = await rt.user_exit_position(
+                ticker=ticker,
+                qty_override=body.qty,
+                price_hint=body.price_hint,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail=str(exc),
+            ) from exc
+
+        cache = get_cache()
+        for key in (
+            f"cache:algo:live:holdings:{user.user_id}",
+            f"cache:algo:live:positions:{user.user_id}",
+            f"cache:algo:live:dashboard:{user.user_id}",
+        ):
+            try:
+                cache.invalidate_exact(key)
+            except Exception:  # noqa: BLE001
+                pass
+
+        return UserExitResponse(
+            ok=result["submitted"],
+            ticker=result["ticker"],
+            qty=result["qty"],
+            price=result["price"],
+            gtt_id_cancelled=result["gtt_id_cancelled"],
+            kite_order_id=result.get("kite_order_id"),
+        )
 
     # ----------------------------------------------------------
     # OBS-1 — Kite WS health snapshot for the dashboard dot.

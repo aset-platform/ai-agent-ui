@@ -8,12 +8,14 @@ import { usePaperEvents } from "@/hooks/usePaperEvents";
 /**
  * Footer-zone tape: latest LIVE fills today (real money only).
  *
- * Pulls two event types and merges them:
+ * Pulls three event types and merges them:
  *   - ``order_filled_live`` — exchange fills placed by the runtime
  *   - ``gtt_triggered`` — GTT exits detected by the 15-min ratchet
  *     poll or the postback fallback (both paths emit this type so
  *     GTT exits always appear here even without a matching in-flight
  *     entry)
+ *   - ``user_exit_initiated`` — user-triggered exits (LIMIT SELL
+ *     submitted; shows intent immediately before fill arrives)
  *
  * Scoped to: mode=live, dry_run=false, today IST.
  */
@@ -25,12 +27,15 @@ export function RecentFillsTape() {
   const { events: gttFills } = usePaperEvents(
     20, 0, "live", false, "gtt_triggered", today,
   );
+  const { events: userExitFills } = usePaperEvents(
+    20, 0, "live", false, "user_exit_initiated", today,
+  );
 
   const fills = useMemo(() => {
-    return [...normalFills, ...gttFills]
+    return [...normalFills, ...gttFills, ...userExitFills]
       .sort((a, b) => b.ts_ns - a.ts_ns)
       .slice(0, 20);
-  }, [normalFills, gttFills]);
+  }, [normalFills, gttFills, userExitFills]);
 
   return (
     <div
@@ -53,11 +58,13 @@ export function RecentFillsTape() {
           // Normalise across order_filled_live (symbol/price) and
           // gtt_triggered (ticker/stop_price) payload shapes.
           const sym = String(p.symbol ?? p.ticker ?? "");
-          const side = e.type === "gtt_triggered"
-            ? "SELL"
-            : String(p.side ?? "");
-          const price = String(p.price ?? p.stop_price ?? "");
           const isGtt = e.type === "gtt_triggered";
+          const isUserExit = e.type === "user_exit_initiated";
+          const side =
+            isGtt || isUserExit ? "SELL" : String(p.side ?? "");
+          const price = String(
+            p.price ?? p.stop_price ?? "",
+          );
           return (
             <li
               key={e.event_id}
@@ -71,6 +78,14 @@ export function RecentFillsTape() {
                     dark:text-amber-400 font-semibold uppercase"
                 >
                   GTT
+                </span>
+              )}
+              {isUserExit && (
+                <span
+                  className="ml-1 text-[9px] text-rose-600
+                    dark:text-rose-400 font-semibold uppercase"
+                >
+                  USR
                 </span>
               )}
             </li>

@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 
 import { useLiveHoldings } from "@/hooks/useLiveHoldings";
+import { UserExitButton } from "./UserExitButton";
 
 // ── Formatters ────────────────────────────────────────────────────
 
@@ -177,6 +178,7 @@ export function HoldingsTab() {
             <th className="px-2 py-2 text-right">P&amp;L%</th>
             <th className="px-2 py-2 text-right">Days</th>
             <th className="px-2 py-2 text-left">Strategy</th>
+            <th className="px-2 py-2 text-right">Action</th>
           </tr>
         </thead>
         <tbody>
@@ -244,6 +246,16 @@ export function HoldingsTab() {
                 <td className="px-2 py-2 text-slate-600 dark:text-slate-400">
                   {r.strategy_name ?? "—"}
                 </td>
+                <td className="px-2 py-2 text-right">
+                  {r.strategy_id != null && qty > 0 && (
+                    <UserExitButton
+                      ticker={r.tradingsymbol}
+                      strategyId={r.strategy_id}
+                      qty={qty}
+                      lastPrice={r.last_price}
+                    />
+                  )}
+                </td>
               </tr>
             );
           })}
@@ -281,6 +293,7 @@ export function HoldingsTab() {
               >
                 {fmtPct(totals.pnlPct)}
               </td>
+              <td />
               <td />
               <td />
             </tr>
