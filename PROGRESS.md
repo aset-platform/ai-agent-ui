@@ -2,6 +2,27 @@
 
 ---
 
+### 2026-07-01 — Manual position exit — cancel GTT + LIMIT SELL on demand (PRs #282, #283)
+
+**What:** Two PRs landed on `dev`.
+
+**PR #282 — shared memories + algo.md rules (docs):**
+- Added `shared/architecture/algo-user-exit-position` Serena memory — full design doc for the exit flow, price fallback chain, idempotency with Pieces A/B, UI wiring.
+- Added `shared/debugging/kite-client-ltp-wrapper-missing` — `KiteClient` has no `ltp()` wrapper; must use `_kite._kc.ltp()` (raw KiteConnect); wrong call silently produces `last_price=None`.
+- Added 3 bullets to `.claude/rules/algo.md` (Live execution safety section): ticker normalization, `_kc.ltp()`, and `async`-from-route calling pattern.
+
+**PR #283 — manual position exit feature:**
+- **`LiveRuntime.user_exit_position()`** (`backend/algo/live/runtime.py` ~L1860): cancels active GTT (best-effort via `delete_gtt`), clears trailing state (`_trailing_managers`, `_gtt_ids`, `_ws_hwm`), fetches LTP via `_kite._kc.ltp()` with `ws_hwm` + `price_hint` fallbacks, places LIMIT SELL via `_submit_order` (churn guard bypassed — `reason="user_exit"` → `is_protective=True`), emits `user_exit_initiated` event + immediate flush.
+- **`POST /v1/algo/live/positions/exit`** (`backend/algo/routes/live.py`): normalises bare Kite tradingsymbols (`"EQUITASBNK"` → `"EQUITASBNK.NS"`) at route boundary; invalidates Redis holdings/positions/dashboard cache on success.
+- **`UserExitButton.tsx`**: inline confirm popup (ticker × qty ≈ price); market-hours guard (9:15–15:30 IST Mon–Fri, 30s interval); visible only in HoldingsTab when `strategy_id` is set.
+- **LiveEventsPanel** — rose `USR-EXIT` badge for `user_exit_initiated` events.
+- **RecentFillsTape** — 3rd `usePaperEvents` call for `user_exit_initiated`; rose `USR` micro-label on rows.
+- **7 unit tests** (`backend/algo/live/tests/test_user_exit.py`): happy path, no-GTT, no-position, `qty_override`, LTP fallback to `ws_hwm`, dry-run, event payload shape.
+
+**Bug fixed during testing:** `user_exit: no valid price for EQUITASBNK (ltp=None, ws_hwm=None)` — two root causes: (1) frontend sent bare `"EQUITASBNK"` while runtime keys carry `.NS` → ws_hwm lookup missed; (2) `self._kite.ltp()` raised `AttributeError` (no wrapper) → silently caught → `last_price=None`. Fixed by route-boundary normalization + switching to `_kite._kc.ltp()` + adding `price_hint` as defense-in-depth fallback.
+
+---
+
 ### 2026-06-28 — Intraday execution-clock (Piece A) + doc-tier tooling (branch `feature/intraday-execution-clock`)
 
 **What:** Two independent tracks delivered in one session.
