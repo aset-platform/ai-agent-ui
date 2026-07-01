@@ -517,7 +517,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `pair_fills_by_strategy_and_ticker` from Task 2.
-- Produces: `run_closed_trades_rollup_job(payload: dict | None = None) -> dict` (sync entrypoint, mirrors `run_budget_reservations_retention_job`). Payload keys: `window_days` (int, default 400; pass `None` for unbounded — used by the Task 5 backfill script), `today` (ISO date override for testing), `dry_run` (bool). Task 4 (seed script) and Task 5 (backfill script) both call this function.
+- Produces: `run_closed_trades_rollup_job(payload: dict | None = None) -> dict` (sync entrypoint, mirrors `run_budget_reservations_retention_job`). Payload keys: `window_days` (int, default 400; the Task 5 backfill script passes a larger bounded value, `3650` — no unbounded scan, per the plan's own "no full-table scans" constraint), `today` (ISO date override for testing), `dry_run` (bool). Task 4 (seed script) and Task 5 (backfill script) both call this function.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -707,8 +707,9 @@ def run_closed_trades_rollup_job(
 
     Payload keys (all optional):
       - ``window_days``: trailing lookback for the Iceberg scan.
-        Default 400. Pass ``None`` for an unbounded scan (used by
-        the one-time backfill script).
+        Default 400. The one-time backfill script (Task 5) passes
+        a larger bounded value (3650, ~10 years) — never
+        unbounded, per the "no full-table scans" constraint.
       - ``today``: ISO date override (testing). Default IST-today.
       - ``dry_run``: compute + log counts, skip the PG upsert.
     """
@@ -827,39 +828,29 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _fetch_fill_events(
-    today: date, window_days: int | None,
+    today: date, window_days: int,
 ) -> list[dict[str, Any]]:
     """Pull paper + live order_filled(_live) events across every
     user for the trailing window. Column-projected, date-filtered
-    — never a full-table scan."""
+    — never a full-table scan, including the backfill caller
+    (Task 5), which passes a large but bounded ``window_days``
+    rather than an unbounded scan."""
     from backend.db.duckdb_engine import query_iceberg_table
 
     modes_clause = " OR ".join(
         "mode = ?" for _ in _ROLLUP_MODES
     )
-    if window_days is not None:
-        start = today - timedelta(days=window_days)
-        sql = (
-            "SELECT event_id, user_id, strategy_id, mode, type, "
-            "       payload_json, ts_ns "
-            "FROM events "
-            f"WHERE ({modes_clause}) "
-            "  AND type IN ('order_filled', 'order_filled_live') "
-            "  AND ts_date >= ? AND ts_date <= ? "
-            "ORDER BY ts_ns"
-        )
-        params = [*_ROLLUP_MODES, start.isoformat(), today.isoformat()]
-    else:
-        sql = (
-            "SELECT event_id, user_id, strategy_id, mode, type, "
-            "       payload_json, ts_ns "
-            "FROM events "
-            f"WHERE ({modes_clause}) "
-            "  AND type IN ('order_filled', 'order_filled_live') "
-            "  AND ts_date <= ? "
-            "ORDER BY ts_ns"
-        )
-        params = [*_ROLLUP_MODES, today.isoformat()]
+    start = today - timedelta(days=window_days)
+    sql = (
+        "SELECT event_id, user_id, strategy_id, mode, type, "
+        "       payload_json, ts_ns "
+        "FROM events "
+        f"WHERE ({modes_clause}) "
+        "  AND type IN ('order_filled', 'order_filled_live') "
+        "  AND ts_date >= ? AND ts_date <= ? "
+        "ORDER BY ts_ns"
+    )
+    params = [*_ROLLUP_MODES, start.isoformat(), today.isoformat()]
 
     try:
         return query_iceberg_table("algo.events", sql, params)
@@ -1058,7 +1049,7 @@ EOF
 - Create: `scripts/backfill_closed_trades.py`
 
 **Interfaces:**
-- Consumes: `run_closed_trades_rollup_job` from Task 3 (same function, `window_days=None`).
+- Consumes: `run_closed_trades_rollup_job` from Task 3 (same function, `window_days=3650`).
 
 - [ ] **Step 1: Write the script**
 
@@ -1069,7 +1060,9 @@ takes over.
 
 Reuses the exact same pairing + idempotent-upsert code as the
 daily job (backend/algo/jobs/closed_trades_rollup.py), just with
-an unbounded lookback window. Safe to re-run — the unique
+a much larger (but still bounded — no full-table scan) lookback
+window: 3650 days (~10 years), comfortably covering this
+platform's full trading history. Safe to re-run — the unique
 (buy_event_id, sell_event_id) constraint means re-running finds
 0 new rows on a second pass.
 
@@ -1088,10 +1081,14 @@ from backend.algo.jobs.closed_trades_rollup import (
 
 _logger = logging.getLogger(__name__)
 
+_BACKFILL_WINDOW_DAYS = 3650
+
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    result = run_closed_trades_rollup_job({"window_days": None})
+    result = run_closed_trades_rollup_job(
+        {"window_days": _BACKFILL_WINDOW_DAYS},
+    )
     _logger.info("backfill result: %s", result)
     print(result)
 
@@ -1118,8 +1115,9 @@ git commit -m "$(cat <<'EOF'
 feat(algo): add one-time backfill script for algo.closed_trades
 
 Populates full trade history before the daily rollup job takes
-over. Reuses the daily job's core function with an unbounded
-window; idempotent via the same unique constraint.
+over. Reuses the daily job's core function with a 10-year bounded
+window (no full-table scan); idempotent via the same unique
+constraint.
 
 Co-Authored-By: Abhay Kumar Singh <asequitytrading@gmail.com>
 EOF
