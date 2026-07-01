@@ -10,7 +10,7 @@ import {
 import { BacktestEquityCurve } from "./BacktestEquityCurve";
 import { BacktestRunForm } from "./BacktestRunForm";
 import { BacktestSummaryCards } from "./BacktestSummaryCards";
-import { BacktestTradeTable } from "./BacktestTradeTable";
+import { TradeLogTable } from "./TradeLogTable";
 import { SweepSubTab } from "./SweepSubTab";
 import { WalkForwardSubTab } from "./WalkForwardSubTab";
 
@@ -140,7 +140,10 @@ export function BacktestTab() {
                 points={run.equity_curve}
                 initialCapitalInr={run.initial_capital_inr}
               />
-              <BacktestTradeTable rows={run.trade_list} />
+              <TradeLogTable
+                rows={run.trade_list}
+                filenamePrefix="backtest"
+              />
             </>
           )}
         </>

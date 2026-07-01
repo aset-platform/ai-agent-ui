@@ -46,11 +46,17 @@ const VALID_KEYS = ALL_COLS.map((c) => c.key);
 
 interface Props {
   rows: TradeRow[];
+  filenamePrefix?: string;
+  emptyMessage?: string;
 }
 
-export function BacktestTradeTable({ rows }: Props) {
+export function TradeLogTable({
+  rows,
+  filenamePrefix = "backtest",
+  emptyMessage = "No closed trades yet — run a strategy that exits positions.",
+}: Props) {
   const [selected, setSelected, reset] = useColumnSelection(
-    "algo:backtest:trade-cols",
+    "algo:trade-log:trade-cols",
     DEFAULT_COLS,
     VALID_KEYS,
   );
@@ -65,16 +71,16 @@ export function BacktestTradeTable({ rows }: Props) {
       key: c.key as keyof TradeRow & string,
       header: c.label,
     }));
-    downloadCsv(rows, csvCols, "backtest-trades");
+    downloadCsv(rows, csvCols, `${filenamePrefix}-trades`);
   };
 
   if (rows.length === 0) {
     return (
       <div
         className="rounded-md border border-slate-200 dark:border-slate-700 p-4 text-sm text-slate-500"
-        data-testid="backtest-trade-table-empty"
+        data-testid="trade-log-table-empty"
       >
-        No closed trades yet — run a strategy that exits positions.
+        {emptyMessage}
       </div>
     );
   }
@@ -82,7 +88,7 @@ export function BacktestTradeTable({ rows }: Props) {
   return (
     <div
       className="space-y-2"
-      data-testid="backtest-trade-table"
+      data-testid="trade-log-table"
     >
       <div className="flex items-center justify-between">
         <ColumnSelector
