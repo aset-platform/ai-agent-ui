@@ -1857,6 +1857,155 @@ class LiveRuntime:
             ticker, qty, fill_price,
         )
 
+    async def user_exit_position(
+        self,
+        *,
+        ticker: str,
+        qty_override: int | None = None,
+        price_hint: Decimal | None = None,
+    ) -> dict[str, Any]:
+        """Exit a live position immediately on user demand.
+
+        Cancels the active GTT (best-effort), clears trailing state,
+        fetches LTP (falls back to ws_hwm), and places a LIMIT SELL
+        through _submit_order so budget/event/in-flight accounting is
+        preserved.  reason="user_exit" bypasses the churn guard
+        (contains "exit" → is_protective=True in _submit_order).
+        """
+        # Resolve qty.
+        pos = self._positions.open_positions().get(ticker)
+        if pos is not None and pos.qty > 0:
+            qty = pos.qty
+        elif qty_override is not None and qty_override > 0:
+            qty = qty_override
+        else:
+            raise ValueError(
+                f"user_exit: no open position for {ticker} "
+                f"(runtime qty=0, override={qty_override})",
+            )
+
+        # Capture HWM before clearing (price fallback) + GTT id.
+        ws_hwm_price = self._ws_hwm.get(ticker)
+        gtt_id = self._gtt_ids.get(ticker, 0)
+
+        # Cancel GTT — best-effort; cancel failure must NOT block
+        # the SELL (already-fired GTT → 404 on delete is harmless).
+        if gtt_id > 0:
+            try:
+                await asyncio.to_thread(self._kite.delete_gtt, gtt_id)
+                _logger.info(
+                    "user_exit: GTT #%d cancelled for %s",
+                    gtt_id, ticker,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _logger.warning(
+                    "user_exit: delete_gtt %d failed for %s: %s",
+                    gtt_id, ticker, exc, exc_info=True,
+                )
+
+        # Clear trailing state so the next ratchet tick does NOT
+        # re-place a GTT for a position we are closing now.
+        self._trailing_managers.pop(ticker, None)
+        self._gtt_ids.pop(ticker, None)
+        self._ws_hwm.pop(ticker, None)
+        try:
+            from backend.cache import get_cache
+            get_cache().invalidate_exact(
+                f"trailing:{self._user_id}:{self._strategy.id}:{ticker}"
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Fetch current LTP for the SELL price.
+        # KiteClient wraps _kc (raw KiteConnect); use _kc.ltp()
+        # directly since KiteClient has no ltp() wrapper method.
+        # Fallback chain: kite LTP → ws_hwm → price_hint (UI value).
+        bare = ticker.removesuffix(".NS").removesuffix(".BO")
+        last_price: Decimal | None = None
+        try:
+            ltp_raw = await asyncio.to_thread(
+                self._kite._kc.ltp, [f"NSE:{bare}"],
+            )
+            ltp_val = (
+                ltp_raw.get(f"NSE:{bare}", {}).get("last_price")
+                if isinstance(ltp_raw, dict) else None
+            )
+            if ltp_val:
+                last_price = Decimal(str(ltp_val))
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning(
+                "user_exit: LTP fetch failed for %s "
+                "(ws_hwm=%s); exc=%s",
+                ticker, ws_hwm_price, exc, exc_info=True,
+            )
+        if last_price is None and ws_hwm_price is not None:
+            last_price = Decimal(str(ws_hwm_price))
+        if last_price is None and price_hint is not None and price_hint > 0:
+            last_price = price_hint
+            _logger.info(
+                "user_exit: using UI price_hint=%s for %s "
+                "(ltp and ws_hwm both unavailable)",
+                price_hint, ticker,
+            )
+        if last_price is None or last_price <= 0:
+            raise ValueError(
+                f"user_exit: no valid price for {ticker} "
+                f"(ltp=None, ws_hwm={ws_hwm_price}, "
+                f"price_hint={price_hint})",
+            )
+
+        # Place LIMIT SELL via the tracked _submit_order path.
+        sig = Signal(
+            strategy_id=self._strategy.id,
+            user_id=self._user_id,
+            ticker=ticker,
+            side="SELL",
+            qty=qty,
+            emitted_at_ns=_time.time_ns(),
+            reason="user_exit",
+        )
+        submitted = await self._submit_order(
+            signal=sig,
+            last_price=last_price,
+        )
+
+        # Retrieve the kite_order_id from the in-flight entry that
+        # _submit_order just appended (same event loop, no race).
+        kite_order_id: str | None = None
+        if submitted > 0 and self._in_flight:
+            tail = self._in_flight[-1]
+            if tail.get("reason") == "user_exit":
+                kite_order_id = tail.get("kite_order_id")
+
+        self._events.append(
+            event_row(
+                session_id=self._session_id,
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                mode="live",
+                type_="user_exit_initiated",
+                payload={
+                    "ticker": ticker,
+                    "qty": qty,
+                    "price": str(last_price),
+                    "gtt_id_cancelled": gtt_id,
+                    "kite_order_id": kite_order_id,
+                    "dry_run": self._dry_run,
+                    "source": "user_action",
+                },
+            )
+        )
+        await self._flush_events_now()
+
+        return {
+            "ticker": ticker,
+            "qty": qty,
+            "price": str(last_price),
+            "gtt_id_cancelled": gtt_id,
+            "kite_order_id": kite_order_id,
+            "submitted": submitted > 0,
+        }
+
     def on_buy_fill_trailing(
         self,
         *,

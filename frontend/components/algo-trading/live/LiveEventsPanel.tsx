@@ -123,6 +123,11 @@ const TYPE_BADGE: Record<string, BadgeStyle> = {
     text: "text-amber-800 dark:text-amber-200",
     label: "GTT-HIT",
   },
+  user_exit_initiated: {
+    bg: "bg-rose-100 dark:bg-rose-900/40",
+    text: "text-rose-800 dark:text-rose-200",
+    label: "USR-EXIT",
+  },
 };
 
 const FALLBACK_BADGE: BadgeStyle = {
@@ -219,6 +224,12 @@ function summarise(
       return `${sym} SELL × ${qty}`
         + (stop != null ? ` @ ₹${stop}` : "")
         + (source ? ` [${source}]` : "");
+    }
+    case "user_exit_initiated": {
+      const exitPrice = payload["price"];
+      return `${sym} SELL × ${qty}`
+        + (exitPrice != null ? ` @ ₹${exitPrice}` : "")
+        + " [user]";
     }
     default:
       return sym || "—";
