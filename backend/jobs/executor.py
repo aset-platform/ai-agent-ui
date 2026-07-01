@@ -3787,6 +3787,29 @@ def _job_algo_events_retention(
     return run_algo_events_retention_job(payload or {})
 
 
+@register_job("algo_budget_reservations_retention")
+def _job_algo_budget_reservations_retention(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Weekly retention pass for ``algo.budget_reservations``.
+
+    Purges paper/dryrun rows (>1 d) and live terminal non-filled
+    rows (TIMEOUT/CANCELLED/REJECTED/PARTIAL_CANCELLED, >7 d).
+    Live FILLED rows are kept indefinitely (needed for
+    sum_open_position_cost while position is open).
+    """
+    from backend.algo.jobs.budget_reservations_retention import (
+        run_budget_reservations_retention_job,
+    )
+
+    return run_budget_reservations_retention_job(payload or {})
+
+
 @register_job("intraday_features_daily_compute")
 def execute_intraday_features_daily_compute(
     scope: str | None = None,

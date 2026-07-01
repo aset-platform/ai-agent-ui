@@ -36,6 +36,18 @@ STEPS = [
         "job_name": "Full Iceberg warehouse snapshot",
         "payload": {},
     },
+    {
+        "step_order": 2,
+        "job_type": "algo_events_retention",
+        "job_name": "Trim algo.events (tiered retention)",
+        "payload": {},
+    },
+    {
+        "step_order": 3,
+        "job_type": "iceberg_maintenance",
+        "job_name": "Compact + Backup Iceberg",
+        "payload": {},
+    },
 ]
 
 
