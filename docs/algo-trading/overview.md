@@ -1,10 +1,9 @@
 # Algo Trading — Overview
 
-End-to-end platform for **backtest + paper trading** on Indian
-equities. Live order placement is deferred to v2 — every code
-path that would touch a real broker is gated.
+End-to-end platform for **backtest + paper + live trading** on Indian
+equities via Zerodha Kite.
 
-## What v1 ships
+## What ships
 
 | Capability | Where it lives |
 |---|---|
@@ -12,10 +11,12 @@ path that would touch a real broker is gated.
 | Browse Kite instrument master | `instruments` tab |
 | Author strategies (visual builder + JSON pane + Levers) | `strategies` tab |
 | Run backtests with risk gating | `backtest` tab |
-| Run paper trading against replay fixtures (live WS in v2) | `paper` tab |
+| Paper trading against live Kite WS | `paper` tab |
+| Live order placement (LIMIT + GTT trailing stops) | `paper` tab → Live section |
+| Holdings tab with manual exit button | `paper` tab → Holdings |
 | Cross-strategy performance aggregate | `performance` tab |
 | Cross-mode event-log replay with filters | `replay` tab |
-| Kill switch + (future) risk caps | `settings` tab |
+| Kill switch + risk caps | `settings` tab |
 
 Access is gated `pro_or_superuser` via the existing role system.
 The nav entry sits between **Advanced Analytics** and **Admin**.
@@ -114,15 +115,9 @@ flush_events on shutdown
 See [Paper trading](paper-trading.md) for the runtime details
 and the fixture-generation recipe.
 
-## v2 deferrals
+## Deferred
 
-These are **explicitly out of v1 scope** per the epic spec § 12:
-
-- Live order placement (Kite or any broker)
-- Live Kite WebSocket multiplexer (one WS per user → fan out to many strategies)
-- Reconciliation loop (paper position diff vs broker)
 - MinIO artifact upload for backtest runs
-- Walk-forward CV harness
 - F&O instruments
 - Multi-broker support (BrokerAdapter ABC ready)
 

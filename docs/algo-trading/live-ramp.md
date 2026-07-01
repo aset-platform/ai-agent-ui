@@ -122,6 +122,21 @@ This:
 3. Does NOT cancel in-flight orders already submitted.
 4. Use kill switch if you need immediate in-flight cancellation.
 
+### Exit a single holding manually
+During market hours (09:15–15:30 IST, Mon–Fri) the **Holdings** tab
+shows an **Exit** button on each live CNC row. Click it to:
+
+1. Cancel the active GTT stop for that ticker (best-effort).
+2. Clear trailing state so the ratchet loop cannot re-place the GTT.
+3. Place a LIMIT SELL at the current LTP (falls back to last WS
+   high-water mark, then the price displayed in the UI).
+4. Emit a `user_exit_initiated` event (visible in LiveEventsPanel
+   and RecentFillsTape immediately; `order_filled_live` follows when
+   the exchange confirms the fill via the Kite postback).
+
+The button is hidden outside market hours and for rows with no
+`strategy_id` (manually-opened positions not tracked by the runtime).
+
 ### Reduce caps without disabling
 Update the Safety Belts form to lower `max_inr` to `0` and
 `max_orders_per_day` to `0`. This creates a soft stop —
