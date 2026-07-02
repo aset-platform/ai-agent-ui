@@ -3831,7 +3831,9 @@ def _job_algo_closed_trades_rollup(
         run_closed_trades_rollup_job,
     )
 
-    return run_closed_trades_rollup_job(payload or {})
+    result = run_closed_trades_rollup_job(payload or {})
+    _algo_job_success(repo, run_id)
+    return result
 
 
 @register_job("intraday_features_daily_compute")
