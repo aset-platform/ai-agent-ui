@@ -352,11 +352,20 @@ def create_attribution_router() -> APIRouter:
                 exit_event = (
                     sell_sigs[i] if i < len(sell_sigs) else None
                 )
+                # Paper fills carry "fill_price"; live fills (both
+                # the direct live/runtime.py path and the Kite
+                # postback webhook path) carry "price" instead --
+                # never both. Falling back silently to 0 here would
+                # zero out every live-mode trade's price/PnL.
                 avg_entry = float(
-                    buy_fill["_payload"].get("fill_price") or 0,
+                    buy_fill["_payload"].get("fill_price")
+                    or buy_fill["_payload"].get("price")
+                    or 0,
                 )
                 avg_exit = float(
-                    sell_fill["_payload"].get("fill_price") or 0,
+                    sell_fill["_payload"].get("fill_price")
+                    or sell_fill["_payload"].get("price")
+                    or 0,
                 )
                 qty = int(
                     buy_fill["_payload"].get("qty") or 0,
