@@ -1448,6 +1448,7 @@ class LiveRuntime:
         # so _on_sell_fill_trailing is never called via the postback.
         # Skipped in dry-run: all gtt_ids are 0, no real GTTs exist.
         _triggered_tickers: set[str] = set()
+        _gtt_records_by_id: dict[int, dict] = {}
         if not self._dry_run and self._gtt_ids:
             try:
                 _all_kite_gtts = self._kite.get_gtts()
@@ -1455,6 +1456,9 @@ class LiveRuntime:
                     int(_g["id"])
                     for _g in _all_kite_gtts
                     if _g.get("status") == "active"
+                }
+                _gtt_records_by_id = {
+                    int(_g["id"]): _g for _g in _all_kite_gtts
                 }
                 for _tk, _gid in self._gtt_ids.items():
                     if _gid > 0 and _gid not in _active_gtt_ids:
@@ -1477,10 +1481,34 @@ class LiveRuntime:
         for ticker, mgr in list(self._trailing_managers.items()):
             # ── GTT-triggered accounting ──────────────────────────
             if ticker in _triggered_tickers:
-                _pos = self._positions.open_positions().get(ticker)
-                _fill_qty = _pos.qty if _pos is not None else 0
-                _stop_price = mgr.current_stop
                 _gtt_id = self._gtt_ids.get(ticker, 0)
+                _gtt_record = _gtt_records_by_id.get(_gtt_id)
+                # Kite's own GTT order definition is the
+                # authoritative source for qty/price — the
+                # in-memory position tracker can drift out of
+                # sync with _trailing_managers across a runtime
+                # restart (found 2026-07-02: HSCL's _positions
+                # entry was gone by the time this ran, even
+                # though _trailing_managers still had it, and the
+                # old code silently recorded qty=0 for it).
+                _kite_order = (
+                    (_gtt_record.get("orders") or [{}])[0]
+                    if _gtt_record else {}
+                )
+                _pos = self._positions.open_positions().get(ticker)
+                _fill_qty = int(
+                    _kite_order.get("quantity")
+                    or (_pos.qty if _pos is not None else 0)
+                    or 0,
+                )
+                _stop_price = mgr.current_stop
+                # The GTT's configured LIMIT price is closer to
+                # the true fill than our own stop-trigger price
+                # (Kite's get_gtts() doesn't expose the actual
+                # executed price, only the order definition).
+                _fill_price = float(
+                    _kite_order.get("price") or _stop_price,
+                )
                 _phase = mgr.state.phase.value
                 if _fill_qty > 0:
                     from backend.algo.backtest.types import Fill
@@ -1489,12 +1517,45 @@ class LiveRuntime:
                         ticker=ticker,
                         side="SELL",
                         qty=_fill_qty,
-                        fill_price=Decimal(str(_stop_price)),
+                        fill_price=Decimal(str(_fill_price)),
                         fill_date=datetime.now(timezone.utc).date(),
                         fees_inr=Decimal("0"),
                         fee_rates_version="gtt_poll",
                     )
                     self._positions.apply_fill(_fill)
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="order_filled_live",
+                            payload={
+                                "symbol": ticker.removesuffix(
+                                    ".NS",
+                                ).removesuffix(".BO"),
+                                "side": "SELL",
+                                "qty": _fill_qty,
+                                "price": str(_fill_price),
+                                "fees_inr": "0",
+                                "reason": "gtt_triggered",
+                                "product": getattr(
+                                    self._strategy, "product", "CNC",
+                                ),
+                                "source": "gtt_poll",
+                            },
+                        )
+                    )
+                else:
+                    _logger.error(
+                        "ratchet: GTT %s triggered for %s but "
+                        "qty could not be resolved from either "
+                        "Kite's GTT order or the position "
+                        "tracker — no fill recorded, trade will "
+                        "be invisible to reporting. Manual "
+                        "reconciliation required.",
+                        _gtt_id, ticker,
+                    )
                 self._trailing_managers.pop(ticker, None)
                 self._gtt_ids.pop(ticker, None)
                 self._ws_hwm.pop(ticker, None)
