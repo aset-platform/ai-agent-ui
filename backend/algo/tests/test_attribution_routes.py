@@ -304,6 +304,53 @@ def test_trades_panic_close_pairs_without_sell_signal(
     assert row["exit_reason"] == "panic_close"
 
 
+def test_trades_live_fills_use_price_key_not_fill_price(
+    app, monkeypatch,
+) -> None:
+    """Real order_filled_live payloads (both the direct
+    live/runtime.py fill path and the Kite postback webhook path)
+    carry the price under "price", never "fill_price" — paper's
+    order_filled events use "fill_price". Confirmed against real
+    algo.events rows 2026-07-02. Without a fallback, entry_price /
+    exit_price / pnl_inr all silently zero out for every live-mode
+    trade row."""
+    base_ts = int(
+        datetime(2026, 5, 12, 6, 11, tzinfo=timezone.utc)
+        .timestamp() * 1_000_000_000,
+    )
+    fake_events = [
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live", "ts_ns": base_ts,
+            "payload_json": (
+                '{"symbol": "EQUITASBNK", "side": "BUY", "qty": 1, '
+                '"source": "kite_postback", "price": "74.77"}'
+            ),
+        },
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live", "ts_ns": base_ts + 1,
+            "payload_json": (
+                '{"symbol": "EQUITASBNK", "side": "SELL", "qty": 1, '
+                '"source": "kite_postback", "price": "77.04"}'
+            ),
+        },
+    ]
+    monkeypatch.setattr(
+        "backend.db.duckdb_engine.query_iceberg_table",
+        lambda table, sql, params=None: fake_events,
+    )
+    client = TestClient(app)
+    r = client.get("/v1/algo/attribution/trades")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 1
+    row = body["rows"][0]
+    assert row["entry_price"] == 74.77
+    assert row["exit_price"] == 77.04
+    assert round(row["pnl_inr"], 2) == 2.27
+
+
 def test_trades_pairs_when_no_signals_at_all(
     app, monkeypatch,
 ) -> None:
