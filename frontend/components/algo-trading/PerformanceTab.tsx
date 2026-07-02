@@ -1,66 +1,48 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
-import { formatIstDateTime } from "@/lib/datetime";
+import { TradeLogTable } from "./TradeLogTable";
 import {
-  usePerformanceRuns,
-  type PerformanceRunRow,
-} from "@/hooks/usePerformanceRuns";
+  filterStrategiesByMode,
+  useStrategies,
+  type StrategyMode,
+} from "@/hooks/useStrategies";
+import {
+  useStrategyPerformance,
+  type LookbackPreset,
+  type PerformanceMode,
+  type StrategyPerfRow,
+} from "@/hooks/useStrategyPerformance";
 
-interface StratAgg {
-  strategy_id: string;
-  strategy_name: string;
-  total_runs: number;
-  completed_runs: number;
-  avg_pnl_pct: number | null;
-  win_rate_pct: number | null;
-  total_pnl_inr: number;
-}
+const MODE_OPTIONS: { value: PerformanceMode; label: string }[] = [
+  { value: "backtest", label: "Backtest" },
+  { value: "walkforward", label: "Walk-forward" },
+  { value: "paper", label: "Paper" },
+  { value: "live", label: "Live" },
+];
 
-function aggregate(rows: PerformanceRunRow[]): StratAgg[] {
-  const buckets = new Map<string, PerformanceRunRow[]>();
-  for (const r of rows) {
-    const arr = buckets.get(r.strategy_id) ?? [];
-    arr.push(r);
-    buckets.set(r.strategy_id, arr);
-  }
-  const out: StratAgg[] = [];
-  for (const [sid, list] of buckets) {
-    const completed = list.filter(
-      (r) => r.status === "completed" && r.total_pnl_pct !== null,
-    );
-    const avg =
-      completed.length > 0
-        ? completed.reduce(
-            (acc, r) => acc + Number(r.total_pnl_pct ?? 0),
-            0,
-          ) / completed.length
-        : null;
-    const winSum =
-      completed.length > 0
-        ? completed.reduce(
-            (acc, r) => acc + Number(r.win_rate_pct ?? 0),
-            0,
-          ) / completed.length
-        : null;
-    const totalPnl = completed.reduce(
-      (acc, r) => acc + Number(r.total_pnl_inr ?? 0),
-      0,
-    );
-    out.push({
-      strategy_id: sid,
-      strategy_name: list[0].strategy_name,
-      total_runs: list.length,
-      completed_runs: completed.length,
-      avg_pnl_pct: avg,
-      win_rate_pct: winSum,
-      total_pnl_inr: totalPnl,
-    });
-  }
-  out.sort((a, b) => b.total_pnl_inr - a.total_pnl_inr);
-  return out;
-}
+const LOOKBACK_OPTIONS: { value: LookbackPreset; label: string }[] = [
+  { value: "7d", label: "7d" },
+  { value: "30d", label: "30d" },
+  { value: "90d", label: "90d" },
+  { value: "all", label: "All" },
+];
+
+// Strategy-dropdown scoping per mode. Backtest/Walk-forward show
+// every strategy (matches the existing convention that those two
+// pickers never filter by promotion mode). Paper shows strategies
+// currently in paper OR live (a strategy graduated to live still
+// keeps its paper history meaningful). Live shows only strategies
+// currently promoted to live, per the literal 1a spec.
+const STRATEGY_FILTER_FOR_MODE: Record<
+  PerformanceMode, StrategyMode[] | null
+> = {
+  backtest: null,
+  walkforward: null,
+  paper: ["paper", "live"],
+  live: ["live"],
+};
 
 function fmtInr(v: number | null): string {
   if (v === null) return "—";
@@ -77,8 +59,54 @@ function fmtPct(v: number | null): string {
 }
 
 export function PerformanceTab() {
-  const { runs, loading, error } = usePerformanceRuns(50);
-  const aggregates = useMemo(() => aggregate(runs), [runs]);
+  const [mode, setMode] = useState<PerformanceMode>("live");
+  const [strategyId, setStrategyId] = useState<string>("all");
+  const [lookback, setLookback] = useState<LookbackPreset>("30d");
+  const [customRange, setCustomRange] = useState<{
+    start: string; end: string;
+  } | null>(null);
+
+  const { strategies: allStrategies } = useStrategies();
+  const scopedStrategies = useMemo(() => {
+    const allowedModes = STRATEGY_FILTER_FOR_MODE[mode];
+    return allowedModes
+      ? filterStrategiesByMode(allStrategies, allowedModes)
+      : allStrategies.filter((s) => s.archived_at == null);
+  }, [allStrategies, mode]);
+
+  const {
+    strategies: perfRows,
+    trades,
+    loading,
+    error,
+  } = useStrategyPerformance({
+    mode,
+    strategyId: strategyId === "all" ? null : strategyId,
+    lookback: customRange ? null : lookback,
+    start: customRange?.start ?? null,
+    end: customRange?.end ?? null,
+  });
+
+  const perTickerRows = useMemo(() => {
+    const buckets = new Map<
+      string, { ticker: string; trades: number; pnl: number; wins: number }
+    >();
+    for (const t of trades) {
+      const b = buckets.get(t.ticker) ?? {
+        ticker: t.ticker, trades: 0, pnl: 0, wins: 0,
+      };
+      b.trades += 1;
+      b.pnl += Number(t.realised_pnl_inr);
+      if (Number(t.realised_pnl_inr) > 0) b.wins += 1;
+      buckets.set(t.ticker, b);
+    }
+    return Array.from(buckets.values()).sort((a, b) => a.pnl - b.pnl);
+  }, [trades]);
+
+  const handleModeChange = (m: PerformanceMode) => {
+    setMode(m);
+    setStrategyId("all");
+  };
 
   return (
     <div className="space-y-4" data-testid="performance-tab">
@@ -87,9 +115,110 @@ export function PerformanceTab() {
           Performance
         </h2>
         <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
-          Strategy-vs-strategy diff across your most recent runs
-          (backtest + paper). Per spec § 9.1 slice 9.
+          Trade-level win rate, biggest win/loss, and profit
+          factor per strategy.
         </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <div
+          className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 overflow-hidden"
+          data-testid="performance-mode-pills"
+        >
+          {MODE_OPTIONS.map((m) => (
+            <button
+              key={m.value}
+              type="button"
+              data-testid={`performance-mode-${m.value}`}
+              onClick={() => handleModeChange(m.value)}
+              className={`px-3 py-1.5 text-xs font-medium ${
+                mode === m.value
+                  ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900"
+                  : "bg-white text-slate-600 dark:bg-slate-900 dark:text-slate-300"
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        <select
+          data-testid="performance-strategy-select"
+          value={strategyId}
+          onChange={(e) => setStrategyId(e.target.value)}
+          className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs text-slate-700 dark:text-slate-300"
+        >
+          <option value="all">All strategies</option>
+          {scopedStrategies.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+
+        <div
+          className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 overflow-hidden"
+          data-testid="performance-lookback-pills"
+        >
+          {LOOKBACK_OPTIONS.map((l) => (
+            <button
+              key={l.value}
+              type="button"
+              data-testid={`performance-lookback-${l.value}`}
+              onClick={() => {
+                setLookback(l.value);
+                setCustomRange(null);
+              }}
+              className={`px-3 py-1.5 text-xs font-medium ${
+                !customRange && lookback === l.value
+                  ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900"
+                  : "bg-white text-slate-600 dark:bg-slate-900 dark:text-slate-300"
+              }`}
+            >
+              {l.label}
+            </button>
+          ))}
+          <button
+            type="button"
+            data-testid="performance-lookback-custom"
+            onClick={() =>
+              setCustomRange((c) => c ?? { start: "", end: "" })
+            }
+            className={`px-3 py-1.5 text-xs font-medium ${
+              customRange
+                ? "bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900"
+                : "bg-white text-slate-600 dark:bg-slate-900 dark:text-slate-300"
+            }`}
+          >
+            Custom
+          </button>
+        </div>
+
+        {customRange && (
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              data-testid="performance-range-start"
+              value={customRange.start}
+              onChange={(e) =>
+                setCustomRange((c) => ({
+                  start: e.target.value, end: c?.end ?? "",
+                }))
+              }
+              className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs"
+            />
+            <span className="text-xs text-slate-500">to</span>
+            <input
+              type="date"
+              data-testid="performance-range-end"
+              value={customRange.end}
+              onChange={(e) =>
+                setCustomRange((c) => ({
+                  start: c?.start ?? "", end: e.target.value,
+                }))
+              }
+              className="rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-xs"
+            />
+          </div>
+        )}
       </div>
 
       {error && (
@@ -101,149 +230,109 @@ export function PerformanceTab() {
         </div>
       )}
 
-      {!error && aggregates.length === 0 && !loading && (
+      {!error && !loading && perfRows.length === 0 && (
         <div
           className="rounded-md border border-slate-200 dark:border-slate-700 p-4 text-sm text-slate-500"
           data-testid="performance-empty"
         >
-          No completed runs yet. Run a backtest or kick off a
-          paper run to populate this view.
+          No closed trades in this window for the selected mode.
         </div>
       )}
 
-      {aggregates.length > 0 && (
-        <div
-          className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
-          data-testid="performance-aggregates-table"
-        >
-          <table className="min-w-full text-sm">
-            <thead className="bg-slate-50 dark:bg-slate-800">
-              <tr>
-                <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">
-                  Strategy
-                </th>
-                <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">
-                  Runs
-                </th>
-                <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">
-                  Avg PnL %
-                </th>
-                <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">
-                  Avg Win Rate
-                </th>
-                <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">
-                  Total PnL ₹
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {aggregates.map((a) => {
-                const positive = a.total_pnl_inr >= 0;
-                return (
-                  <tr
-                    key={a.strategy_id}
-                    className="border-t border-slate-200 dark:border-slate-700"
-                    data-testid={`performance-strategy-${a.strategy_id}`}
-                  >
-                    <td className="px-3 py-1.5 font-medium text-slate-900 dark:text-slate-100">
-                      {a.strategy_name}
-                      <span className="ml-2 text-xs text-slate-500">
-                        ({a.completed_runs}/{a.total_runs} done)
-                      </span>
-                    </td>
-                    <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">
-                      {a.total_runs}
-                    </td>
-                    <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">
-                      {fmtPct(a.avg_pnl_pct)}
-                    </td>
-                    <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">
-                      {fmtPct(a.win_rate_pct)}
-                    </td>
-                    <td
-                      className={`px-3 py-1.5 text-right font-medium ${
-                        positive
-                          ? "text-emerald-600 dark:text-emerald-400"
-                          : "text-rose-600 dark:text-rose-400"
-                      }`}
-                    >
-                      {fmtInr(a.total_pnl_inr)}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+      {perfRows.length > 0 && (
+        <StrategyComparisonTable rows={perfRows} />
       )}
 
-      {runs.length > 0 && (
-        <div className="space-y-1.5">
-          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-            Recent runs
-          </h3>
-          <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700">
-            <table
-              className="min-w-full text-sm"
-              data-testid="performance-runs-table"
+      {strategyId !== "all" && (
+        <>
+          <TradeLogTable
+            rows={trades}
+            filenamePrefix={mode}
+            emptyMessage="No closed trades in this window."
+          />
+          {perTickerRows.length > 0 && (
+            <PerTickerBreakdown rows={perTickerRows} />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function StrategyComparisonTable({ rows }: { rows: StrategyPerfRow[] }) {
+  return (
+    <div
+      className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
+      data-testid="performance-strategy-comparison-table"
+    >
+      <table className="min-w-full text-sm">
+        <thead className="bg-slate-50 dark:bg-slate-800">
+          <tr>
+            <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Strategy</th>
+            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Trades</th>
+            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Win rate</th>
+            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Total PnL</th>
+            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Biggest win</th>
+            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Biggest loss</th>
+            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Profit factor</th>
+            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Max DD%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr
+              key={r.strategy_id}
+              data-testid={`performance-strategy-row-${r.strategy_id}`}
+              className="border-t border-slate-200 dark:border-slate-700"
             >
-              <thead className="bg-slate-50 dark:bg-slate-800">
-                <tr>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">
-                    Strategy
-                  </th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">
-                    Mode
-                  </th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">
-                    Status
-                  </th>
-                  <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">
-                    Started
-                  </th>
-                  <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">
-                    PnL %
-                  </th>
-                  <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">
-                    PnL ₹
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {runs.map((r) => (
-                  <tr
-                    key={r.run_id}
-                    className="border-t border-slate-200 dark:border-slate-700"
-                  >
-                    <td className="px-3 py-1.5 text-slate-900 dark:text-slate-100">
-                      {r.strategy_name}
-                    </td>
-                    <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300">
-                      {r.mode}
-                    </td>
-                    <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300">
-                      {r.status}
-                    </td>
-                    <td className="px-3 py-1.5 font-mono text-xs text-slate-600 dark:text-slate-400">
-                      {formatIstDateTime(r.started_at)}
-                    </td>
-                    <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">
-                      {r.total_pnl_pct
-                        ? `${Number(r.total_pnl_pct).toFixed(2)}%`
-                        : "—"}
-                    </td>
-                    <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">
-                      {r.total_pnl_inr
-                        ? fmtInr(Number(r.total_pnl_inr))
-                        : "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+              <td className="px-3 py-1.5 font-medium text-slate-900 dark:text-slate-100">{r.strategy_name}</td>
+              <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{r.total_trades}</td>
+              <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct(r.win_rate_pct)}</td>
+              <td className={`px-3 py-1.5 text-right font-medium ${r.total_pnl_inr >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>{fmtInr(r.total_pnl_inr)}</td>
+              <td className="px-3 py-1.5 text-right text-emerald-600 dark:text-emerald-400">{r.biggest_win ? `${r.biggest_win.ticker} ${fmtInr(r.biggest_win.pnl_inr)}` : "—"}</td>
+              <td className="px-3 py-1.5 text-right text-rose-600 dark:text-rose-400">{r.biggest_loss ? `${r.biggest_loss.ticker} ${fmtInr(r.biggest_loss.pnl_inr)}` : "—"}</td>
+              <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{r.profit_factor ?? "—"}</td>
+              <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct(r.max_drawdown_pct)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PerTickerBreakdown({
+  rows,
+}: {
+  rows: { ticker: string; trades: number; pnl: number; wins: number }[];
+}) {
+  return (
+    <div data-testid="performance-per-ticker-breakdown" className="space-y-1.5">
+      <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+        Per-ticker breakdown
+      </h3>
+      <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50 dark:bg-slate-800">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Ticker</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Trades</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Win rate</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">PnL</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.ticker} className="border-t border-slate-200 dark:border-slate-700">
+                <td className="px-3 py-1.5 font-medium text-slate-900 dark:text-slate-100">{r.ticker}</td>
+                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{r.trades}</td>
+                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct((r.wins / r.trades) * 100)}</td>
+                <td className={`px-3 py-1.5 text-right font-medium ${r.pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>{fmtInr(r.pnl)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
