@@ -2,6 +2,21 @@
 
 ---
 
+### 2026-07-02 — Strategy Performance tab rebuild (branch `feature/algo-strategy-performance`)
+
+**What:** 11-task plan rebuilding the Strategies → Performance page with mode-aware, per-strategy trade analytics.
+
+- **New Postgres table `algo.closed_trades`** — materialized rollup of paper/live closed trades, FIFO-paired from `algo.events` fills.
+- **New daily scheduled job `algo_closed_trades_rollup`** (16:30 IST Mon–Fri) populates the table; a one-time backfill script already ran and populated 82 historical trades.
+- **`backend/algo/attribution/trade_pairing.py`** — new FIFO fill-pairing helper (deliberately a fresh module, not a refactor of the existing `attribution.py`).
+- **`GET /v1/algo/performance/summary`** — mode-aware endpoint: backtest/walkforward read `algo.runs.summary_json`, paper/live read `algo.closed_trades`; returns per-strategy win rate, biggest win/loss, profit factor, avg win/loss.
+- **Rebuilt `PerformanceTab.tsx`** — mode filter (default Live), strategy filter (scoped per mode, default All), lookback presets + custom date range, strategy comparison table, trade drill-down (`TradeLogTable`, renamed/generalized from `BacktestTradeTable`), per-ticker breakdown.
+- Full test coverage: backend (trade pairing, rollup job, endpoint) and frontend (PerformanceTab scoping/rendering behavior).
+
+**NOT done:** PR to `dev` not yet raised as part of this task.
+
+---
+
 ### 2026-07-01 — Manual position exit — cancel GTT + LIMIT SELL on demand (PRs #282, #283)
 
 **What:** Two PRs landed on `dev`.
