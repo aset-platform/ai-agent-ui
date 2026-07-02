@@ -135,11 +135,6 @@ def correct_gtt_event_prices(
 
     import pyarrow as pa
 
-    from backend.algo.backtest.event_writer import (
-        _detect_ts_date_native_date,
-    )
-
-    native_date = _detect_ts_date_native_date()
     corrected_rows = []
     for r in to_correct:
         row = dict(r)
