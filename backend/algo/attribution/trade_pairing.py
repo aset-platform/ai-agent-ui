@@ -79,11 +79,20 @@ def pair_fills_by_strategy_and_ticker(
         )
         for i in range(min(len(buys), len(sells))):
             buy_fill, sell_fill = buys[i], sells[i]
+            # Paper fills carry "fill_price"; live fills (both the
+            # direct live/runtime.py path and the Kite postback
+            # webhook path) carry "price" instead -- never both.
+            # Falling back silently to 0 here would zero out every
+            # live-mode trade's price/PnL/return.
             avg_price = float(
-                buy_fill["_payload"].get("fill_price") or 0,
+                buy_fill["_payload"].get("fill_price")
+                or buy_fill["_payload"].get("price")
+                or 0,
             )
             fill_price = float(
-                sell_fill["_payload"].get("fill_price") or 0,
+                sell_fill["_payload"].get("fill_price")
+                or sell_fill["_payload"].get("price")
+                or 0,
             )
             qty = int(buy_fill["_payload"].get("qty") or 0)
             realised_pnl_inr = (fill_price - avg_price) * qty

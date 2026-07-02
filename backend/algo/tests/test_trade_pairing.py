@@ -111,6 +111,47 @@ def test_unmatched_open_position_is_skipped():
     assert pair_fills_by_strategy_and_ticker(events) == []
 
 
+def test_live_fills_use_price_key_not_fill_price():
+    """Real order_filled_live payloads (both the direct live/runtime.py
+    fill path and the Kite postback webhook path) carry the price
+    under "price", never "fill_price" -- paper's order_filled events
+    use "fill_price". Confirmed against real algo.events rows
+    2026-07-02: e.g. {"kite_order_id": ..., "symbol": "EQUITASBNK",
+    "side": "SELL", "qty": 1, "source": "kite_postback", "price":
+    "77.04", "fees_inr": "0"} -- no "fill_price" key at all. Without
+    a fallback, every live-mode closed trade materializes with
+    avg_price=fill_price=pnl=return_pct=0."""
+    events = [
+        {
+            "event_id": "e1", "strategy_id": "s1",
+            "type": "order_filled_live",
+            "payload_json": json.dumps({
+                "symbol": "EQUITASBNK", "side": "BUY", "qty": 1,
+                "source": "kite_postback", "price": "74.77",
+                "fees_inr": "0",
+            }),
+            "ts_ns": _ts(datetime(2026, 6, 29, tzinfo=timezone.utc)),
+        },
+        {
+            "event_id": "e2", "strategy_id": "s1",
+            "type": "order_filled_live",
+            "payload_json": json.dumps({
+                "symbol": "EQUITASBNK", "side": "SELL", "qty": 1,
+                "source": "kite_postback", "price": "77.04",
+                "fees_inr": "0",
+            }),
+            "ts_ns": _ts(datetime(2026, 7, 1, tzinfo=timezone.utc)),
+        },
+    ]
+    trades = pair_fills_by_strategy_and_ticker(events)
+    assert len(trades) == 1
+    t = trades[0]
+    assert t["avg_price"] == 74.77
+    assert t["fill_price"] == 77.04
+    assert round(t["realised_pnl_inr"], 2) == 2.27
+    assert t["return_pct"] != 0.0
+
+
 def test_strips_ns_suffix_and_ignores_non_fill_events():
     events = [
         {
