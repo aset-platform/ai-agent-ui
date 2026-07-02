@@ -3810,6 +3810,30 @@ def _job_algo_budget_reservations_retention(
     return run_budget_reservations_retention_job(payload or {})
 
 
+@register_job("algo_closed_trades_rollup")
+def _job_algo_closed_trades_rollup(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Daily rollup of paper/live closed trades into
+    algo.closed_trades, powering the Strategy Performance page.
+
+    Reads algo.events (trailing 400-day window), FIFO-pairs BUY/
+    SELL fills per (user, strategy, ticker), idempotently upserts.
+    Runs 16:30 IST Mon-Fri, after market close and budget
+    reconciliation.
+    """
+    from backend.algo.jobs.closed_trades_rollup import (
+        run_closed_trades_rollup_job,
+    )
+
+    return run_closed_trades_rollup_job(payload or {})
+
+
 @register_job("intraday_features_daily_compute")
 def execute_intraday_features_daily_compute(
     scope: str | None = None,
