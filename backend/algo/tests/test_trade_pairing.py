@@ -65,6 +65,46 @@ def test_pairs_single_buy_sell_fifo():
     assert t["closed_at"].isoformat() == "2026-06-05"
 
 
+def test_one_buy_split_across_multiple_sells():
+    """The KTKBANK shape found 2026-07-02: one BUY of 16 exited via
+    three separate SELLs (1, 1, 14) at different prices/dates. Must
+    produce three closed-trade rows, not one row with the full buy
+    qty against only the first sell (which also silently dropped
+    the other two sells entirely)."""
+    events = [
+        _fill(
+            strategy_id="s1", event_id="b1", symbol="KTKBANK",
+            side="BUY", qty=16, fill_price=266.3,
+            ts=datetime(2026, 6, 24, tzinfo=timezone.utc),
+        ),
+        _fill(
+            strategy_id="s1", event_id="s1", symbol="KTKBANK",
+            side="SELL", qty=1, fill_price=267.0,
+            ts=datetime(2026, 6, 25, tzinfo=timezone.utc),
+        ),
+        _fill(
+            strategy_id="s1", event_id="s2", symbol="KTKBANK",
+            side="SELL", qty=1, fill_price=267.0,
+            ts=datetime(2026, 6, 25, 0, 0, 1, tzinfo=timezone.utc),
+        ),
+        _fill(
+            strategy_id="s1", event_id="s3", symbol="KTKBANK",
+            side="SELL", qty=14, fill_price=270.15,
+            ts=datetime(2026, 7, 2, tzinfo=timezone.utc),
+        ),
+    ]
+    trades = pair_fills_by_strategy_and_ticker(events)
+    assert len(trades) == 3
+    total_qty = sum(t["qty"] for t in trades)
+    assert total_qty == 16
+    last = [t for t in trades if t["sell_event_id"] == "s3"][0]
+    assert last["qty"] == 14
+    assert last["fill_price"] == 270.15
+    assert last["closed_at"].isoformat() == "2026-07-02"
+    total_pnl = sum(t["realised_pnl_inr"] for t in trades)
+    assert round(total_pnl, 2) == 55.3
+
+
 def test_does_not_mix_two_strategies_on_same_ticker():
     """Two different strategies both trading ITC on the same day
     must NOT be cross-paired (strategy A's buy with strategy B's
