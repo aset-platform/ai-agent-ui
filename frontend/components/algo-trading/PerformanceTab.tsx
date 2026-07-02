@@ -74,6 +74,8 @@ export function PerformanceTab() {
       : allStrategies.filter((s) => s.archived_at == null);
   }, [allStrategies, mode]);
 
+  const customRangeComplete = !!(customRange?.start && customRange?.end);
+
   const {
     strategies: perfRows,
     trades,
@@ -82,9 +84,9 @@ export function PerformanceTab() {
   } = useStrategyPerformance({
     mode,
     strategyId: strategyId === "all" ? null : strategyId,
-    lookback: customRange ? null : lookback,
-    start: customRange?.start ?? null,
-    end: customRange?.end ?? null,
+    lookback: customRangeComplete ? null : lookback,
+    start: customRangeComplete ? customRange!.start : null,
+    end: customRangeComplete ? customRange!.end : null,
   });
 
   const perTickerRows = useMemo(() => {

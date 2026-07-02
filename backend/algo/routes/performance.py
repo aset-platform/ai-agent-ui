@@ -32,7 +32,6 @@ from auth.models import UserContext
 _logger = logging.getLogger(__name__)
 
 _BACKTEST_FAMILY = ("backtest", "walkforward")
-_TRADE_FAMILY = ("paper", "live")
 _LOOKBACK_DAYS = {"7d": 7, "30d": 30, "90d": 90}
 
 
