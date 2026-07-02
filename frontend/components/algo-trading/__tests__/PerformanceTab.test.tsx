@@ -107,6 +107,21 @@ describe("PerformanceTab", () => {
     expect(within(row).getByText("RSI(2) v5")).toBeDefined();
   });
 
+  it("hides the Max DD% column for Paper/Live but shows it for Backtest/Walk-forward", () => {
+    render(<PerformanceTab />);
+    // Default mode is Live — no capital baseline, column hidden.
+    expect(screen.queryByText("Max DD%")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("performance-mode-backtest"));
+    expect(screen.getByText("Max DD%")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("performance-mode-walkforward"));
+    expect(screen.getByText("Max DD%")).toBeDefined();
+
+    fireEvent.click(screen.getByTestId("performance-mode-paper"));
+    expect(screen.queryByText("Max DD%")).toBeNull();
+  });
+
   it("reveals custom date inputs when Custom is selected", () => {
     render(<PerformanceTab />);
     expect(

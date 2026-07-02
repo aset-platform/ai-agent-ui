@@ -242,7 +242,7 @@ export function PerformanceTab() {
       )}
 
       {perfRows.length > 0 && (
-        <StrategyComparisonTable rows={perfRows} />
+        <StrategyComparisonTable rows={perfRows} mode={mode} />
       )}
 
       {strategyId !== "all" && (
@@ -261,7 +261,25 @@ export function PerformanceTab() {
   );
 }
 
-function StrategyComparisonTable({ rows }: { rows: StrategyPerfRow[] }) {
+// Max DD% only has a true, capital-based value for backtest/
+// walkforward runs (algo.runs.summary_json.max_drawdown_pct, from
+// a known initial_capital_inr). Paper/live have no per-strategy
+// capital baseline (algo.user_budget.allocated_inr is account-wide,
+// pooled across every live strategy) -- backend/algo/routes/
+// performance.py leaves max_drawdown_pct null for those two modes.
+// Hide the column entirely there rather than show an always-blank
+// "--" filler that implies a failed computation.
+const MODES_WITH_MAX_DRAWDOWN: PerformanceMode[] = [
+  "backtest", "walkforward",
+];
+
+function StrategyComparisonTable({
+  rows, mode,
+}: {
+  rows: StrategyPerfRow[];
+  mode: PerformanceMode;
+}) {
+  const showMaxDrawdown = MODES_WITH_MAX_DRAWDOWN.includes(mode);
   return (
     <div
       className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
@@ -277,7 +295,9 @@ function StrategyComparisonTable({ rows }: { rows: StrategyPerfRow[] }) {
             <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Biggest win</th>
             <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Biggest loss</th>
             <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Profit factor</th>
-            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Max DD%</th>
+            {showMaxDrawdown && (
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Max DD%</th>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -294,7 +314,9 @@ function StrategyComparisonTable({ rows }: { rows: StrategyPerfRow[] }) {
               <td className="px-3 py-1.5 text-right text-emerald-600 dark:text-emerald-400">{r.biggest_win ? `${r.biggest_win.ticker} ${fmtInr(r.biggest_win.pnl_inr)}` : "—"}</td>
               <td className="px-3 py-1.5 text-right text-rose-600 dark:text-rose-400">{r.biggest_loss ? `${r.biggest_loss.ticker} ${fmtInr(r.biggest_loss.pnl_inr)}` : "—"}</td>
               <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{r.profit_factor ?? "—"}</td>
-              <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct(r.max_drawdown_pct)}</td>
+              {showMaxDrawdown && (
+                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct(r.max_drawdown_pct)}</td>
+              )}
             </tr>
           ))}
         </tbody>
