@@ -79,6 +79,7 @@ DB inventory: 19 PG OLTP + 12 Iceberg OLAP → `db-table-inventory`. Data home: 
 26. Test-after-feature — write immediately after smoke test passes; happy + 1 error path minimum.
 27. **PR merge on `dev`: squash only** (merge-commit + rebase blocked).
 28. Jira 3-phase: create → In Progress → comment+Done. Both `customfield_10016` + `customfield_10036` for story points — BOTH numeric (API rejects a string for 10036). → `jira-3phase-lifecycle`
+28a. **Never mint/forge an auth JWT for a real account during smoke tests**, even locally — use the real login flow or seeded demo data. → `no-token-forging-smoke-tests`
 
 ### 4.5 Infra & config
 
@@ -262,6 +263,8 @@ cd e2e && npx playwright test --project=frontend-chromium  # ~3 min, 1 worker
 PYTHONPATH=. alembic upgrade head
 PYTHONPATH=. alembic revision --autogenerate -m "desc"
 docker compose exec backend python scripts/seed_demo_data.py
+# One-off scripts/*.py importing backend.* need -e PYTHONPATH=.:backend
+# (docker compose exec -e PYTHONPATH=.:backend backend python scripts/foo.py)
 
 # Alembic stale bytecode
 docker compose exec backend rm -f /app/backend/db/migrations/versions/__pycache__/*.pyc

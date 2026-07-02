@@ -81,10 +81,27 @@ Same LOW/HIGH ordering per 15m bar. Dry-run logs GTT intents without calling Kit
 
 **HWM evaluation (existing):** STOP_UPDATED → delete+replace GTT; STOP_HIT → emergency limit SELL.
 
-**GTT-triggered detection (Piece A — added 2026-07-01):** Once per 15-min tick, BEFORE the
-HWM loop, calls `kite.get_gtts()` and builds the active-ID set. Any tracked `gtt_id > 0`
-absent from the active set is treated as triggered:
+**GTT-triggered detection (Piece A — added 2026-07-01, fill-emission fixed
+2026-07-02):** Once per 15-min tick, BEFORE the HWM loop, calls `kite.get_gtts()`
+and builds the active-ID set (and a `gtt_id → record` lookup). Any tracked
+`gtt_id > 0` absent from the active set is treated as triggered:
+- Resolves qty/price from Kite's own GTT order definition (`record["orders"][0]`)
+  when available, falling back to `self._positions.open_positions()` only if the
+  GTT record itself is missing. Kite's order definition is authoritative and
+  can't drift the way `_positions` can (found 2026-07-02: HSCL's `_positions`
+  entry had already been lost by the time Piece A ran, even though
+  `_trailing_managers` still had it — a restart-induced desync — and the old
+  code silently recorded qty=0 for the fill).
 - Applies synthetic SELL fill to `_positions`
+- **Emits `order_filled_live`** (payload: symbol/side/qty/price/fees_inr/
+  reason="gtt_triggered"/product/source="gtt_poll") — **this was missing before
+  2026-07-02**: Piece A used to emit only `gtt_triggered`, so any trade it
+  caught (i.e. every case where the Kite postback was lost and Piece B never
+  ran) was structurally invisible to every consumer of `algo.events` that
+  reconstructs trades from fills (the Attribution panel, the Strategy
+  Performance page's `algo.closed_trades` rollup). If qty cannot be resolved
+  from either source, logs an error and skips the fill (visible gap, not a
+  silent zero).
 - Pops `_trailing_managers` / `_gtt_ids` / `_ws_hwm`; releases `_ticker_locked`; syncs Redis
 - Emits `gtt_triggered` with `source="gtt_poll"`
 - Issues `continue` to skip HWM eval for that ticker (already handled)
@@ -175,9 +192,13 @@ next update_in_flight fires) reliably retain fill_price in PG.
 | `gtt_cancelled_for_time_stop` | time-stop path | ticker, holding_days, gtt_id |
 | `trailing_stop_recovered` | `_load_trailing_state_from_redis` / `_ensure_gtts_for_hydrated_positions` | ticker, phase, hwm, current_stop, gtt_id, source |
 | `gtt_triggered` | `_ratchet_all_gtts` (source=gtt_poll) or postback fallback (source=postback) | ticker, qty, stop_price, gtt_id, dry_run, source |
+| `order_filled_live` (from Piece A) | `_ratchet_all_gtts`, alongside `gtt_triggered`, since 2026-07-02 | symbol, side=SELL, qty, price, fees_inr, reason="gtt_triggered", product, source="gtt_poll" |
 
 `gtt_triggered` feeds `LiveEventsPanel` (amber GTT-HIT badge) and `RecentFillsTape`
-(merged alongside `order_filled_live` via two `usePaperEvents` SWR calls).
+(merged alongside `order_filled_live` via two `usePaperEvents` SWR calls). Before
+2026-07-02, Piece A-caught triggers had a `gtt_triggered` row but no matching
+`order_filled_live` — any reader that reconstructs trades from fills only (the
+Attribution panel, the Strategy Performance page) missed them entirely.
 
 ## Testing gotcha — `kite.dry_run` vs `kite._dry_run`
 
@@ -186,6 +207,10 @@ underscore). `MagicMock().dry_run` returns a truthy MagicMock, so `self._dry_run
 by default. Tests that exercise the GTT detection block (gated by `if not self._dry_run`)
 must set `kite.dry_run = False` (no underscore) or `rt._dry_run = False` directly after
 construction. Setting `kite._dry_run = False` (underscore) has no effect.
+**`dry_run` is a read-only property on `KiteClient`** (no setter) — this only
+works if the mock/instance was never constructed with `dry_run=True` in the
+first place. Simplest fix: construct with `KiteClient(..., dry_run=False)`
+directly rather than constructing `dry_run=True` and trying to override after.
 
 ## AST fields (RiskPerTrade)
 
