@@ -299,3 +299,72 @@ def test_gtt_poll_falls_back_to_estimate_when_no_matching_order():
     ) if "payload_json" in fill_events[0] else fill_events[0]["payload"]
     assert float(payload["price"]) == pytest.approx(673.722)
     assert payload["price_source"] == "gtt_config_estimate"
+
+
+def test_gtt_poll_survives_malformed_orders_return():
+    """Hardening (code-review finding on Task 4): a successful-but-
+    malformed ``kite.orders()`` return -- e.g. a list containing a
+    non-dict element whose ``.get()`` raises AttributeError -- must
+    NOT crash the poll loop. ``_lookup_true_gtt_fill_price`` must
+    swallow ANY exception during order matching (not just the
+    ``orders()`` call itself) and return None, so the caller falls
+    back to the GTT-config-price estimate. The list comprehension +
+    ``max()`` previously ran OUTSIDE the try/except guard."""
+    from backend.algo.strategy.ast import RiskPerTrade
+    from backend.algo.backtest.trailing_stop_manager import (
+        TrailingStopManager,
+    )
+
+    rt = _make_runtime()
+    ticker = "HSCL.NS"
+
+    mgr = TrailingStopManager(
+        risk=RiskPerTrade(stop_loss_pct=5.0, max_qty=1000),
+        entry_price=642.6,
+        atr=15.0,
+        ticker=ticker,
+    )
+    rt._trailing_managers[ticker] = mgr
+    rt._gtt_ids[ticker] = 325479574
+    rt._ws_hwm[ticker] = 693.0
+    rt._ticker_locked.add(ticker)
+    rt._positions.open_positions = MagicMock(return_value={})
+
+    rt._kite.get_gtts = MagicMock(return_value=[
+        {
+            "id": 325479574,
+            "status": "triggered",
+            "orders": [
+                {
+                    "transaction_type": "SELL",
+                    "quantity": 4,
+                    "price": 673.722,
+                },
+            ],
+        },
+    ])
+    # Malformed order book: a truthy list whose element is not a
+    # dict -- ``.get()`` inside the comprehension raises
+    # AttributeError. Must be caught, not propagated.
+    rt._kite._kc.orders = MagicMock(
+        return_value=["not-a-dict", None],
+    )
+
+    with patch.object(
+        rt, "_sync_ticker_lock_to_redis",
+    ), patch("backend.cache.get_cache"):
+        # Must NOT raise -- the poll loop has no per-ticker guard.
+        rt._ratchet_all_gtts()
+
+    fill_events = [
+        e for e in rt._events if e["type"] == "order_filled_live"
+    ]
+    assert len(fill_events) == 1, (
+        "the fill must still be recorded via the estimate fallback "
+        "even when kite.orders() returns a malformed value"
+    )
+    payload = json.loads(
+        fill_events[0]["payload_json"],
+    ) if "payload_json" in fill_events[0] else fill_events[0]["payload"]
+    assert float(payload["price"]) == pytest.approx(673.722)
+    assert payload["price_source"] == "gtt_config_estimate"

@@ -300,27 +300,27 @@ def _lookup_true_gtt_fill_price(
         if kc is None:
             return None
         orders = kc.orders() or []
+        matches = [
+            o for o in orders
+            if o.get("tradingsymbol") == bare_symbol
+            and o.get("transaction_type") == "SELL"
+            and str(o.get("status") or "").upper() == "COMPLETE"
+        ]
+        if not matches:
+            return None
+        # Most recent completed SELL for this symbol today -- the
+        # GTT trigger is, by construction, recent.
+        latest = max(
+            matches,
+            key=lambda o: str(o.get("order_timestamp") or ""),
+        )
+        avg_price = latest.get("average_price")
     except Exception as exc:  # noqa: BLE001
         _logger.warning(
             "gtt true-price lookup: kite.orders() failed for "
-            "%s: %s", ticker, exc,
+            "%s: %s", ticker, exc, exc_info=True,
         )
         return None
-    matches = [
-        o for o in orders
-        if o.get("tradingsymbol") == bare_symbol
-        and o.get("transaction_type") == "SELL"
-        and str(o.get("status") or "").upper() == "COMPLETE"
-    ]
-    if not matches:
-        return None
-    # Most recent completed SELL for this symbol today -- the
-    # GTT trigger is, by construction, recent.
-    latest = max(
-        matches,
-        key=lambda o: str(o.get("order_timestamp") or ""),
-    )
-    avg_price = latest.get("average_price")
     if not avg_price:
         return None
     try:
