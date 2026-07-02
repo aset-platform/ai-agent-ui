@@ -101,6 +101,43 @@ def test_no_events_returns_zero_upserted(fake_session):
     assert fake_session.execute.await_count == 0
 
 
+def test_wrapper_marks_scheduler_run_success(fake_session):
+    """Found 2026-07-02: the scheduled 16:30 IST run completed all
+    its real work (events fetched, trades paired, PG upsert done --
+    confirmed via computed_at matching the run's started_at) but the
+    scheduler_runs row stayed status='running' forever, because the
+    executor.py wrapper never called the shared _algo_job_success
+    helper that every other standalone (non-pipeline) algo job
+    wrapper calls (e.g. _job_algo_reconciliation,
+    _job_algo_kite_instruments_refresh). scheduler_service.py's own
+    dispatcher only ever sets duration_secs on success -- status is
+    explicitly documented as the executor's responsibility
+    ("executor sets status to success/failed itself")."""
+    from backend.jobs.executor import _job_algo_closed_trades_rollup
+
+    run_id = "test-run-id"
+    repo = MagicMock()
+    with patch(
+        "backend.db.duckdb_engine.query_iceberg_table",
+        return_value=[],
+    ), patch(
+        "backend.db.engine.disposable_pg_session",
+        _disposable_session_cm(fake_session),
+    ), patch("cache.get_cache") as mock_cache:
+        mock_cache.return_value = MagicMock()
+        result = _job_algo_closed_trades_rollup(
+            scope="all", run_id=run_id, repo=repo,
+            payload={"today": "2026-06-06"},
+        )
+    assert result["status"] == "ok"
+    repo.update_scheduler_run.assert_called_once()
+    call_args = repo.update_scheduler_run.call_args
+    assert call_args.args[0] == run_id
+    updates = call_args.args[1]
+    assert updates["status"] == "success"
+    assert "completed_at" in updates
+
+
 def test_dry_run_does_not_write(fake_session):
     events = [
         _fill_row(
