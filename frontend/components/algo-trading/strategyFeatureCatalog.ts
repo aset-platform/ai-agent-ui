@@ -40,6 +40,15 @@ export interface StrategyFeature {
     | "factor"
     | "intraday_feature_store";
   scale?: FeatureScale;
+  /**
+   * ASETPLTFRM-469 — found 2026-07-03: some features are
+   * selectable here but never populated by any of the 3 runtimes
+   * (live/paper/backtest), so a condition referencing one always
+   * hits signal_rejected reason=missing_feature and can never
+   * evaluate true. Drives a warning in ConditionBuilder so a user
+   * can't silently build a dead condition.
+   */
+  unwired?: boolean;
 }
 
 export const STRATEGY_FEATURES: StrategyFeature[] = [
@@ -64,18 +73,18 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "vwap", label: "VWAP (intraday)", type: "float", source: "technical" },
   { key: "nifty_above_sma200", label: "NIFTY > SMA200 regime (1/0)", type: "int", source: "technical" },
   { key: "nifty_30d_return_pct", label: "NIFTY 30-day return %", type: "float", source: "technical", scale: "percent" },
-  { key: "today_dpc", label: "Today delivery %", type: "float", source: "technical" },
+  { key: "today_dpc", label: "Today delivery %", type: "float", source: "technical", unwired: true },
   // Fundamentals
-  { key: "pscore", label: "P-Score (Piotroski)", type: "int", source: "fundamentals" },
-  { key: "debt_to_eq", label: "Debt / Equity", type: "float", source: "fundamentals" },
-  { key: "roce", label: "ROCE %", type: "float", source: "fundamentals" },
-  { key: "sales_growth_3yrs", label: "Sales growth 3y %", type: "float", source: "fundamentals" },
-  { key: "prft_growth_3yrs", label: "Profit growth 3y %", type: "float", source: "fundamentals" },
+  { key: "pscore", label: "P-Score (Piotroski)", type: "int", source: "fundamentals", unwired: true },
+  { key: "debt_to_eq", label: "Debt / Equity", type: "float", source: "fundamentals", unwired: true },
+  { key: "roce", label: "ROCE %", type: "float", source: "fundamentals", unwired: true },
+  { key: "sales_growth_3yrs", label: "Sales growth 3y %", type: "float", source: "fundamentals", unwired: true },
+  { key: "prft_growth_3yrs", label: "Profit growth 3y %", type: "float", source: "fundamentals", unwired: true },
   // Recommendation
-  { key: "recommendation_score", label: "Recommendation score", type: "float", source: "recommendation" },
+  { key: "recommendation_score", label: "Recommendation score", type: "float", source: "recommendation", unwired: true },
   // Forecast
-  { key: "forecast_30d_pct_change", label: "Forecast 30d % change", type: "float", source: "forecast" },
-  { key: "forecast_confidence", label: "Forecast confidence", type: "float", source: "forecast" },
+  { key: "forecast_30d_pct_change", label: "Forecast 30d % change", type: "float", source: "forecast", unwired: true },
+  { key: "forecast_confidence", label: "Forecast confidence", type: "float", source: "forecast", unwired: true },
   // Regime + breadth + VIX (REGIME-1)
   { key: "regime_label", label: "Regime label (BULL/SIDEWAYS/BEAR)", type: "string", source: "regime" },
   { key: "stress_prob", label: "HMM stress probability", type: "float", source: "regime", scale: "fraction" },

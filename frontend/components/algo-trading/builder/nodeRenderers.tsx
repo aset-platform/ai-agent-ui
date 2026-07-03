@@ -12,6 +12,16 @@ import {
 
 export function FeatureChip({ keyName }: { keyName: string }) {
   const f = STRATEGY_FEATURE_BY_KEY[keyName];
+  if (f?.unwired) {
+    return (
+      <span
+        className="rounded bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 px-1.5 py-0.5 text-[11px]"
+        title="Not populated by any runtime yet — this condition can never evaluate true."
+      >
+        ⚠ {f.label}
+      </span>
+    );
+  }
   const caption = f?.scale ? FEATURE_SCALE_CAPTION[f.scale] : undefined;
   return (
     <span

@@ -65,6 +65,16 @@ class Feature(BaseModel):
     type: FeatureType
     source: FeatureSource
     scale: FeatureScale | None = None
+    # ASETPLTFRM-469 — found 2026-07-03: some features are
+    # selectable here but never populated by any of the 3 runtimes
+    # (live/paper/backtest) in EvalContext.features, so a condition
+    # referencing one always hits signal_rejected reason=
+    # missing_feature and can never evaluate true. ``unwired=True``
+    # drives a warning in the Strategy Builder UI so a user can't
+    # silently build a dead condition. Remove this flag (and file a
+    # sample backtest case per the module docstring's step 4) once
+    # a feature is actually wired into a runtime.
+    unwired: bool = False
 
 
 # Initial feature dictionary — equity, daily-bar features only.
@@ -156,6 +166,7 @@ FEATURES: list[Feature] = [
         label="Today delivery %",
         type="float",
         source="technical",
+        unwired=True,
     ),
     # Fundamentals
     Feature(
@@ -163,25 +174,35 @@ FEATURES: list[Feature] = [
         label="P-Score (Piotroski)",
         type="int",
         source="fundamentals",
+        unwired=True,
     ),
     Feature(
         key="debt_to_eq",
         label="Debt / Equity",
         type="float",
         source="fundamentals",
+        unwired=True,
     ),
-    Feature(key="roce", label="ROCE %", type="float", source="fundamentals"),
+    Feature(
+        key="roce",
+        label="ROCE %",
+        type="float",
+        source="fundamentals",
+        unwired=True,
+    ),
     Feature(
         key="sales_growth_3yrs",
         label="Sales growth 3y %",
         type="float",
         source="fundamentals",
+        unwired=True,
     ),
     Feature(
         key="prft_growth_3yrs",
         label="Profit growth 3y %",
         type="float",
         source="fundamentals",
+        unwired=True,
     ),
     # Recommendation
     Feature(
@@ -189,6 +210,7 @@ FEATURES: list[Feature] = [
         label="Recommendation score",
         type="float",
         source="recommendation",
+        unwired=True,
     ),
     # Forecast
     Feature(
@@ -196,12 +218,14 @@ FEATURES: list[Feature] = [
         label="Forecast 30d % change",
         type="float",
         source="forecast",
+        unwired=True,
     ),
     Feature(
         key="forecast_confidence",
         label="Forecast confidence",
         type="float",
         source="forecast",
+        unwired=True,
     ),
     # Regime + breadth + VIX (REGIME-1)
     Feature(

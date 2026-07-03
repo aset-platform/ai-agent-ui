@@ -246,6 +246,11 @@ function ConditionRowEditor({
   const feat = STRATEGY_FEATURES.find((f) => f.key === row.leftFeature);
   const isString = feat?.type === "string";
   const ops = isString ? STRING_OPS : NUMERIC_OPS;
+  const rightFeat =
+    row.rightType === "feature"
+      ? STRATEGY_FEATURES.find((f) => f.key === row.rightFeature)
+      : undefined;
+  const unwiredFeat = feat?.unwired ? feat : rightFeat?.unwired ? rightFeat : null;
 
   function handleFeatureChange(key: string) {
     const f = STRATEGY_FEATURES.find((x) => x.key === key);
@@ -286,7 +291,7 @@ function ConditionRowEditor({
             <optgroup key={grp.source} label={grp.label}>
               {grp.features.map((f) => (
                 <option key={f.key} value={f.key}>
-                  {f.label}
+                  {f.unwired ? `⚠ ${f.label} (not yet available)` : f.label}
                 </option>
               ))}
             </optgroup>
@@ -344,7 +349,7 @@ function ConditionRowEditor({
                   .filter((f) => f.type !== "string")
                   .map((f) => (
                     <option key={f.key} value={f.key}>
-                      {f.label}
+                      {f.unwired ? `⚠ ${f.label} (not yet available)` : f.label}
                     </option>
                   ))}
               </optgroup>
@@ -377,6 +382,15 @@ function ConditionRowEditor({
           data-testid="algo-cond-scale-caption"
         >
           {scaleCaption}
+        </p>
+      )}
+      {unwiredFeat && (
+        <p
+          className="text-[11px] text-red-600 dark:text-red-400 pl-0.5"
+          data-testid="algo-cond-unwired-warning"
+        >
+          ⚠ &quot;{unwiredFeat.label}&quot; is not populated by any runtime
+          yet — this condition can never evaluate true.
         </p>
       )}
     </div>
