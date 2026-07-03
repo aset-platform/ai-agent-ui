@@ -27,7 +27,7 @@ every case we've hit.
 | New env var added to `.env` | `up -d --force-recreate backend` | restart does NOT re-read env_file |
 | Renamed Alembic migration file | edit `revision: str = "..."` AND clear `__pycache__/*.pyc` AND `restart` | bytecode cache survives rename |
 | New module added (any new `*.py`) via direct `Edit`/`Write` | usually nothing | reload picks up imports |
-| New module added via `git merge`/`git pull` (multi-file) | `restart` if anything imports it | StatReload not guaranteed to fire for merge-introduced changes — confirmed case: a scheduled job hit `ModuleNotFoundError` 24 min after a merge landed a new module, with no StatReload log line in that window |
+| New module added via `git merge`/`git pull` (multi-file) | `restart` if anything imports it | StatReload not guaranteed to fire for merge-introduced changes — see linked memory |
 | Container's `Dockerfile.backend` changed (new apt pkg) | `compose build backend` + `up -d` | image needs rebuild |
 | `requirements.txt` changed | `compose build backend` + `up -d` | image needs rebuild |
 | Frontend env (`NEXT_PUBLIC_*`) changed | `restart frontend` (or `--force-recreate`) | baked into client bundle at build/start |

@@ -63,3 +63,11 @@ permanently-dead condition without knowing it.
 3. Confirm the feature is actually populated by at least one runtime
    before shipping it without `unwired=True` — or set the flag if it
    isn't wired yet.
+4. Update BOTH `backend/algo/strategy/features.py` and
+   `frontend/components/algo-trading/strategyFeatureCatalog.ts` in
+   the same change. **`test_feature_registry_sync.py` only asserts
+   key-set parity between the two catalogs — it does NOT check that
+   `scale`/`unwired` values match.** A `scale`/`unwired` value set on
+   only one side passes CI silently and produces a stale UI caption
+   or warning. Until that test is extended to cover these fields,
+   this step is manual — double-check both files by eye.

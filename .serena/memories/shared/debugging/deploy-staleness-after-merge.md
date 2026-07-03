@@ -27,13 +27,16 @@ reload — StatReload is supposed to provide that reload automatically,
 but this incident shows it cannot be relied on for merge-introduced
 changes specifically.
 
-**Confirmed instance:** a PR merge added a new module; a scheduled
-job running on a process that had started well before the merge hit
-`ModuleNotFoundError` roughly 24 minutes after the merge landed.
-Cross-referencing the job's run history against
+**Confirmed instance:** PR #292 merged a new module
+(`backend/algo/attribution/fifo_matcher.py`) into `dev` at
+10:36:47 UTC. The scheduled job `algo_closed_trades_rollup`,
+running on a process that had started at 09:54:56 UTC (before the
+merge), hit `ModuleNotFoundError` at 11:00:06 UTC. Cross-referencing
+the job's run history (`scheduler_runs` table) against
 `docker compose logs backend -t | grep StatReload` showed no reload
-log line anywhere in that window — only the next explicit restart
-picked up the new module, after which the job succeeded on retry.
+log line anywhere in that 24-minute window — only the next explicit
+restart (11:45:52 UTC) picked up the new module, after which the job
+succeeded on retry.
 
 ## Fix
 
