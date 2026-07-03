@@ -81,7 +81,7 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "stress_prob", label: "HMM stress probability", type: "float", source: "regime", scale: "fraction" },
   { key: "pct_above_50sma", label: "% above 50d SMA (breadth)", type: "float", source: "regime", scale: "fraction" },
   { key: "pct_above_200sma", label: "% above 200d SMA (breadth)", type: "float", source: "regime", scale: "fraction" },
-  { key: "midcap_largecap_ratio", label: "Midcap / Largecap ratio", type: "float", source: "regime" },
+  { key: "midcap_largecap_ratio", label: "Midcap / Largecap ratio", type: "float", source: "regime", scale: "ratio" },
   { key: "vix_close", label: "India VIX close", type: "float", source: "regime" },
   { key: "vix_sma_20", label: "India VIX 20-day SMA", type: "float", source: "regime" },
   // Factor library (REGIME-2a)
@@ -96,8 +96,8 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "sma200_slope", label: "SMA200 slope (21d)", type: "float", source: "factor", scale: "fraction" },
   { key: "distance_from_sma200", label: "Distance from SMA200", type: "float", source: "factor", scale: "fraction" },
   { key: "obv", label: "On-Balance Volume", type: "float", source: "factor" },
-  { key: "volume_x_avg_20", label: "Volume x 20d avg", type: "float", source: "factor" },
-  { key: "up_down_vol_ratio_20", label: "Up/Down vol ratio (20d)", type: "float", source: "factor" },
+  { key: "volume_x_avg_20", label: "Volume x 20d avg", type: "float", source: "factor", scale: "ratio" },
+  { key: "up_down_vol_ratio_20", label: "Up/Down vol ratio (20d)", type: "float", source: "factor", scale: "ratio" },
   { key: "rs_vs_nifty_3m", label: "Rel strength vs NIFTY 3m", type: "float", source: "factor", scale: "ratio" },
   { key: "rs_vs_nifty_6m", label: "Rel strength vs NIFTY 6m", type: "float", source: "factor", scale: "ratio" },
   { key: "rs_vs_sector_3m", label: "Rel strength vs sector 3m", type: "float", source: "factor", scale: "ratio" },
@@ -132,7 +132,7 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "rs_vs_nifty_15m", label: "RS vs NIFTY (15m)", type: "float", source: "intraday_feature_store", scale: "fraction" },
   { key: "rs_vs_sector_15m", label: "RS vs sector (15m)", type: "float", source: "intraday_feature_store", scale: "fraction" },
   { key: "market_breadth_pct_above_sma200", label: "% Nifty-500 above SMA200", type: "float", source: "intraday_feature_store", scale: "percent" },
-  { key: "advance_decline_ratio", label: "Advance/decline ratio (15m)", type: "float", source: "intraday_feature_store" },
+  { key: "advance_decline_ratio", label: "Advance/decline ratio (15m)", type: "float", source: "intraday_feature_store", scale: "ratio" },
   // Intraday – sector rotation (FE-9 Phase 2). regime_label /
   // stress_prob are intentionally NOT mirrored under
   // intraday_feature_store here — their canonical AST surface

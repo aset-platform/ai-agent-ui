@@ -236,6 +236,7 @@ FEATURES: list[Feature] = [
         label="Midcap / Largecap ratio",
         type="float",
         source="regime",
+        scale="ratio",
     ),
     Feature(
         key="vix_close",
@@ -331,12 +332,14 @@ FEATURES: list[Feature] = [
         label="Volume x 20d avg",
         type="float",
         source="factor",
+        scale="ratio",
     ),
     Feature(
         key="up_down_vol_ratio_20",
         label="Up/Down vol ratio (20d)",
         type="float",
         source="factor",
+        scale="ratio",
     ),
     Feature(
         key="rs_vs_nifty_3m",
@@ -538,6 +541,7 @@ FEATURES: list[Feature] = [
         label="Advance/decline ratio (15m)",
         type="float",
         source="intraday_feature_store",
+        scale="ratio",
     ),
     # ────────────────────────────────────────────────────────────
     # Intraday — sector rotation + regime link (FE-9, Phase 2)
