@@ -3858,13 +3858,31 @@ class LiveRuntime:
             )
             return 0
 
+        # Fresh caps read — used for max_inr / max_orders_per_day
+        # and the allow-list; the daily-counter columns on the row
+        # are no longer authoritative (see below). Moved before the
+        # allow-list gate (2026-07-03, was after signal_generated) —
+        # self._caps is the startup-time snapshot, frozen for the
+        # life of the runtime, so a mid-run edit to allowed_tickers
+        # was invisible until restart. current_caps is re-read from
+        # PG on every signal, so an edit now takes effect on the
+        # very next bar.
+        current_caps = (
+            await self._caps_repo.get(
+                self._user_id,
+                self._strategy.id,
+            )
+            or self._caps
+        )
+
         # Allowed-tickers gate — BUY only. Runs here (before
         # signal_generated) so a ticker outside the user's allow-list
-        # never appears as a generated signal in the UI. Uses the
-        # startup-loaded caps (self._caps) — no async I/O needed.
+        # never appears as a generated signal in the UI. Uses fresh
+        # caps (current_caps, re-read from PG above) so a mid-run
+        # allow-list edit takes effect immediately.
         # Mirrors the suffix-tolerant compare in safety.py Cap 2.
         if signal.side == "BUY":
-            _allowed = self._caps.get("allowed_tickers") or []
+            _allowed = current_caps.get("allowed_tickers") or []
             if _allowed:
                 def _bare_sym(t: str) -> str:
                     for _suf in (".NS", ".BO", ".NSI"):
@@ -3920,17 +3938,6 @@ class LiveRuntime:
                     **_attribution_payload_extension(features),
                 },
             )
-        )
-
-        # Fresh caps read — used for max_inr / max_orders_per_day
-        # and the allow-list; the daily-counter columns on the row
-        # are no longer authoritative (see below).
-        current_caps = (
-            await self._caps_repo.get(
-                self._user_id,
-                self._strategy.id,
-            )
-            or self._caps
         )
 
         account = self._account_snapshot(
