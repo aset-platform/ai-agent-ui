@@ -1499,6 +1499,66 @@ class LiveRuntime:
                 )
                 await asyncio.sleep(30)
 
+    async def _release_budget_reservation_for_gtt_exit(
+        self, *, ticker: str, qty: int, fill_price: float,
+    ) -> None:
+        """Create + immediately FILL a SELL budget reservation for a
+        GTT-triggered exit, so the matching BUY's cost basis is
+        netted out of ``sum_open_position_cost`` (Cap 0 pool-wide
+        budget headroom).
+
+        Found 2026-07-03: neither Piece A (``_ratchet_all_gtts``, the
+        15-min poll) nor Piece B (``_apply_gtt_triggered_sell_fill``,
+        the postback fallback) ever wrote a SELL row -- both apply
+        the fill to the in-memory position tracker and emit
+        ``algo.events`` correctly, but the budget ledger never
+        learned the position closed, permanently overstating
+        ``open_pos_cost`` for every GTT-closed position and eating
+        into headroom for ALL the user's strategies, not just this
+        one.
+
+        A GTT fill is detected post-facto -- the fill already
+        happened by the time either path learns about it -- so there
+        is no PENDING/SUBMITTED phase to model; go straight to
+        FILLED. Idempotency is inherited from the caller: both Piece
+        A and Piece B are gated on ``self._gtt_ids``/
+        ``self._trailing_managers`` still tracking the ticker, and
+        whichever path runs first pops that shared state, so this is
+        only ever called once per real fill.
+
+        Best-effort: a budget-ledger blip must not shadow the fill
+        itself, but IS logged loudly (not silently swallowed) since a
+        missed release directly causes Cap 0 to reject future BUYs
+        across every strategy the user runs, not just this one.
+        """
+        try:
+            reserved_inr = (
+                Decimal(str(qty)) * Decimal(str(fill_price))
+            )
+            reservation_id = await budget_reserve(
+                user_id=self._user_id,
+                strategy_id=self._strategy.id,
+                ticker=ticker,
+                side="SELL",
+                qty=qty,
+                reserved_inr=reserved_inr,
+                metadata={"mode": "live", "source": "gtt_exit"},
+            )
+            await budget_transition(
+                reservation_id=reservation_id,
+                new_state=ReservationState.FILLED,
+                filled_qty=qty,
+                filled_inr=reserved_inr,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.error(
+                "gtt exit: budget SELL reservation release failed "
+                "for %s qty=%d @%.4f — open_pos_cost will overstate "
+                "this position (and understate pool-wide headroom "
+                "for every strategy) until manually corrected",
+                ticker, qty, fill_price, exc_info=True,
+            )
+
     def _ratchet_all_gtts(self) -> None:
         """Sync: evaluate all trailing managers against WS HWM.
 
@@ -1624,6 +1684,52 @@ class LiveRuntime:
                             },
                         )
                     )
+                    # Release the matching BUY's budget reservation
+                    # (Cap 0 pool-wide headroom). Sync method on a
+                    # worker thread — same run_coroutine_threadsafe
+                    # pattern as the STOP_HIT emergency SELL above.
+                    # Tests calling this synchronously on the loop
+                    # thread would deadlock on .result(), so skip
+                    # (best-effort) rather than block — production
+                    # always runs via asyncio.to_thread.
+                    _on_loop_thread = True
+                    try:
+                        asyncio.get_running_loop()
+                    except RuntimeError:
+                        _on_loop_thread = False
+                    if (
+                        self._loop is not None
+                        and self._loop.is_running()
+                        and not _on_loop_thread
+                    ):
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                self._release_budget_reservation_for_gtt_exit(
+                                    ticker=ticker,
+                                    qty=_fill_qty,
+                                    fill_price=_fill_price,
+                                ),
+                                self._loop,
+                            ).result(
+                                timeout=_EMERGENCY_SUBMIT_TIMEOUT_S,
+                            )
+                        except Exception:  # noqa: BLE001
+                            _logger.error(
+                                "ratchet: budget release dispatch "
+                                "failed for %s — open_pos_cost will "
+                                "overstate this position until "
+                                "manually corrected",
+                                ticker, exc_info=True,
+                            )
+                    else:
+                        _logger.warning(
+                            "ratchet: no running loop reference — "
+                            "skipping budget reservation release "
+                            "for %s (test context or pre-run() "
+                            "call); open_pos_cost will overstate "
+                            "this position until manually corrected",
+                            ticker,
+                        )
                 else:
                     _logger.error(
                         "ratchet: GTT %s triggered for %s but "
@@ -1968,7 +2074,7 @@ class LiveRuntime:
             "(gtt_id=%s, lock released)", ticker, gtt_id,
         )
 
-    def _apply_gtt_triggered_sell_fill(
+    async def _apply_gtt_triggered_sell_fill(
         self,
         *,
         ticker: str,
@@ -1980,6 +2086,12 @@ class LiveRuntime:
         Called from the postback webhook when a GTT SELL has no
         in-flight entry.  Safe to call a second time — SELL on an
         already-closed position is a no-op in PositionTracker.
+
+        Also releases the matching BUY's budget reservation (Cap 0
+        pool-wide headroom) — the webhook handler this is called
+        from is already on the event loop, so this can await
+        directly rather than needing Piece A's (_ratchet_all_gtts)
+        run_coroutine_threadsafe dance.
         """
         from backend.algo.backtest.types import Fill
         _fill = Fill(
@@ -1997,6 +2109,9 @@ class LiveRuntime:
             "gtt-postback: synthetic SELL fill applied "
             "%s qty=%d @₹%.4f",
             ticker, qty, fill_price,
+        )
+        await self._release_budget_reservation_for_gtt_exit(
+            ticker=ticker, qty=qty, fill_price=fill_price,
         )
 
     async def user_exit_position(
