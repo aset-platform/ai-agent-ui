@@ -30,6 +30,7 @@ from sqlalchemy import text
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
+from backend.algo.attribution.fifo_matcher import match_fifo
 from backend.algo.attribution.trade_log import build_trade_reason
 from cache import TTL_STABLE, TTL_VOLATILE, get_cache
 
@@ -249,7 +250,8 @@ def create_attribution_router() -> APIRouter:
             dry_run_params = [wanted]
 
         sql = (
-            "SELECT user_id, strategy_id, type, payload_json, ts_ns "
+            "SELECT event_id, user_id, strategy_id, type, "
+            " payload_json, ts_ns "
             "FROM events "
             "WHERE user_id = ? "
             "  AND ts_date = ? "
@@ -339,51 +341,82 @@ def create_attribution_router() -> APIRouter:
                 ],
                 key=lambda f: int(f.get("ts_ns") or 0),
             )
-            # FIFO pair: each BUY fill paired with the next SELL
-            # fill in time order. Unmatched fills (open positions,
-            # naked SELLs) skipped — surface separately later if
-            # the UX needs them.
-            for i in range(min(len(buy_fills), len(sell_fills))):
-                buy_fill = buy_fills[i]
-                sell_fill = sell_fills[i]
+            # FIFO pair, quantity-aware (ASETPLTFRM — 2026-07-02):
+            # a single BUY fill may be closed by several SELL
+            # fills of differing quantities (or vice versa) — the
+            # old index-based ``buys[i]``/``sells[i]`` pairing
+            # silently mis-paired quantities and dropped trades
+            # whenever fills were not a clean 1:1 sequence. See
+            # ``backend/algo/attribution/fifo_matcher.py``.
+            #
+            # Real ``algo.events`` rows carry a genuine
+            # ``event_id`` (now selected above); the fixtures in
+            # this file's tests do not, so fall back to a
+            # synthetic per-fill id derived from list position —
+            # ``buy_fills``/``sell_fills`` are already sorted by
+            # ``ts_ns`` so this is stable and unique either way.
+            buy_idx_by_id = {
+                (f.get("event_id") or f"{sym}:buy:{i}"): i
+                for i, f in enumerate(buy_fills)
+            }
+            sell_idx_by_id = {
+                (f.get("event_id") or f"{sym}:sell:{i}"): i
+                for i, f in enumerate(sell_fills)
+            }
+            match_buys = [
+                {
+                    "event_id": f.get("event_id") or f"{sym}:buy:{i}",
+                    "qty": int(f["_payload"].get("qty") or 0),
+                    "price": float(
+                        f["_payload"].get("fill_price")
+                        or f["_payload"].get("price")
+                        or 0,
+                    ),
+                    "ts_ns": int(f["ts_ns"]),
+                }
+                for i, f in enumerate(buy_fills)
+            ]
+            match_sells = [
+                {
+                    "event_id": (
+                        f.get("event_id") or f"{sym}:sell:{i}"
+                    ),
+                    "qty": int(f["_payload"].get("qty") or 0),
+                    "price": float(
+                        f["_payload"].get("fill_price")
+                        or f["_payload"].get("price")
+                        or 0,
+                    ),
+                    "ts_ns": int(f["ts_ns"]),
+                }
+                for i, f in enumerate(sell_fills)
+            ]
+            for lot in match_fifo(match_buys, match_sells):
+                buy_idx = buy_idx_by_id[lot["buy_event_id"]]
+                sell_idx = sell_idx_by_id[lot["sell_event_id"]]
                 entry_event = (
-                    buy_sigs[i] if i < len(buy_sigs) else None
+                    buy_sigs[buy_idx]
+                    if buy_idx < len(buy_sigs) else None
                 )
                 exit_event = (
-                    sell_sigs[i] if i < len(sell_sigs) else None
+                    sell_sigs[sell_idx]
+                    if sell_idx < len(sell_sigs) else None
                 )
-                # Paper fills carry "fill_price"; live fills (both
-                # the direct live/runtime.py path and the Kite
-                # postback webhook path) carry "price" instead --
-                # never both. Falling back silently to 0 here would
-                # zero out every live-mode trade's price/PnL.
-                avg_entry = float(
-                    buy_fill["_payload"].get("fill_price")
-                    or buy_fill["_payload"].get("price")
-                    or 0,
-                )
-                avg_exit = float(
-                    sell_fill["_payload"].get("fill_price")
-                    or sell_fill["_payload"].get("price")
-                    or 0,
-                )
-                qty = int(
-                    buy_fill["_payload"].get("qty") or 0,
-                )
-                pnl_inr = (avg_exit - avg_entry) * qty
-                opened_at = _ts_ns_to_date(
-                    int(buy_fill["ts_ns"]),
-                )
-                closed_at = _ts_ns_to_date(
-                    int(sell_fill["ts_ns"]),
+                pnl_inr = (
+                    (lot["sell_price"] - lot["buy_price"])
+                    * lot["qty"]
                 )
                 trade = {
                     "ticker": sym,
-                    "opened_at": opened_at,
-                    "closed_at": closed_at,
-                    "qty": qty,
-                    "avg_entry_price": avg_entry,
-                    "avg_exit_price": avg_exit,
+                    "opened_at": _ts_ns_to_date(
+                        lot["buy_ts_ns"],
+                    ),
+                    "closed_at": _ts_ns_to_date(
+                        lot["sell_ts_ns"],
+                    ),
+                    "qty": lot["qty"],
+                    "avg_entry_price": lot["buy_price"],
+                    "avg_exit_price": lot["sell_price"],
                     "realised_pnl_inr": pnl_inr,
                 }
                 reason = build_trade_reason(

@@ -351,6 +351,69 @@ def test_trades_live_fills_use_price_key_not_fill_price(
     assert round(row["pnl_inr"], 2) == 2.27
 
 
+def test_trades_one_buy_split_across_multiple_sells(
+    app, monkeypatch,
+) -> None:
+    """The KTKBANK shape found 2026-07-02: one BUY fill of 16
+    exited via three separate SELL fills (1, 1, 14). Must surface
+    as three trade rows, not one row with the full buy qty against
+    only the first sell fill."""
+    base_ts = int(
+        datetime(2026, 6, 24, 6, 11, tzinfo=timezone.utc)
+        .timestamp() * 1_000_000_000,
+    )
+    day_ns = 86_400 * 1_000_000_000
+    fake_events = [
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live", "ts_ns": base_ts,
+            "payload_json": (
+                '{"symbol": "KTKBANK", "side": "BUY", "qty": 16, '
+                '"price": "266.3"}'
+            ),
+        },
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live", "ts_ns": base_ts + day_ns,
+            "payload_json": (
+                '{"symbol": "KTKBANK", "side": "SELL", "qty": 1, '
+                '"price": "267.0"}'
+            ),
+        },
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live",
+            "ts_ns": base_ts + day_ns + 1,
+            "payload_json": (
+                '{"symbol": "KTKBANK", "side": "SELL", "qty": 1, '
+                '"price": "267.0"}'
+            ),
+        },
+        {
+            "user_id": USER_ID, "strategy_id": "ssss",
+            "type": "order_filled_live",
+            "ts_ns": base_ts + 8 * day_ns,
+            "payload_json": (
+                '{"symbol": "KTKBANK", "side": "SELL", "qty": 14, '
+                '"price": "270.15"}'
+            ),
+        },
+    ]
+    monkeypatch.setattr(
+        "backend.db.duckdb_engine.query_iceberg_table",
+        lambda table, sql, params=None: fake_events,
+    )
+    client = TestClient(app)
+    r = client.get("/v1/algo/attribution/trades")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 3
+    total_qty = sum(row["qty"] for row in body["rows"])
+    assert total_qty == 16
+    biggest = [row for row in body["rows"] if row["qty"] == 14][0]
+    assert biggest["exit_price"] == 270.15
+
+
 def test_trades_pairs_when_no_signals_at_all(
     app, monkeypatch,
 ) -> None:

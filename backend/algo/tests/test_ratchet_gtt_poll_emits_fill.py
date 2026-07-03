@@ -170,3 +170,201 @@ def test_gtt_poll_trigger_emits_order_filled_live_with_kite_qty():
     assert len(triggered_events) == 1
     assert ticker not in rt._trailing_managers
     assert ticker not in rt._gtt_ids
+
+
+def test_gtt_poll_uses_true_fill_price_from_kite_orders():
+    """kite.get_gtts() only exposes the GTT's *configured* order
+    price, not the actual post-trigger execution price -- found
+    2026-07-02: three same-day GTT triggers (SKYGOLD, SOUTHBANK,
+    ZENTEC) all recorded a price systematically lower than
+    Zerodha's actual executed avg. When a matching COMPLETE SELL
+    order is found in kite.orders() (today-scoped order history),
+    its average_price must be used instead of the GTT's configured
+    price, tagged price_source='kite_orders'."""
+    from backend.algo.strategy.ast import RiskPerTrade
+    from backend.algo.backtest.trailing_stop_manager import (
+        TrailingStopManager,
+    )
+
+    rt = _make_runtime()
+    ticker = "HSCL.NS"
+
+    mgr = TrailingStopManager(
+        risk=RiskPerTrade(stop_loss_pct=5.0, max_qty=1000),
+        entry_price=642.6,
+        atr=15.0,
+        ticker=ticker,
+    )
+    rt._trailing_managers[ticker] = mgr
+    rt._gtt_ids[ticker] = 325479574
+    rt._ws_hwm[ticker] = 693.0
+    rt._ticker_locked.add(ticker)
+    rt._positions.open_positions = MagicMock(return_value={})
+
+    rt._kite.get_gtts = MagicMock(return_value=[
+        {
+            "id": 325479574,
+            "status": "triggered",
+            "orders": [
+                {
+                    "transaction_type": "SELL",
+                    "quantity": 4,
+                    "price": 673.722,
+                },
+            ],
+        },
+    ])
+    # The real order Kite actually executed -- a better (higher,
+    # since this is a SELL) price than the GTT's configured order.
+    rt._kite._kc.orders = MagicMock(return_value=[
+        {
+            "tradingsymbol": "HSCL",
+            "transaction_type": "SELL",
+            "status": "COMPLETE",
+            "average_price": 675.10,
+            "order_timestamp": "2026-07-02 11:00:00",
+        },
+    ])
+
+    with patch.object(
+        rt, "_sync_ticker_lock_to_redis",
+    ), patch("backend.cache.get_cache"):
+        rt._ratchet_all_gtts()
+
+    fill_events = [
+        e for e in rt._events if e["type"] == "order_filled_live"
+    ]
+    assert len(fill_events) == 1
+    payload = json.loads(
+        fill_events[0]["payload_json"],
+    ) if "payload_json" in fill_events[0] else fill_events[0]["payload"]
+    assert float(payload["price"]) == pytest.approx(675.10), (
+        "must use Kite's real executed average_price, not the "
+        "GTT's configured order price"
+    )
+    assert payload["price_source"] == "kite_orders"
+
+
+def test_gtt_poll_falls_back_to_estimate_when_no_matching_order():
+    """No matching COMPLETE SELL order in kite.orders() (API error,
+    order not yet visible, or genuinely no match) -- must fall back
+    to today's existing estimate unchanged, tagged
+    price_source='gtt_config_estimate'."""
+    from backend.algo.strategy.ast import RiskPerTrade
+    from backend.algo.backtest.trailing_stop_manager import (
+        TrailingStopManager,
+    )
+
+    rt = _make_runtime()
+    ticker = "HSCL.NS"
+
+    mgr = TrailingStopManager(
+        risk=RiskPerTrade(stop_loss_pct=5.0, max_qty=1000),
+        entry_price=642.6,
+        atr=15.0,
+        ticker=ticker,
+    )
+    rt._trailing_managers[ticker] = mgr
+    rt._gtt_ids[ticker] = 325479574
+    rt._ws_hwm[ticker] = 693.0
+    rt._ticker_locked.add(ticker)
+    rt._positions.open_positions = MagicMock(return_value={})
+
+    rt._kite.get_gtts = MagicMock(return_value=[
+        {
+            "id": 325479574,
+            "status": "triggered",
+            "orders": [
+                {
+                    "transaction_type": "SELL",
+                    "quantity": 4,
+                    "price": 673.722,
+                },
+            ],
+        },
+    ])
+    rt._kite._kc.orders = MagicMock(return_value=[])
+
+    with patch.object(
+        rt, "_sync_ticker_lock_to_redis",
+    ), patch("backend.cache.get_cache"):
+        rt._ratchet_all_gtts()
+
+    fill_events = [
+        e for e in rt._events if e["type"] == "order_filled_live"
+    ]
+    assert len(fill_events) == 1
+    payload = json.loads(
+        fill_events[0]["payload_json"],
+    ) if "payload_json" in fill_events[0] else fill_events[0]["payload"]
+    assert float(payload["price"]) == pytest.approx(673.722)
+    assert payload["price_source"] == "gtt_config_estimate"
+
+
+def test_gtt_poll_survives_malformed_orders_return():
+    """Hardening (code-review finding on Task 4): a successful-but-
+    malformed ``kite.orders()`` return -- e.g. a list containing a
+    non-dict element whose ``.get()`` raises AttributeError -- must
+    NOT crash the poll loop. ``_lookup_true_gtt_fill_price`` must
+    swallow ANY exception during order matching (not just the
+    ``orders()`` call itself) and return None, so the caller falls
+    back to the GTT-config-price estimate. The list comprehension +
+    ``max()`` previously ran OUTSIDE the try/except guard."""
+    from backend.algo.strategy.ast import RiskPerTrade
+    from backend.algo.backtest.trailing_stop_manager import (
+        TrailingStopManager,
+    )
+
+    rt = _make_runtime()
+    ticker = "HSCL.NS"
+
+    mgr = TrailingStopManager(
+        risk=RiskPerTrade(stop_loss_pct=5.0, max_qty=1000),
+        entry_price=642.6,
+        atr=15.0,
+        ticker=ticker,
+    )
+    rt._trailing_managers[ticker] = mgr
+    rt._gtt_ids[ticker] = 325479574
+    rt._ws_hwm[ticker] = 693.0
+    rt._ticker_locked.add(ticker)
+    rt._positions.open_positions = MagicMock(return_value={})
+
+    rt._kite.get_gtts = MagicMock(return_value=[
+        {
+            "id": 325479574,
+            "status": "triggered",
+            "orders": [
+                {
+                    "transaction_type": "SELL",
+                    "quantity": 4,
+                    "price": 673.722,
+                },
+            ],
+        },
+    ])
+    # Malformed order book: a truthy list whose element is not a
+    # dict -- ``.get()`` inside the comprehension raises
+    # AttributeError. Must be caught, not propagated.
+    rt._kite._kc.orders = MagicMock(
+        return_value=["not-a-dict", None],
+    )
+
+    with patch.object(
+        rt, "_sync_ticker_lock_to_redis",
+    ), patch("backend.cache.get_cache"):
+        # Must NOT raise -- the poll loop has no per-ticker guard.
+        rt._ratchet_all_gtts()
+
+    fill_events = [
+        e for e in rt._events if e["type"] == "order_filled_live"
+    ]
+    assert len(fill_events) == 1, (
+        "the fill must still be recorded via the estimate fallback "
+        "even when kite.orders() returns a malformed value"
+    )
+    payload = json.loads(
+        fill_events[0]["payload_json"],
+    ) if "payload_json" in fill_events[0] else fill_events[0]["payload"]
+    assert float(payload["price"]) == pytest.approx(673.722)
+    assert payload["price_source"] == "gtt_config_estimate"

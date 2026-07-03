@@ -22,6 +22,8 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Any
 
+from backend.algo.attribution.fifo_matcher import match_fifo
+
 _logger = logging.getLogger(__name__)
 
 _FILL_TYPES = ("order_filled", "order_filled_live")
@@ -77,39 +79,53 @@ def pair_fills_by_strategy_and_ticker(
             (f for f in fills if f["_payload"].get("side") == "SELL"),
             key=lambda f: int(f.get("ts_ns") or 0),
         )
-        for i in range(min(len(buys), len(sells))):
-            buy_fill, sell_fill = buys[i], sells[i]
-            # Paper fills carry "fill_price"; live fills (both the
-            # direct live/runtime.py path and the Kite postback
-            # webhook path) carry "price" instead -- never both.
-            # Falling back silently to 0 here would zero out every
-            # live-mode trade's price/PnL/return.
-            avg_price = float(
-                buy_fill["_payload"].get("fill_price")
-                or buy_fill["_payload"].get("price")
-                or 0,
+        sell_lookup = {f["event_id"]: f for f in sells}
+        match_buys = [
+            {
+                "event_id": f["event_id"],
+                "qty": int(f["_payload"].get("qty") or 0),
+                "price": float(
+                    f["_payload"].get("fill_price")
+                    or f["_payload"].get("price")
+                    or 0,
+                ),
+                "ts_ns": int(f["ts_ns"]),
+            }
+            for f in buys
+        ]
+        match_sells = [
+            {
+                "event_id": f["event_id"],
+                "qty": int(f["_payload"].get("qty") or 0),
+                "price": float(
+                    f["_payload"].get("fill_price")
+                    or f["_payload"].get("price")
+                    or 0,
+                ),
+                "ts_ns": int(f["ts_ns"]),
+            }
+            for f in sells
+        ]
+        for lot in match_fifo(match_buys, match_sells):
+            sell_fill = sell_lookup[lot["sell_event_id"]]
+            realised_pnl_inr = (
+                (lot["sell_price"] - lot["buy_price"]) * lot["qty"]
             )
-            fill_price = float(
-                sell_fill["_payload"].get("fill_price")
-                or sell_fill["_payload"].get("price")
-                or 0,
-            )
-            qty = int(buy_fill["_payload"].get("qty") or 0)
-            realised_pnl_inr = (fill_price - avg_price) * qty
             return_pct = (
-                (fill_price - avg_price) / avg_price * 100
-                if avg_price else 0.0
+                (lot["sell_price"] - lot["buy_price"])
+                / lot["buy_price"] * 100
+                if lot["buy_price"] else 0.0
             )
             out.append({
                 "strategy_id": strategy_id or None,
                 "ticker": sym,
-                "qty": qty,
-                "avg_price": avg_price,
-                "fill_price": fill_price,
-                "opened_at": _ts_ns_to_date(int(buy_fill["ts_ns"])),
-                "closed_at": _ts_ns_to_date(int(sell_fill["ts_ns"])),
-                "opened_at_ts_ns": int(buy_fill["ts_ns"]),
-                "closed_at_ts_ns": int(sell_fill["ts_ns"]),
+                "qty": lot["qty"],
+                "avg_price": lot["buy_price"],
+                "fill_price": lot["sell_price"],
+                "opened_at": _ts_ns_to_date(lot["buy_ts_ns"]),
+                "closed_at": _ts_ns_to_date(lot["sell_ts_ns"]),
+                "opened_at_ts_ns": lot["buy_ts_ns"],
+                "closed_at_ts_ns": lot["sell_ts_ns"],
                 "realised_pnl_inr": realised_pnl_inr,
                 "return_pct": return_pct,
                 "exit_reason": (
@@ -119,8 +135,8 @@ def pair_fills_by_strategy_and_ticker(
                 "dry_run": bool(
                     sell_fill["_payload"].get("dry_run", False),
                 ),
-                "buy_event_id": buy_fill.get("event_id"),
-                "sell_event_id": sell_fill.get("event_id"),
+                "buy_event_id": lot["buy_event_id"],
+                "sell_event_id": lot["sell_event_id"],
             })
     return out
 

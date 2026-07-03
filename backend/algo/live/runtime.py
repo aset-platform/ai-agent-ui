@@ -279,6 +279,56 @@ class LiveNotEnabledError(RuntimeError):
     """Raised when live trading is not enabled for (user, strategy)."""
 
 
+def _lookup_true_gtt_fill_price(
+    kite: Any, ticker: str,
+) -> float | None:
+    """Look up the real executed average price for a just-
+    triggered GTT SELL from Kite's today-scoped order history.
+
+    ``kite.get_gtts()`` only exposes the GTT's *configured* order
+    price, never the actual fill -- this queries the real order
+    book (``kite._kc.orders()``, raw KiteConnect client; KiteClient
+    does not wrap this method, same gotcha as its missing ``ltp()``
+    wrapper) for a matching COMPLETE SELL order and returns its
+    ``average_price``. Returns ``None`` on any failure (API error,
+    no matching order found) so the caller can fall back to the
+    GTT's configured price estimate -- never raises.
+    """
+    bare_symbol = ticker.removesuffix(".NS").removesuffix(".BO")
+    try:
+        kc = getattr(kite, "_kc", None)
+        if kc is None:
+            return None
+        orders = kc.orders() or []
+        matches = [
+            o for o in orders
+            if o.get("tradingsymbol") == bare_symbol
+            and o.get("transaction_type") == "SELL"
+            and str(o.get("status") or "").upper() == "COMPLETE"
+        ]
+        if not matches:
+            return None
+        # Most recent completed SELL for this symbol today -- the
+        # GTT trigger is, by construction, recent.
+        latest = max(
+            matches,
+            key=lambda o: str(o.get("order_timestamp") or ""),
+        )
+        avg_price = latest.get("average_price")
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning(
+            "gtt true-price lookup: kite.orders() failed for "
+            "%s: %s", ticker, exc, exc_info=True,
+        )
+        return None
+    if not avg_price:
+        return None
+    try:
+        return float(avg_price)
+    except (TypeError, ValueError):
+        return None
+
+
 class LiveRuntime:
     """Tick-driven live strategy executor.
 
@@ -1502,13 +1552,21 @@ class LiveRuntime:
                     or 0,
                 )
                 _stop_price = mgr.current_stop
-                # The GTT's configured LIMIT price is closer to
-                # the true fill than our own stop-trigger price
-                # (Kite's get_gtts() doesn't expose the actual
-                # executed price, only the order definition).
-                _fill_price = float(
-                    _kite_order.get("price") or _stop_price,
+                _true_price = _lookup_true_gtt_fill_price(
+                    self._kite, ticker,
                 )
+                if _true_price is not None:
+                    _fill_price = _true_price
+                    _price_source = "kite_orders"
+                else:
+                    # The GTT's configured LIMIT price is closer to
+                    # the true fill than our own stop-trigger price
+                    # (fallback when Kite's order history doesn't
+                    # yet have a matching COMPLETE order).
+                    _fill_price = float(
+                        _kite_order.get("price") or _stop_price,
+                    )
+                    _price_source = "gtt_config_estimate"
                 _phase = mgr.state.phase.value
                 if _fill_qty > 0:
                     from backend.algo.backtest.types import Fill
@@ -1543,6 +1601,7 @@ class LiveRuntime:
                                     self._strategy, "product", "CNC",
                                 ),
                                 "source": "gtt_poll",
+                                "price_source": _price_source,
                             },
                         )
                     )
