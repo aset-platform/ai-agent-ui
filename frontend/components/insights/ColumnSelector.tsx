@@ -184,7 +184,7 @@ export function ColumnSelector({
           aria-label="Column selector"
           data-testid="column-selector-popover"
           className="absolute right-0 top-full mt-1
-            z-30 w-72 max-h-[480px] overflow-hidden
+            z-[80] w-72 max-h-[480px] overflow-hidden
             rounded-lg border border-gray-200
             dark:border-gray-700 bg-white
             dark:bg-gray-900 shadow-xl flex flex-col"

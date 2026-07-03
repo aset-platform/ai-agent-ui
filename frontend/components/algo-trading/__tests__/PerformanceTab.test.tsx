@@ -19,11 +19,28 @@ const swrData: Record<string, unknown> = {
         strategy_id: "s-live", strategy_name: "RSI(2) v5",
         total_trades: 6, wins: 4, losses: 2, win_rate_pct: 66.7,
         total_pnl_inr: 4210.5,
+        total_invested_inr: 45000, total_gain_inr: 49210.5,
         biggest_win: { ticker: "ITC", pnl_inr: 2100, closed_at: "2026-06-30" },
         biggest_loss: { ticker: "SHAILY", pnl_inr: -890, closed_at: "2026-06-25" },
-        avg_win_inr: 1350.2, avg_loss_inr: -610.4, profit_factor: 2.21,
+        avg_win_inr: 1350.2, avg_loss_inr: -610.4, profit_pct: 9.36,
         max_drawdown_pct: null,
       },
+      // 20 filler rows so pagination (default page size 15) has
+      // something to paginate over in the dedicated pagination
+      // test below. Kept out of the way of "s-live"-scoped
+      // assertions in the other tests (s-live stays first, so it
+      // always lands on page 1).
+      ...Array.from({ length: 20 }, (_, i) => ({
+        strategy_id: `s-filler-${i}`,
+        strategy_name: `Filler Strategy ${i}`,
+        total_trades: 1, wins: 1, losses: 0, win_rate_pct: 100,
+        total_pnl_inr: 10, total_invested_inr: 100,
+        total_gain_inr: 110,
+        biggest_win: { ticker: "ABC", pnl_inr: 10, closed_at: "2026-06-30" },
+        biggest_loss: null,
+        avg_win_inr: 10, avg_loss_inr: null, profit_pct: 10,
+        max_drawdown_pct: null,
+      })),
     ],
     trades: [],
   },
@@ -105,6 +122,52 @@ describe("PerformanceTab", () => {
     // the text query to the comparison-table row to avoid a
     // multiple-matches error.
     expect(within(row).getByText("RSI(2) v5")).toBeDefined();
+  });
+
+  it("renders Total invested, Total gain, and Profit % (not Profit factor)", () => {
+    render(<PerformanceTab />);
+    const row = screen.getByTestId("performance-strategy-row-s-live");
+    expect(screen.getByText("Total invested")).toBeDefined();
+    expect(screen.getByText("Total gain")).toBeDefined();
+    expect(screen.getByText("Profit %")).toBeDefined();
+    expect(screen.queryByText("Profit factor")).toBeNull();
+    expect(within(row).getByText("₹45,000")).toBeDefined();
+    expect(within(row).getByText("₹49,211")).toBeDefined();
+    expect(within(row).getByText("9.36%")).toBeDefined();
+  });
+
+  it("paginates the strategy comparison table at 15 rows/page by default", () => {
+    render(<PerformanceTab />);
+    // 21 total rows (1 s-live + 20 filler) -> 2 pages at 15/page.
+    expect(
+      screen.getByTestId("performance-strategy-comparison-page-indicator"),
+    ).toHaveTextContent("1 / 2");
+    expect(screen.getAllByTestId(/^performance-strategy-row-/)).toHaveLength(
+      15,
+    );
+
+    fireEvent.click(
+      screen.getByTestId("performance-strategy-comparison-next"),
+    );
+    expect(
+      screen.getByTestId("performance-strategy-comparison-page-indicator"),
+    ).toHaveTextContent("2 / 2");
+    expect(screen.getAllByTestId(/^performance-strategy-row-/)).toHaveLength(
+      6,
+    );
+
+    fireEvent.change(
+      screen.getByTestId("performance-strategy-comparison-page-size"),
+      { target: { value: "25" } },
+    );
+    // Changing page size resets to page 1, and 21 rows fit on one
+    // 25-row page.
+    expect(
+      screen.getByTestId("performance-strategy-comparison-page-indicator"),
+    ).toHaveTextContent("1 / 1");
+    expect(screen.getAllByTestId(/^performance-strategy-row-/)).toHaveLength(
+      21,
+    );
   });
 
   it("hides the Max DD% column for Paper/Live but shows it for Backtest/Walk-forward", () => {

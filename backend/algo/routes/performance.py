@@ -76,12 +76,16 @@ def _resolve_window(
 
 
 def _aggregate_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
-    """Compute win/loss/biggest-win/biggest-loss/profit-factor from
-    a list of trade dicts. Shared across the backtest/walkforward
+    """Compute win/loss/biggest-win/biggest-loss/profit-pct from a
+    list of trade dicts. Shared across the backtest/walkforward
     (from summary_json.trade_list) and paper/live (from
     algo.closed_trades) sources — both are coerced to a common
     shape with at least ``ticker``, ``realised_pnl_inr``,
-    ``closed_at`` before reaching this function."""
+    ``closed_at`` before reaching this function. ``qty``/
+    ``avg_price``/``fill_price`` are optional (older/incomplete
+    summary_json rows may lack them) and default to 0 when absent
+    — total_invested_inr/total_gain_inr simply undercount for those
+    rows rather than raising."""
     n = len(trades)
     if n == 0:
         return {
@@ -90,20 +94,31 @@ def _aggregate_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
             "losses": 0,
             "win_rate_pct": None,
             "total_pnl_inr": 0.0,
+            "total_invested_inr": 0.0,
+            "total_gain_inr": 0.0,
+            "profit_pct": None,
             "biggest_win": None,
             "biggest_loss": None,
             "avg_win_inr": None,
             "avg_loss_inr": None,
-            "profit_factor": None,
         }
     pnls = [float(t["realised_pnl_inr"]) for t in trades]
+    invested = [
+        float(t.get("qty") or 0) * float(t.get("avg_price") or 0)
+        for t in trades
+    ]
+    gains = [
+        float(t.get("qty") or 0) * float(t.get("fill_price") or 0)
+        for t in trades
+    ]
+    total_invested = sum(invested)
+    total_gain = sum(gains)
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
     total_pnl = sum(pnls)
     best_idx = max(range(n), key=lambda i: pnls[i])
     worst_idx = min(range(n), key=lambda i: pnls[i])
     gross_win = sum(wins)
-    gross_loss = abs(sum(losses))
 
     def _trade_ref(idx: int) -> dict[str, Any]:
         t = trades[idx]
@@ -119,6 +134,12 @@ def _aggregate_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "losses": len(losses),
         "win_rate_pct": round(len(wins) / n * 100, 2),
         "total_pnl_inr": round(total_pnl, 2),
+        "total_invested_inr": round(total_invested, 2),
+        "total_gain_inr": round(total_gain, 2),
+        "profit_pct": (
+            round(total_pnl / total_invested * 100, 2)
+            if total_invested > 0 else None
+        ),
         "biggest_win": _trade_ref(best_idx) if pnls[best_idx] > 0 else None,
         "biggest_loss": (
             _trade_ref(worst_idx) if pnls[worst_idx] < 0 else None
@@ -126,9 +147,6 @@ def _aggregate_trades(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "avg_win_inr": (round(gross_win / len(wins), 2) if wins else None),
         "avg_loss_inr": (
             round(sum(losses) / len(losses), 2) if losses else None
-        ),
-        "profit_factor": (
-            round(gross_win / gross_loss, 2) if gross_loss > 0 else None
         ),
     }
 

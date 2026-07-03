@@ -4,9 +4,11 @@ import { useMemo } from "react";
 
 import { ColumnSelector, type ColumnSpec } from "@/components/insights/ColumnSelector";
 import { DownloadCsvButton } from "@/components/common/DownloadCsvButton";
+import { PaginationFooter } from "@/components/common/PaginationFooter";
 import type { TradeRow } from "@/hooks/useBacktestRuns";
 import { downloadCsv, type CsvColumn } from "@/lib/downloadCsv";
 import { useColumnSelection } from "@/lib/useColumnSelection";
+import { usePagination } from "@/lib/usePagination";
 
 const ALL_COLS: ColumnSpec[] = [
   { key: "ticker", label: "Ticker", category: "Identity" },
@@ -64,6 +66,9 @@ export function TradeLogTable({
     () => ALL_COLS.filter((c) => selected.includes(c.key)),
     [selected],
   );
+  const {
+    page, setPage, pageSize, setPageSize, totalPages, pageRows,
+  } = usePagination(rows, 15);
 
   const handleDownload = () => {
     if (rows.length === 0) return;
@@ -120,7 +125,7 @@ export function TradeLogTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
+            {pageRows.map((r, i) => (
               <tr
                 key={`${r.ticker}-${r.closed_at}-${i}`}
                 className="border-t border-slate-200 dark:border-slate-700"
@@ -138,6 +143,15 @@ export function TradeLogTable({
           </tbody>
         </table>
       </div>
+      <PaginationFooter
+        page={page}
+        totalPages={totalPages}
+        pageSize={pageSize}
+        totalRows={rows.length}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+        testIdPrefix="trade-log-table"
+      />
     </div>
   );
 }
