@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 
 import { TradeLogTable } from "./TradeLogTable";
+import { PaginationFooter } from "@/components/common/PaginationFooter";
 import {
   filterStrategiesByMode,
   useStrategies,
@@ -14,6 +15,7 @@ import {
   type PerformanceMode,
   type StrategyPerfRow,
 } from "@/hooks/useStrategyPerformance";
+import { usePagination } from "@/lib/usePagination";
 
 const MODE_OPTIONS: { value: PerformanceMode; label: string }[] = [
   { value: "backtest", label: "Backtest" },
@@ -44,8 +46,8 @@ const STRATEGY_FILTER_FOR_MODE: Record<
   live: ["live"],
 };
 
-function fmtInr(v: number | null): string {
-  if (v === null) return "—";
+function fmtInr(v: number | null | undefined): string {
+  if (v == null) return "—";
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
@@ -53,8 +55,8 @@ function fmtInr(v: number | null): string {
   }).format(v);
 }
 
-function fmtPct(v: number | null): string {
-  if (v === null) return "—";
+function fmtPct(v: number | null | undefined): string {
+  if (v == null) return "—";
   return `${v.toFixed(2)}%`;
 }
 
@@ -117,8 +119,8 @@ export function PerformanceTab() {
           Performance
         </h2>
         <p className="mt-0.5 text-xs text-slate-600 dark:text-slate-400">
-          Trade-level win rate, biggest win/loss, and profit
-          factor per strategy.
+          Trade-level win rate, capital invested/gained, and
+          biggest win/loss per strategy.
         </p>
       </div>
 
@@ -280,47 +282,65 @@ function StrategyComparisonTable({
   mode: PerformanceMode;
 }) {
   const showMaxDrawdown = MODES_WITH_MAX_DRAWDOWN.includes(mode);
+  const {
+    page, setPage, pageSize, setPageSize, totalPages, pageRows,
+  } = usePagination(rows, 15);
   return (
-    <div
-      className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
-      data-testid="performance-strategy-comparison-table"
-    >
-      <table className="min-w-full text-sm">
-        <thead className="bg-slate-50 dark:bg-slate-800">
-          <tr>
-            <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Strategy</th>
-            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Trades</th>
-            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Win rate</th>
-            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Total PnL</th>
-            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Biggest win</th>
-            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Biggest loss</th>
-            <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Profit factor</th>
-            {showMaxDrawdown && (
-              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Max DD%</th>
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr
-              key={r.strategy_id}
-              data-testid={`performance-strategy-row-${r.strategy_id}`}
-              className="border-t border-slate-200 dark:border-slate-700"
-            >
-              <td className="px-3 py-1.5 font-medium text-slate-900 dark:text-slate-100">{r.strategy_name}</td>
-              <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{r.total_trades}</td>
-              <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct(r.win_rate_pct)}</td>
-              <td className={`px-3 py-1.5 text-right font-medium ${r.total_pnl_inr >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>{fmtInr(r.total_pnl_inr)}</td>
-              <td className="px-3 py-1.5 text-right text-emerald-600 dark:text-emerald-400">{r.biggest_win ? `${r.biggest_win.ticker} ${fmtInr(r.biggest_win.pnl_inr)}` : "—"}</td>
-              <td className="px-3 py-1.5 text-right text-rose-600 dark:text-rose-400">{r.biggest_loss ? `${r.biggest_loss.ticker} ${fmtInr(r.biggest_loss.pnl_inr)}` : "—"}</td>
-              <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{r.profit_factor ?? "—"}</td>
+    <div className="space-y-1.5">
+      <div
+        className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700"
+        data-testid="performance-strategy-comparison-table"
+      >
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50 dark:bg-slate-800">
+            <tr>
+              <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Strategy</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Trades</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Win rate</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Total invested</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Total gain</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Total PnL</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Biggest win</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Biggest loss</th>
+              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Profit %</th>
               {showMaxDrawdown && (
-                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct(r.max_drawdown_pct)}</td>
+                <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Max DD%</th>
               )}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {pageRows.map((r) => (
+              <tr
+                key={r.strategy_id}
+                data-testid={`performance-strategy-row-${r.strategy_id}`}
+                className="border-t border-slate-200 dark:border-slate-700"
+              >
+                <td className="px-3 py-1.5 font-medium text-slate-900 dark:text-slate-100">{r.strategy_name}</td>
+                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{r.total_trades}</td>
+                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct(r.win_rate_pct)}</td>
+                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtInr(r.total_invested_inr)}</td>
+                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtInr(r.total_gain_inr)}</td>
+                <td className={`px-3 py-1.5 text-right font-medium ${r.total_pnl_inr >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>{fmtInr(r.total_pnl_inr)}</td>
+                <td className="px-3 py-1.5 text-right text-emerald-600 dark:text-emerald-400">{r.biggest_win ? `${r.biggest_win.ticker} ${fmtInr(r.biggest_win.pnl_inr)}` : "—"}</td>
+                <td className="px-3 py-1.5 text-right text-rose-600 dark:text-rose-400">{r.biggest_loss ? `${r.biggest_loss.ticker} ${fmtInr(r.biggest_loss.pnl_inr)}` : "—"}</td>
+                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct(r.profit_pct)}</td>
+                {showMaxDrawdown && (
+                  <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct(r.max_drawdown_pct)}</td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <PaginationFooter
+        page={page}
+        totalPages={totalPages}
+        pageSize={pageSize}
+        totalRows={rows.length}
+        onPageChange={setPage}
+        onPageSizeChange={setPageSize}
+        testIdPrefix="performance-strategy-comparison"
+      />
     </div>
   );
 }

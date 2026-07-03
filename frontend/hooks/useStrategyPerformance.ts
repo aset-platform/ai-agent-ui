@@ -35,11 +35,13 @@ export interface StrategyPerfRow {
   losses: number;
   win_rate_pct: number | null;
   total_pnl_inr: number;
+  total_invested_inr: number;
+  total_gain_inr: number;
+  profit_pct: number | null;
   biggest_win: TradeExtreme | null;
   biggest_loss: TradeExtreme | null;
   avg_win_inr: number | null;
   avg_loss_inr: number | null;
-  profit_factor: number | null;
   max_drawdown_pct: number | null;
 }
 
