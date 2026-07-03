@@ -6,13 +6,18 @@
  */
 
 import {
+  FEATURE_SCALE_CAPTION,
   STRATEGY_FEATURE_BY_KEY,
 } from "@/components/algo-trading/strategyFeatureCatalog";
 
 export function FeatureChip({ keyName }: { keyName: string }) {
   const f = STRATEGY_FEATURE_BY_KEY[keyName];
+  const caption = f?.scale ? FEATURE_SCALE_CAPTION[f.scale] : undefined;
   return (
-    <span className="rounded bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 text-[11px]">
+    <span
+      className="rounded bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 text-[11px]"
+      title={caption}
+    >
       {f?.label ?? keyName}
     </span>
   );
