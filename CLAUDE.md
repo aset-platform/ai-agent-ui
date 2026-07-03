@@ -78,7 +78,7 @@ DB inventory: 19 PG OLTP + 12 Iceberg OLAP → `db-table-inventory`. Data home: 
 25. Update `PROGRESS.md` per session (dated); `git add .serena/` before push. Doc triggers: `docs/` for API changes · new Serena memory per new pattern · `README.md` env-vars table for new config.
 26. Test-after-feature — write immediately after smoke test passes; happy + 1 error path minimum.
 27. **PR merge on `dev`: squash only** (merge-commit + rebase blocked).
-28. Jira 3-phase: create → In Progress → comment+Done. Both `customfield_10016` + `customfield_10036` for story points — BOTH numeric (API rejects a string for 10036). → `jira-3phase-lifecycle`
+28. Jira 3-phase: create → In Progress → comment+Done. Story/Epic: both `customfield_10016` + `customfield_10036`, BOTH numeric. **Bug**: `customfield_10036` isn't on that screen — `customfield_10016` only. → `jira-3phase-lifecycle`
 28a. **Never mint/forge an auth JWT for a real account during smoke tests**, even locally — use the real login flow or seeded demo data. → `no-token-forging-smoke-tests`
 
 ### 4.5 Infra & config

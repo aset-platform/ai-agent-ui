@@ -65,6 +65,11 @@ site that prompted the change — before calling the fix done:
 - **Picker filters** mode-strict: Backtest = all 3 modes; Paper = paper-only; Dry-run = paper-only; Live = live-only.
 - **Dry-run mode=dryrun + source=replay** does NOT require Kite creds or live_orders_enabled caps (rehearsal step BEFORE live setup).
 
+## Strategy feature vocabulary (backend/algo/strategy/features.py)
+
+- **Every new %-like feature MUST set `scale` explicitly** (`"fraction"` | `"percent"` | `"ratio"` | omit if not percentage-related). Found 2026-07-03: `distance_from_sma50 > -3` was a silent no-op — the feature is a fraction (0.05 = 5%) but the threshold was typed as a percentage. An audit found the SAME catalog mixes both scales for near-identical concepts (`pct_above_50sma` is fraction despite the name; `nifty_30d_return_pct` is genuinely percentage) — `scale` drives the Strategy Builder's inline unit caption so a user never has to guess. → `feature-scale-and-unwired-pattern`
+- **Every new feature MUST be wired into at least one runtime's `EvalContext.features` before shipping, or marked `unwired=True`.** A feature merely added to the catalog (selectable in the Strategy Builder) but never populated by live/paper/backtest always hits `signal_rejected reason=missing_feature` — the condition can never evaluate true, silently. Found 9 such dead features 2026-07-03 (ASETPLTFRM-469). `unwired=True` drives a red warning in the Strategy Builder instead of letting a user build a permanently-dead condition. → `feature-scale-and-unwired-pattern`
+
 ## Paper/live parity (promotion gate trusts paper fills)
 
 Paper runtime MUST mirror live execution — the paper→live gate relies on
@@ -89,6 +94,7 @@ paper-fill realism, so divergence makes promotion meaningless.
 - **`KiteClient` has NO `ltp()` wrapper** — use `self._kite._kc.ltp([f"NSE:{bare}"])` (raw `KiteConnect`). `kite_client.py` exposes `quote()`, `positions()`, `place_order()`, `place_gtt()` etc. but NOT `ltp()`. Wrong call → `AttributeError` silently caught by `except Exception` → `last_price=None` → crash.
 - **Kite holdings/positions API returns bare tradingsymbols** (`"EQUITASBNK"`, no `.NS`). Runtime keys (`_ws_hwm`, `_gtt_ids`, `_positions`) always carry `.NS`. Normalize at the route boundary: `if "." not in ticker: ticker += ".NS"` before any runtime state lookup.
 - **`async` LiveRuntime methods can be `await`-ed directly from FastAPI route handlers** — both share the same uvicorn event loop. `asyncio.to_thread` / `run_coroutine_threadsafe` are only needed when calling FROM sync threads (e.g. `_ratchet_all_gtts` inside `asyncio.to_thread`).
+- **A long-running backend process does NOT pick up a newly-merged file just because it landed on disk** — `uvicorn --reload`'s `StatReload` is not guaranteed to fire for a git-merge-introduced change. Confirmed 2026-07-03: PR #292 merged `fifo_matcher.py` into `dev` at 10:36:47 UTC; a scheduled job (`algo_closed_trades_rollup`) running on a process started at 09:54:56 UTC (before the merge) hit `ModuleNotFoundError` at 11:00:06 UTC — no `StatReload` log line appears anywhere in that 24-minute window. Only the next restart (11:45:52 UTC) picked up the new module. After merging a PR that adds a file a scheduled job depends on, restart explicitly — do not assume the running process will notice. → `deploy-staleness-after-merge`
 
 ## Intraday execution clock (backtest / walkforward)
 
