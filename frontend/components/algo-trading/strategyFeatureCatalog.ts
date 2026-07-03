@@ -131,7 +131,7 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   // Intraday – relative-strength + market-breadth (FE-8 Phase 2)
   { key: "rs_vs_nifty_15m", label: "RS vs NIFTY (15m)", type: "float", source: "intraday_feature_store", scale: "fraction" },
   { key: "rs_vs_sector_15m", label: "RS vs sector (15m)", type: "float", source: "intraday_feature_store", scale: "fraction" },
-  { key: "market_breadth_pct_above_sma200", label: "% Nifty-500 above SMA200", type: "float", source: "intraday_feature_store", scale: "percent" },
+  { key: "market_breadth_pct_above_sma200", label: "% universe above SMA200 (intraday, batch cohort)", type: "float", source: "intraday_feature_store", scale: "fraction" },
   { key: "advance_decline_ratio", label: "Advance/decline ratio (15m)", type: "float", source: "intraday_feature_store", scale: "ratio" },
   // Intraday – sector rotation (FE-9 Phase 2). regime_label /
   // stress_prob are intentionally NOT mirrored under

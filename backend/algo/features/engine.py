@@ -270,8 +270,12 @@ def compute_intraday_features_for_universe(
     * ``rs_vs_sector_15m`` — same against the ticker's mapped
       sector index. Emitted only for tickers whose entry is
       present in ``ticker_to_sector_index``.
-    * ``market_breadth_pct_above_sma200`` — cohort-wide ``%`` of
-      tickers with ``close > sma_200`` at the bar.
+    * ``market_breadth_pct_above_sma200`` — cohort-wide fraction
+      (0.35 = 35%, ASETPLTFRM-468) of tickers with
+      ``close > sma_200`` at the bar. "Cohort" is whichever
+      tickers this call was given (typically a batch from the
+      compute job), NOT a fixed Nifty-500 universe despite the
+      key name.
     * ``advance_decline_ratio`` — cohort-wide
       ``advancers / decliners``. Absent (skip-emission, not NaN)
       when ``decliners == 0`` (div-by-zero guard).
@@ -493,8 +497,13 @@ def _apply_cohort_features(
             if close > sma200:
                 n_above += 1
         if n_tot > 0:
+            # ASETPLTFRM-468 — fraction (0.35 = 35%), NOT ×100.
+            # Was percentage-scale, conflicting with the daily
+            # factor-library sibling pct_above_200sma (also a
+            # fraction) despite both measuring the same concept —
+            # a strategy switching cadence could be off by 100x.
             breadth_pct[ts_ns] = (
-                Decimal(n_above) / Decimal(n_tot) * Decimal("100")
+                Decimal(n_above) / Decimal(n_tot)
             )
 
         # advance_decline_ratio — needs prev-bar close per ticker.
