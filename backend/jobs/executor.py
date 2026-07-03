@@ -3807,7 +3807,9 @@ def _job_algo_budget_reservations_retention(
         run_budget_reservations_retention_job,
     )
 
-    return run_budget_reservations_retention_job(payload or {})
+    result = run_budget_reservations_retention_job(payload or {})
+    _algo_job_success(repo, run_id)
+    return result
 
 
 @register_job("algo_closed_trades_rollup")
