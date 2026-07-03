@@ -30,7 +30,6 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from kiteconnect.exceptions import DataException
 from pydantic import BaseModel, Field
 
 from auth.dependencies import pro_or_superuser
@@ -38,7 +37,10 @@ from auth.models import UserContext
 from backend.algo.broker.credentials_repo import (
     BrokerCredentialsRepo,
 )
-from backend.algo.broker.kite_client import KiteClient
+from backend.algo.broker.kite_client import (
+    KiteClient,
+    kite_call_tolerant_async,
+)
 from backend.cache import get_cache
 from backend.db.duckdb_engine import query_iceberg_table
 
@@ -749,76 +751,6 @@ async def _fetch_holding_attribution(
     return out
 
 
-def _recover_from_content_type_mismatch(
-    exc: DataException,
-) -> dict[str, Any] | None:
-    """Recover a valid JSON payload from a kiteconnect
-    ``DataException`` caused by a Content-Type header mismatch, not
-    a real data problem.
-
-    Found 2026-07-03: Kite's API occasionally serves a valid JSON
-    positions/holdings body under ``Content-Type: text/plain``
-    instead of ``application/json``. ``kiteconnect``'s
-    ``_request()`` does a strict ``"json" in content-type`` sniff
-    before parsing and raises ``DataException`` on any mismatch --
-    discarding a perfectly valid response body that it embeds
-    verbatim in its own error message (format: ``"Unknown
-    Content-Type (...) with response: (b'...')"``). This was firing
-    on every poll, permanently zeroing "Currently committed" and
-    the Positions tab even though real positions were open.
-
-    Returns the recovered ``data["data"]`` dict on a genuine
-    success payload. Returns ``None`` (never raises) on any parse
-    failure or on a genuine ``"status": "error"`` payload -- the
-    caller falls back to treating the original exception as a real
-    failure in either case, so this never risks silently
-    fabricating data.
-    """
-    import ast
-
-    msg = str(exc)
-    marker = "with response: ("
-    idx = msg.find(marker)
-    if idx == -1:
-        return None
-    raw = msg[idx + len(marker):]
-    if raw.endswith(")"):
-        raw = raw[:-1]
-    try:
-        content_bytes = ast.literal_eval(raw)
-    except (ValueError, SyntaxError):
-        return None
-    if not isinstance(content_bytes, bytes):
-        return None
-    try:
-        data = json.loads(content_bytes)
-    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-        return None
-    if not isinstance(data, dict) or data.get("status") != "success":
-        return None
-    return data.get("data")
-
-
-async def _kite_positions_or_holdings(fn: Any) -> Any:
-    """Call a sync kiteconnect method (``kc.positions`` /
-    ``kc.holdings``) in a worker thread, recovering from Kite's
-    occasional wrong-Content-Type responses instead of discarding a
-    valid payload. Re-raises unchanged on any other failure, or if
-    recovery parsing itself fails -- see
-    ``_recover_from_content_type_mismatch``.
-    """
-    try:
-        return await asyncio.to_thread(fn)
-    except DataException as exc:
-        recovered = _recover_from_content_type_mismatch(exc)
-        if recovered is not None:
-            _logger.info(
-                "kite call recovered from Content-Type mismatch",
-            )
-            return recovered
-        raise
-
-
 async def _compute_strategy_commitment(
     user_id: UUID,
     strategy_id: UUID,
@@ -849,8 +781,8 @@ async def _compute_strategy_commitment(
 
     try:
         raw_pos, raw_hold = await asyncio.gather(
-            _kite_positions_or_holdings(kc.positions),
-            _kite_positions_or_holdings(kc.holdings),
+            kite_call_tolerant_async(kc.positions),
+            kite_call_tolerant_async(kc.holdings),
         )
     except Exception:  # noqa: BLE001
         _logger.warning(
@@ -1389,7 +1321,7 @@ def create_live_router() -> APIRouter:
         kite = await _build_kite_client_for_user(uid)
         kc = kite._kc
         try:
-            positions = await asyncio.to_thread(kc.positions)
+            positions = await kite_call_tolerant_async(kc.positions)
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "kite positions read failed",
@@ -1487,7 +1419,7 @@ def create_live_router() -> APIRouter:
         kite = await _build_kite_client_for_user(uid)
         kc = kite._kc
         try:
-            raw = await _kite_positions_or_holdings(kc.positions)
+            raw = await kite_call_tolerant_async(kc.positions)
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "kite positions read failed",
@@ -1593,7 +1525,7 @@ def create_live_router() -> APIRouter:
         kite = await _build_kite_client_for_user(uid)
         kc = kite._kc
         try:
-            raw = await asyncio.to_thread(kc.holdings)
+            raw = await kite_call_tolerant_async(kc.holdings)
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "kite holdings read failed",

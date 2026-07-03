@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
+from backend.algo.broker.kite_client import kite_call_tolerant_async
 from backend.algo.live.budget import _build_kite_for_user
 from backend.algo.live.reconciliation import is_market_open_ist
 from backend.algo.routes.live import _fetch_strategy_attribution
@@ -459,8 +460,8 @@ async def _get_algo_positions_impl(
         kc = kite._kc
         try:
             raw_pos, raw_hold = await asyncio.gather(
-                asyncio.to_thread(kc.positions),
-                asyncio.to_thread(kc.holdings),
+                kite_call_tolerant_async(kc.positions),
+                kite_call_tolerant_async(kc.holdings),
             )
         except Exception:  # noqa: BLE001
             _logger.warning(

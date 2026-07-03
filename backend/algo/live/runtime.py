@@ -65,7 +65,10 @@ from backend.algo.broker.exceptions import (
     PartialChunkPlacementError,
 )
 from backend.algo.broker.freeze_cache import get_tick_size
-from backend.algo.broker.kite_client import KiteClient
+from backend.algo.broker.kite_client import (
+    KiteClient,
+    kite_call_tolerant,
+)
 
 # REGIME-2a — pre-computed nightly factor library overlay.
 from backend.algo.factors.repo import get_factors_window
@@ -2722,8 +2725,8 @@ class LiveRuntime:
             )
             return None
         try:
-            raw_pos = kc.positions()
-            raw_hold = kc.holdings()
+            raw_pos = kite_call_tolerant(kc.positions)
+            raw_hold = kite_call_tolerant(kc.holdings)
         except Exception as exc:
             _logger.warning(
                 "cleanup: broker positions/holdings read failed — "
