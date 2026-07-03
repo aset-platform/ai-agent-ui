@@ -31,6 +31,21 @@ interface Props {
   lockedKeys?: string[];
   /** Label override for the trigger button. */
   buttonLabel?: string;
+  /**
+   * Which edge of the trigger button the popover anchors to.
+   * "right" (default) anchors the popover's right edge to the
+   * button's right edge, expanding leftward — correct when the
+   * button sits near the right side of its row. Use "left" when
+   * the trigger sits near the LEFT edge of a scrollable container
+   * (e.g. paired with a right-aligned download button via
+   * `justify-between`) — expanding leftward from a button already
+   * close to the container's left edge overflows past the
+   * container's clip boundary (found 2026-07-03: TradeLogTable's
+   * popover was clipped by `<main className="overflow-y-auto">` in
+   * the authenticated layout, which computes `overflow-x: auto`
+   * per the CSS spec once `overflow-y` is non-visible).
+   */
+  align?: "left" | "right";
 }
 
 export function ColumnSelector({
@@ -40,6 +55,7 @@ export function ColumnSelector({
   onReset,
   lockedKeys = [],
   buttonLabel = "Columns",
+  align = "right",
 }: Props) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -183,11 +199,11 @@ export function ColumnSelector({
           role="dialog"
           aria-label="Column selector"
           data-testid="column-selector-popover"
-          className="absolute right-0 top-full mt-1
+          className={`absolute ${align === "left" ? "left-0" : "right-0"} top-full mt-1
             z-[80] w-72 max-h-[480px] overflow-hidden
             rounded-lg border border-gray-200
             dark:border-gray-700 bg-white
-            dark:bg-gray-900 shadow-xl flex flex-col"
+            dark:bg-gray-900 shadow-xl flex flex-col`}
         >
           {/* Header: search + bulk actions */}
           <div className="p-2 border-b

@@ -91,22 +91,6 @@ export function PerformanceTab() {
     end: customRangeComplete ? customRange!.end : null,
   });
 
-  const perTickerRows = useMemo(() => {
-    const buckets = new Map<
-      string, { ticker: string; trades: number; pnl: number; wins: number }
-    >();
-    for (const t of trades) {
-      const b = buckets.get(t.ticker) ?? {
-        ticker: t.ticker, trades: 0, pnl: 0, wins: 0,
-      };
-      b.trades += 1;
-      b.pnl += Number(t.realised_pnl_inr);
-      if (Number(t.realised_pnl_inr) > 0) b.wins += 1;
-      buckets.set(t.ticker, b);
-    }
-    return Array.from(buckets.values()).sort((a, b) => a.pnl - b.pnl);
-  }, [trades]);
-
   const handleModeChange = (m: PerformanceMode) => {
     setMode(m);
     setStrategyId("all");
@@ -248,16 +232,11 @@ export function PerformanceTab() {
       )}
 
       {strategyId !== "all" && (
-        <>
-          <TradeLogTable
-            rows={trades}
-            filenamePrefix={mode}
-            emptyMessage="No closed trades in this window."
-          />
-          {perTickerRows.length > 0 && (
-            <PerTickerBreakdown rows={perTickerRows} />
-          )}
-        </>
+        <TradeLogTable
+          rows={trades}
+          filenamePrefix={mode}
+          emptyMessage="No closed trades in this window."
+        />
       )}
     </div>
   );
@@ -341,42 +320,6 @@ function StrategyComparisonTable({
         onPageSizeChange={setPageSize}
         testIdPrefix="performance-strategy-comparison"
       />
-    </div>
-  );
-}
-
-function PerTickerBreakdown({
-  rows,
-}: {
-  rows: { ticker: string; trades: number; pnl: number; wins: number }[];
-}) {
-  return (
-    <div data-testid="performance-per-ticker-breakdown" className="space-y-1.5">
-      <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-        Per-ticker breakdown
-      </h3>
-      <div className="overflow-x-auto rounded-md border border-slate-200 dark:border-slate-700">
-        <table className="min-w-full text-sm">
-          <thead className="bg-slate-50 dark:bg-slate-800">
-            <tr>
-              <th className="px-3 py-2 text-left font-medium text-slate-600 dark:text-slate-300">Ticker</th>
-              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Trades</th>
-              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">Win rate</th>
-              <th className="px-3 py-2 text-right font-medium text-slate-600 dark:text-slate-300">PnL</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.ticker} className="border-t border-slate-200 dark:border-slate-700">
-                <td className="px-3 py-1.5 font-medium text-slate-900 dark:text-slate-100">{r.ticker}</td>
-                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{r.trades}</td>
-                <td className="px-3 py-1.5 text-right text-slate-700 dark:text-slate-300">{fmtPct((r.wins / r.trades) * 100)}</td>
-                <td className={`px-3 py-1.5 text-right font-medium ${r.pnl >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>{fmtInr(r.pnl)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }
