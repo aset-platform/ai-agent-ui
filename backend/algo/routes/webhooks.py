@@ -450,8 +450,9 @@ async def kite_postback(request: Request) -> dict:
                 _captured_gtt_id = (
                     _gtt_rt._gtt_ids.get(_ticker_ns, 0)
                 )
-                # Apply synthetic fill to position tracker.
-                _gtt_rt._apply_gtt_triggered_sell_fill(
+                # Apply synthetic fill to position tracker + release
+                # the matching BUY's budget reservation.
+                await _gtt_rt._apply_gtt_triggered_sell_fill(
                     ticker=_ticker_ns,
                     fill_price=_avg,
                     qty=_qty,
