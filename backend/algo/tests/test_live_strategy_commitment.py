@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
+from kiteconnect.exceptions import DataException
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
@@ -203,6 +204,180 @@ class TestComputeStrategyCommitment:
 
         assert committed == Decimal("0")
         assert count == 0
+
+
+# ---------------------------------------------------------------
+# _recover_from_content_type_mismatch (pure helper)
+#
+# Found 2026-07-03: Kite's API occasionally serves a valid JSON
+# positions/holdings body under Content-Type: text/plain instead of
+# application/json. The kiteconnect SDK's _request() does a strict
+# Content-Type sniff before parsing and raises DataException on any
+# mismatch -- discarding a perfectly valid response body that it
+# embeds verbatim in its own error message. This was firing on
+# every poll, permanently zeroing "Currently committed" and the
+# Positions tab even though real positions were open.
+# ---------------------------------------------------------------
+
+
+class TestRecoverFromContentTypeMismatch:
+    def test_recovers_valid_success_payload(self):
+        from backend.algo.routes.live import (
+            _recover_from_content_type_mismatch,
+        )
+
+        exc = DataException(
+            "Unknown Content-Type (text/plain; charset=utf-8) "
+            "with response: (b'{\"status\":\"success\",\"data\":"
+            "{\"net\": [], \"day\": []}}')",
+        )
+        recovered = _recover_from_content_type_mismatch(exc)
+        assert recovered == {"net": [], "day": []}
+
+    def test_recovers_payload_with_real_positions(self):
+        from backend.algo.routes.live import (
+            _recover_from_content_type_mismatch,
+        )
+
+        exc = DataException(
+            "Unknown Content-Type (text/plain; charset=utf-8) "
+            "with response: (b'{\"status\": \"success\", \"data\": "
+            "{\"net\": [{\"tradingsymbol\": \"ITC\", \"quantity\": "
+            "8}], \"day\": []}}')",
+        )
+        recovered = _recover_from_content_type_mismatch(exc)
+        assert recovered["net"] == [
+            {"tradingsymbol": "ITC", "quantity": 8},
+        ]
+
+    def test_returns_none_for_unrelated_exception_message(self):
+        from backend.algo.routes.live import (
+            _recover_from_content_type_mismatch,
+        )
+
+        exc = DataException("Incorrect `api_key` or `access_token`.")
+        assert _recover_from_content_type_mismatch(exc) is None
+
+    def test_returns_none_when_embedded_payload_is_not_valid_json(
+        self,
+    ):
+        from backend.algo.routes.live import (
+            _recover_from_content_type_mismatch,
+        )
+
+        exc = DataException(
+            "Unknown Content-Type (text/html) with response: "
+            "(b'<html>not json</html>')",
+        )
+        assert _recover_from_content_type_mismatch(exc) is None
+
+    def test_returns_none_for_genuine_error_status_payload(self):
+        """A real Kite error embedded in the same message shape must
+        NOT be swallowed as a recovered success -- fall through so
+        the original exception still propagates."""
+        from backend.algo.routes.live import (
+            _recover_from_content_type_mismatch,
+        )
+
+        exc = DataException(
+            "Unknown Content-Type (text/plain) with response: "
+            "(b'{\"status\": \"error\", \"message\": \"Session "
+            "expired\", \"error_type\": \"TokenException\"}')",
+        )
+        assert _recover_from_content_type_mismatch(exc) is None
+
+
+class TestKitePositionsOrHoldings:
+    @pytest.mark.asyncio
+    async def test_returns_result_on_success(self):
+        from backend.algo.routes.live import (
+            _kite_positions_or_holdings,
+        )
+
+        fn = MagicMock(return_value={"net": []})
+        result = await _kite_positions_or_holdings(fn)
+        assert result == {"net": []}
+
+    @pytest.mark.asyncio
+    async def test_recovers_from_content_type_mismatch(self):
+        from backend.algo.routes.live import (
+            _kite_positions_or_holdings,
+        )
+
+        def fn():
+            raise DataException(
+                "Unknown Content-Type (text/plain; charset=utf-8) "
+                "with response: (b'{\"status\":\"success\",\"data\":"
+                "{\"net\": [], \"day\": []}}')",
+            )
+
+        result = await _kite_positions_or_holdings(fn)
+        assert result == {"net": [], "day": []}
+
+    @pytest.mark.asyncio
+    async def test_reraises_genuine_data_exception(self):
+        from backend.algo.routes.live import (
+            _kite_positions_or_holdings,
+        )
+
+        def fn():
+            raise DataException("Incorrect `api_key` or `access_token`.")
+
+        with pytest.raises(DataException):
+            await _kite_positions_or_holdings(fn)
+
+    @pytest.mark.asyncio
+    async def test_reraises_non_data_exceptions_unchanged(self):
+        from backend.algo.routes.live import (
+            _kite_positions_or_holdings,
+        )
+
+        def fn():
+            raise RuntimeError("kite down")
+
+        with pytest.raises(RuntimeError):
+            await _kite_positions_or_holdings(fn)
+
+
+class TestComputeStrategyCommitmentContentTypeRecovery:
+    @pytest.mark.asyncio
+    @patch("backend.algo.routes.live._fetch_holding_attribution")
+    @patch("backend.algo.routes.live._build_kite_client_for_user")
+    async def test_recovers_open_position_despite_content_type_bug(
+        self, build_kite, attr,
+    ):
+        """The exact bug found 2026-07-03: kc.positions() raises the
+        Content-Type DataException on every call even though real
+        positions are open (via holdings()). Commitment must reflect
+        the real holdings value, not silently fall back to 0."""
+        from backend.algo.routes.live import (
+            _compute_strategy_commitment,
+        )
+
+        kc = MagicMock()
+        kc.positions.side_effect = DataException(
+            "Unknown Content-Type (text/plain; charset=utf-8) "
+            "with response: (b'{\"status\":\"success\",\"data\":"
+            "{\"net\": [], \"day\": []}}')",
+        )
+        kc.holdings.return_value = [{
+            "tradingsymbol": "MMTC", "exchange": "NSE",
+            "quantity": 42, "t1_quantity": 0,
+            "average_price": 68.84, "product": "CNC",
+        }]
+        kite = MagicMock()
+        kite._kc = kc
+        build_kite.return_value = kite
+        attr.return_value = {
+            "MMTC": {"strategy_id": str(_STRATEGY_ID)},
+        }
+
+        committed, count = await _compute_strategy_commitment(
+            _USER_ID, _STRATEGY_ID,
+        )
+
+        assert committed == Decimal("42") * Decimal("68.84")
+        assert count == 1
 
 
 # ---------------------------------------------------------------
