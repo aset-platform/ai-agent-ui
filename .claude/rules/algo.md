@@ -103,6 +103,7 @@ paper-fill realism, so divergence makes promotion meaningless.
 - **`DELETE /algo/broker` revokes token only** (keeps `api_key_fernet` row intact → status `key_set`). Use `DELETE /algo/broker/key` for full credential teardown. Never wipe the API key on a normal "disconnect" — Kite tokens expire EOD, the key is permanent.
 - **UI state machine**: `disconnected` → API key form; `key_set` → "Connect Zerodha" + "Remove API key" button; `connected` → "Reconnect" (re-opens OAuth) + "Remove API key"; `expired` → "Reconnect" + "Remove API key". No "Disconnect" button — revoking mid-session has no real use case.
 - **GTT `place_gtt` prices MUST be tick-aligned** — call `get_tick_size()` (Redis-backed) and quantize BOTH `trigger_price` and `limit_price` with `ROUND_DOWN` before every `place_gtt`. Applies to all three call sites: `on_buy_fill_trailing`, `_ratchet_all_gtts`, `ensure_gtts`. → `kite-tick-size-limit-price`
+- **`kc.positions()`/`kc.holdings()` can raise `kiteconnect.exceptions.DataException` on a Content-Type mismatch (`text/plain` for a genuinely valid JSON body) — the SDK discards the response instead of parsing it.** Any new call site MUST go through `kite_call_tolerant()` (sync) / `kite_call_tolerant_async()` (async) in `backend/algo/broker/kite_client.py`, never a bare `asyncio.to_thread(kc.positions)`/`kc.positions()`. → `kite-content-type-mismatch`
 
 ## Reporting / analytics on algo.events
 
