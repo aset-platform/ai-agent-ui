@@ -7,6 +7,25 @@
  * ``FEATURE_KEYS``. Drift fails CI.
  */
 
+export type FeatureScale = "fraction" | "percent" | "ratio";
+
+/**
+ * Unit captions shown next to the threshold input in
+ * ConditionBuilder when a scale-ambiguous feature is selected.
+ * Found 2026-07-03: `distance_from_sma50 > -3` was a silent
+ * no-op because the feature is a decimal fraction (0.05 = 5%)
+ * but the threshold was typed as if it were a percentage. Some
+ * features are misleadingly named "pct" despite being
+ * fraction-scale (`pct_above_50sma`) — the opposite direction of
+ * the same bug — so the caption is driven by `scale`, never by
+ * the label text.
+ */
+export const FEATURE_SCALE_CAPTION: Record<FeatureScale, string> = {
+  fraction: "Decimal fraction — enter 0.05 for 5%",
+  percent: "Percentage — enter 5 for 5%",
+  ratio: "Ratio around 1.0 — enter 1.05 for +5% vs benchmark",
+};
+
 export interface StrategyFeature {
   key: string;
   label: string;
@@ -20,6 +39,7 @@ export interface StrategyFeature {
     | "regime"
     | "factor"
     | "intraday_feature_store";
+  scale?: FeatureScale;
 }
 
 export const STRATEGY_FEATURES: StrategyFeature[] = [
@@ -28,7 +48,7 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "prev_day_ltp", label: "Prev day LTP", type: "float", source: "ohlcv" },
   { key: "today_vol", label: "Today volume", type: "int", source: "ohlcv" },
   { key: "today_x_vol", label: "Today × Vol (vs avg)", type: "float", source: "ohlcv" },
-  { key: "away_from_52week_high", label: "Away from 52w high (%)", type: "float", source: "ohlcv" },
+  { key: "away_from_52week_high", label: "Away from 52w high (%)", type: "float", source: "ohlcv", scale: "percent" },
   // Technical
   { key: "golden_cross_days_ago", label: "Golden cross (days ago)", type: "int", source: "technical" },
   { key: "sma_5", label: "SMA 5", type: "float", source: "technical" },
@@ -38,12 +58,12 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "sma_200", label: "SMA 200", type: "float", source: "technical" },
   { key: "rsi_2", label: "RSI (2) — Connors 2-period", type: "float", source: "technical" },
   { key: "rsi", label: "RSI (14)", type: "float", source: "technical" },
-  { key: "distance_from_sma5", label: "Distance from SMA 5", type: "float", source: "technical" },
-  { key: "distance_from_sma20", label: "Distance from SMA 20", type: "float", source: "technical" },
-  { key: "distance_from_sma50", label: "Distance from SMA 50", type: "float", source: "technical" },
+  { key: "distance_from_sma5", label: "Distance from SMA 5", type: "float", source: "technical", scale: "fraction" },
+  { key: "distance_from_sma20", label: "Distance from SMA 20", type: "float", source: "technical", scale: "fraction" },
+  { key: "distance_from_sma50", label: "Distance from SMA 50", type: "float", source: "technical", scale: "fraction" },
   { key: "vwap", label: "VWAP (intraday)", type: "float", source: "technical" },
   { key: "nifty_above_sma200", label: "NIFTY > SMA200 regime (1/0)", type: "int", source: "technical" },
-  { key: "nifty_30d_return_pct", label: "NIFTY 30-day return %", type: "float", source: "technical" },
+  { key: "nifty_30d_return_pct", label: "NIFTY 30-day return %", type: "float", source: "technical", scale: "percent" },
   { key: "today_dpc", label: "Today delivery %", type: "float", source: "technical" },
   // Fundamentals
   { key: "pscore", label: "P-Score (Piotroski)", type: "int", source: "fundamentals" },
@@ -58,35 +78,35 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "forecast_confidence", label: "Forecast confidence", type: "float", source: "forecast" },
   // Regime + breadth + VIX (REGIME-1)
   { key: "regime_label", label: "Regime label (BULL/SIDEWAYS/BEAR)", type: "string", source: "regime" },
-  { key: "stress_prob", label: "HMM stress probability", type: "float", source: "regime" },
-  { key: "pct_above_50sma", label: "% above 50d SMA (breadth)", type: "float", source: "regime" },
-  { key: "pct_above_200sma", label: "% above 200d SMA (breadth)", type: "float", source: "regime" },
-  { key: "midcap_largecap_ratio", label: "Midcap / Largecap ratio", type: "float", source: "regime" },
+  { key: "stress_prob", label: "HMM stress probability", type: "float", source: "regime", scale: "fraction" },
+  { key: "pct_above_50sma", label: "% above 50d SMA (breadth)", type: "float", source: "regime", scale: "fraction" },
+  { key: "pct_above_200sma", label: "% above 200d SMA (breadth)", type: "float", source: "regime", scale: "fraction" },
+  { key: "midcap_largecap_ratio", label: "Midcap / Largecap ratio", type: "float", source: "regime", scale: "ratio" },
   { key: "vix_close", label: "India VIX close", type: "float", source: "regime" },
   { key: "vix_sma_20", label: "India VIX 20-day SMA", type: "float", source: "regime" },
   // Factor library (REGIME-2a)
-  { key: "mom_12_1", label: "Momentum 12-1 (skip-month)", type: "float", source: "factor" },
-  { key: "mom_6_1", label: "Momentum 6-1 (skip-month)", type: "float", source: "factor" },
-  { key: "mom_3_1", label: "Momentum 3-1 (skip-month)", type: "float", source: "factor" },
-  { key: "prox_52w", label: "Proximity to 52w high", type: "float", source: "factor" },
+  { key: "mom_12_1", label: "Momentum 12-1 (skip-month)", type: "float", source: "factor", scale: "fraction" },
+  { key: "mom_6_1", label: "Momentum 6-1 (skip-month)", type: "float", source: "factor", scale: "fraction" },
+  { key: "mom_3_1", label: "Momentum 3-1 (skip-month)", type: "float", source: "factor", scale: "fraction" },
+  { key: "prox_52w", label: "Proximity to 52w high", type: "float", source: "factor", scale: "ratio" },
   { key: "f_score", label: "Piotroski F-Score (factor)", type: "float", source: "factor" },
-  { key: "realized_vol_60d", label: "Realized vol 60d (annualised)", type: "float", source: "factor" },
-  { key: "beta_to_nifty", label: "Beta vs NIFTY (252d)", type: "float", source: "factor" },
+  { key: "realized_vol_60d", label: "Realized vol 60d (annualised)", type: "float", source: "factor", scale: "fraction" },
+  { key: "beta_to_nifty", label: "Beta vs NIFTY (252d)", type: "float", source: "factor", scale: "ratio" },
   { key: "adx_14", label: "ADX(14)", type: "float", source: "factor" },
-  { key: "sma200_slope", label: "SMA200 slope (21d)", type: "float", source: "factor" },
-  { key: "distance_from_sma200", label: "Distance from SMA200", type: "float", source: "factor" },
+  { key: "sma200_slope", label: "SMA200 slope (21d)", type: "float", source: "factor", scale: "fraction" },
+  { key: "distance_from_sma200", label: "Distance from SMA200", type: "float", source: "factor", scale: "fraction" },
   { key: "obv", label: "On-Balance Volume", type: "float", source: "factor" },
-  { key: "volume_x_avg_20", label: "Volume x 20d avg", type: "float", source: "factor" },
-  { key: "up_down_vol_ratio_20", label: "Up/Down vol ratio (20d)", type: "float", source: "factor" },
-  { key: "rs_vs_nifty_3m", label: "Rel strength vs NIFTY 3m", type: "float", source: "factor" },
-  { key: "rs_vs_nifty_6m", label: "Rel strength vs NIFTY 6m", type: "float", source: "factor" },
-  { key: "rs_vs_sector_3m", label: "Rel strength vs sector 3m", type: "float", source: "factor" },
+  { key: "volume_x_avg_20", label: "Volume x 20d avg", type: "float", source: "factor", scale: "ratio" },
+  { key: "up_down_vol_ratio_20", label: "Up/Down vol ratio (20d)", type: "float", source: "factor", scale: "ratio" },
+  { key: "rs_vs_nifty_3m", label: "Rel strength vs NIFTY 3m", type: "float", source: "factor", scale: "ratio" },
+  { key: "rs_vs_nifty_6m", label: "Rel strength vs NIFTY 6m", type: "float", source: "factor", scale: "ratio" },
+  { key: "rs_vs_sector_3m", label: "Rel strength vs sector 3m", type: "float", source: "factor", scale: "ratio" },
   // Intraday feature store (ASETPLTFRM-403 FE-2, Phase 1) – trend
   { key: "sma_100", label: "SMA 100 (intraday)", type: "float", source: "intraday_feature_store" },
   { key: "ema_20", label: "EMA 20", type: "float", source: "intraday_feature_store" },
   { key: "ema_50", label: "EMA 50", type: "float", source: "intraday_feature_store" },
   { key: "ema_20_slope_5bar", label: "EMA 20 slope (5-bar)", type: "float", source: "intraday_feature_store" },
-  { key: "dist_from_vwap_pct", label: "Distance from VWAP %", type: "float", source: "intraday_feature_store" },
+  { key: "dist_from_vwap_pct", label: "Distance from VWAP %", type: "float", source: "intraday_feature_store", scale: "percent" },
   { key: "golden_cross_bars_ago", label: "Golden cross (bars ago, intraday)", type: "int", source: "intraday_feature_store" },
   // Intraday – momentum
   { key: "rsi_14", label: "RSI(14)", type: "float", source: "intraday_feature_store" },
@@ -100,19 +120,19 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "relative_volume", label: "Relative volume (TOD avg, 20d)", type: "float", source: "intraday_feature_store" },
   { key: "volume_spike", label: "Volume spike (>2x avg)", type: "int", source: "intraday_feature_store" },
   // Intraday – structure
-  { key: "gap_pct", label: "Gap % (today open vs prev close)", type: "float", source: "intraday_feature_store" },
+  { key: "gap_pct", label: "Gap % (today open vs prev close)", type: "float", source: "intraday_feature_store", scale: "percent" },
   { key: "orb_high_15min", label: "ORB High (15m)", type: "float", source: "intraday_feature_store" },
   { key: "orb_low_15min", label: "ORB Low (15m)", type: "float", source: "intraday_feature_store" },
-  { key: "dist_from_prev_day_high_pct", label: "Distance from prev day high %", type: "float", source: "intraday_feature_store" },
-  { key: "dist_from_prev_day_low_pct", label: "Distance from prev day low %", type: "float", source: "intraday_feature_store" },
+  { key: "dist_from_prev_day_high_pct", label: "Distance from prev day high %", type: "float", source: "intraday_feature_store", scale: "percent" },
+  { key: "dist_from_prev_day_low_pct", label: "Distance from prev day low %", type: "float", source: "intraday_feature_store", scale: "percent" },
   // Intraday – time
   { key: "minutes_since_open", label: "Minutes since 09:15 IST", type: "int", source: "intraday_feature_store" },
   { key: "time_of_day_bucket", label: "Time-of-day bucket", type: "string", source: "intraday_feature_store" },
   // Intraday – relative-strength + market-breadth (FE-8 Phase 2)
-  { key: "rs_vs_nifty_15m", label: "RS vs NIFTY (15m)", type: "float", source: "intraday_feature_store" },
-  { key: "rs_vs_sector_15m", label: "RS vs sector (15m)", type: "float", source: "intraday_feature_store" },
-  { key: "market_breadth_pct_above_sma200", label: "% Nifty-500 above SMA200", type: "float", source: "intraday_feature_store" },
-  { key: "advance_decline_ratio", label: "Advance/decline ratio (15m)", type: "float", source: "intraday_feature_store" },
+  { key: "rs_vs_nifty_15m", label: "RS vs NIFTY (15m)", type: "float", source: "intraday_feature_store", scale: "fraction" },
+  { key: "rs_vs_sector_15m", label: "RS vs sector (15m)", type: "float", source: "intraday_feature_store", scale: "fraction" },
+  { key: "market_breadth_pct_above_sma200", label: "% Nifty-500 above SMA200", type: "float", source: "intraday_feature_store", scale: "percent" },
+  { key: "advance_decline_ratio", label: "Advance/decline ratio (15m)", type: "float", source: "intraday_feature_store", scale: "ratio" },
   // Intraday – sector rotation (FE-9 Phase 2). regime_label /
   // stress_prob are intentionally NOT mirrored under
   // intraday_feature_store here — their canonical AST surface

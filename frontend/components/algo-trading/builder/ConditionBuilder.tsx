@@ -2,7 +2,10 @@
 
 import { useMemo } from "react";
 
-import { STRATEGY_FEATURES } from "../strategyFeatureCatalog";
+import {
+  FEATURE_SCALE_CAPTION,
+  STRATEGY_FEATURES,
+} from "../strategyFeatureCatalog";
 import {
   astRootToVisualSpec,
   makeDefaultRow,
@@ -263,100 +266,119 @@ function ConditionRowEditor({
     });
   }
 
+  // Unit caption only matters when the user is typing a raw number
+  // — a feature-vs-feature comparison has no literal to misinterpret.
+  const scaleCaption =
+    !isString && row.rightType === "literal" && feat?.scale
+      ? FEATURE_SCALE_CAPTION[feat.scale]
+      : null;
+
   return (
-    <div className="flex items-center gap-1.5 flex-wrap">
-      {/* Left feature */}
-      <select
-        value={row.leftFeature}
-        onChange={(e) => handleFeatureChange(e.target.value)}
-        className={`${SEL} max-w-[200px]`}
-      >
-        {FEATURE_GROUPS.map((grp) => (
-          <optgroup key={grp.source} label={grp.label}>
-            {grp.features.map((f) => (
-              <option key={f.key} value={f.key}>
-                {f.label}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-
-      {/* Operator */}
-      <select
-        value={row.op}
-        onChange={(e) => onChange({ ...row, op: e.target.value as ConditionOp })}
-        className={`${SEL} w-16`}
-      >
-        {ops.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-
-      {/* Right value-type toggle (numeric only) */}
-      {!isString && (
+    <div className="space-y-0.5">
+      <div className="flex items-center gap-1.5 flex-wrap">
+        {/* Left feature */}
         <select
-          value={row.rightType}
-          onChange={(e) =>
-            onChange({
-              ...row,
-              rightType: e.target.value as "literal" | "feature",
-              rightLiteral: "0",
-              rightFeature: STRATEGY_FEATURES.find((f) => f.type !== "string")?.key ?? "",
-            })
-          }
-          className={`${SEL} w-20`}
-        >
-          <option value="literal">Value</option>
-          <option value="feature">Feature</option>
-        </select>
-      )}
-
-      {/* Right operand */}
-      {isString ? (
-        <StringValueInput
-          featureKey={row.leftFeature}
-          value={row.rightLiteral}
-          onChange={(v) => onChange({ ...row, rightLiteral: v })}
-        />
-      ) : row.rightType === "feature" ? (
-        <select
-          value={row.rightFeature}
-          onChange={(e) => onChange({ ...row, rightFeature: e.target.value })}
+          value={row.leftFeature}
+          onChange={(e) => handleFeatureChange(e.target.value)}
           className={`${SEL} max-w-[200px]`}
         >
           {FEATURE_GROUPS.map((grp) => (
             <optgroup key={grp.source} label={grp.label}>
-              {grp.features
-                .filter((f) => f.type !== "string")
-                .map((f) => (
-                  <option key={f.key} value={f.key}>
-                    {f.label}
-                  </option>
-                ))}
+              {grp.features.map((f) => (
+                <option key={f.key} value={f.key}>
+                  {f.label}
+                </option>
+              ))}
             </optgroup>
           ))}
         </select>
-      ) : (
-        <input
-          type="number"
-          value={row.rightLiteral}
-          onChange={(e) => onChange({ ...row, rightLiteral: e.target.value })}
-          className={`${SEL} w-24`}
-          step="any"
-        />
-      )}
 
-      <button
-        type="button"
-        onClick={onRemove}
-        className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400 px-1 leading-none"
-        aria-label="Remove condition"
-      >
-        ×
-      </button>
+        {/* Operator */}
+        <select
+          value={row.op}
+          onChange={(e) => onChange({ ...row, op: e.target.value as ConditionOp })}
+          className={`${SEL} w-16`}
+        >
+          {ops.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+
+        {/* Right value-type toggle (numeric only) */}
+        {!isString && (
+          <select
+            value={row.rightType}
+            onChange={(e) =>
+              onChange({
+                ...row,
+                rightType: e.target.value as "literal" | "feature",
+                rightLiteral: "0",
+                rightFeature: STRATEGY_FEATURES.find((f) => f.type !== "string")?.key ?? "",
+              })
+            }
+            className={`${SEL} w-20`}
+          >
+            <option value="literal">Value</option>
+            <option value="feature">Feature</option>
+          </select>
+        )}
+
+        {/* Right operand */}
+        {isString ? (
+          <StringValueInput
+            featureKey={row.leftFeature}
+            value={row.rightLiteral}
+            onChange={(v) => onChange({ ...row, rightLiteral: v })}
+          />
+        ) : row.rightType === "feature" ? (
+          <select
+            value={row.rightFeature}
+            onChange={(e) => onChange({ ...row, rightFeature: e.target.value })}
+            className={`${SEL} max-w-[200px]`}
+          >
+            {FEATURE_GROUPS.map((grp) => (
+              <optgroup key={grp.source} label={grp.label}>
+                {grp.features
+                  .filter((f) => f.type !== "string")
+                  .map((f) => (
+                    <option key={f.key} value={f.key}>
+                      {f.label}
+                    </option>
+                  ))}
+              </optgroup>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="number"
+            value={row.rightLiteral}
+            onChange={(e) => onChange({ ...row, rightLiteral: e.target.value })}
+            className={`${SEL} w-24`}
+            step="any"
+            title={scaleCaption ?? undefined}
+          />
+        )}
+
+        <button
+          type="button"
+          onClick={onRemove}
+          className="text-xs text-red-500 hover:text-red-700 dark:hover:text-red-400 px-1 leading-none"
+          aria-label="Remove condition"
+        >
+          ×
+        </button>
+      </div>
+
+      {scaleCaption && (
+        <p
+          className="text-[11px] text-amber-700 dark:text-amber-400 pl-0.5"
+          data-testid="algo-cond-scale-caption"
+        >
+          {scaleCaption}
+        </p>
+      )}
     </div>
   );
 }

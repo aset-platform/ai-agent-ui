@@ -37,6 +37,25 @@ FeatureSource = Literal[
     "intraday_feature_store",
 ]
 
+# Found 2026-07-03: a strategy AST condition
+# (``distance_from_sma50 > -3``) was a silent no-op because the
+# feature is stored as a DECIMAL FRACTION (0.05 = 5%) but the
+# threshold was typed as if it were a PERCENTAGE (-3 meaning -3%,
+# but actually meaning -300%, a value no stock can ever reach). A
+# full audit found the SAME ambiguity affects several more
+# features, including two (``pct_above_50sma``/``pct_above_200sma``)
+# that are misleadingly named "pct" despite being fraction-scale —
+# the exact opposite direction of the original bug. ``scale`` lets
+# the Strategy Builder UI show an inline unit caption next to the
+# threshold input so a user never has to guess. ``None`` = not
+# percentage-like (raw price, 0-100 oscillator, count, boolean,
+# enum) — self-evident from the label, no caption needed.
+FeatureScale = Literal[
+    "fraction",  # decimal fraction: enter 0.05 for 5%
+    "percent",  # already percentage units: enter 5 for 5%
+    "ratio",  # ratio centred on 1.0: enter 1.05 for +5% vs benchmark
+]
+
 
 class Feature(BaseModel):
     """A single feature in the strategy vocabulary."""
@@ -45,6 +64,7 @@ class Feature(BaseModel):
     label: str
     type: FeatureType
     source: FeatureSource
+    scale: FeatureScale | None = None
 
 
 # Initial feature dictionary — equity, daily-bar features only.
@@ -70,6 +90,7 @@ FEATURES: list[Feature] = [
         label="Away from 52w high (%)",
         type="float",
         source="ohlcv",
+        scale="percent",
     ),
     # Technical
     Feature(
@@ -88,18 +109,21 @@ FEATURES: list[Feature] = [
         label="Distance from SMA 5",
         type="float",
         source="technical",
+        scale="fraction",
     ),
     Feature(
         key="distance_from_sma20",
         label="Distance from SMA 20",
         type="float",
         source="technical",
+        scale="fraction",
     ),
     Feature(
         key="distance_from_sma50",
         label="Distance from SMA 50",
         type="float",
         source="technical",
+        scale="fraction",
     ),
     Feature(key="rsi", label="RSI (14)", type="float", source="technical"),
     Feature(
@@ -125,6 +149,7 @@ FEATURES: list[Feature] = [
         label="NIFTY 30-day return %",
         type="float",
         source="technical",
+        scale="percent",
     ),
     Feature(
         key="today_dpc",
@@ -190,24 +215,28 @@ FEATURES: list[Feature] = [
         label="HMM stress probability",
         type="float",
         source="regime",
+        scale="fraction",
     ),
     Feature(
         key="pct_above_50sma",
         label="% above 50d SMA (breadth)",
         type="float",
         source="regime",
+        scale="fraction",
     ),
     Feature(
         key="pct_above_200sma",
         label="% above 200d SMA (breadth)",
         type="float",
         source="regime",
+        scale="fraction",
     ),
     Feature(
         key="midcap_largecap_ratio",
         label="Midcap / Largecap ratio",
         type="float",
         source="regime",
+        scale="ratio",
     ),
     Feature(
         key="vix_close",
@@ -229,24 +258,28 @@ FEATURES: list[Feature] = [
         label="Momentum 12-1 (skip-month)",
         type="float",
         source="factor",
+        scale="fraction",
     ),
     Feature(
         key="mom_6_1",
         label="Momentum 6-1 (skip-month)",
         type="float",
         source="factor",
+        scale="fraction",
     ),
     Feature(
         key="mom_3_1",
         label="Momentum 3-1 (skip-month)",
         type="float",
         source="factor",
+        scale="fraction",
     ),
     Feature(
         key="prox_52w",
         label="Proximity to 52w high",
         type="float",
         source="factor",
+        scale="ratio",
     ),
     Feature(
         key="f_score",
@@ -259,12 +292,14 @@ FEATURES: list[Feature] = [
         label="Realized vol 60d (annualised)",
         type="float",
         source="factor",
+        scale="fraction",
     ),
     Feature(
         key="beta_to_nifty",
         label="Beta vs NIFTY (252d)",
         type="float",
         source="factor",
+        scale="ratio",
     ),
     Feature(
         key="adx_14",
@@ -277,12 +312,14 @@ FEATURES: list[Feature] = [
         label="SMA200 slope (21d)",
         type="float",
         source="factor",
+        scale="fraction",
     ),
     Feature(
         key="distance_from_sma200",
         label="Distance from SMA200",
         type="float",
         source="factor",
+        scale="fraction",
     ),
     Feature(
         key="obv",
@@ -295,30 +332,35 @@ FEATURES: list[Feature] = [
         label="Volume x 20d avg",
         type="float",
         source="factor",
+        scale="ratio",
     ),
     Feature(
         key="up_down_vol_ratio_20",
         label="Up/Down vol ratio (20d)",
         type="float",
         source="factor",
+        scale="ratio",
     ),
     Feature(
         key="rs_vs_nifty_3m",
         label="Rel strength vs NIFTY 3m",
         type="float",
         source="factor",
+        scale="ratio",
     ),
     Feature(
         key="rs_vs_nifty_6m",
         label="Rel strength vs NIFTY 6m",
         type="float",
         source="factor",
+        scale="ratio",
     ),
     Feature(
         key="rs_vs_sector_3m",
         label="Rel strength vs sector 3m",
         type="float",
         source="factor",
+        scale="ratio",
     ),
     # ────────────────────────────────────────────────────────────
     # Intraday feature store (ASETPLTFRM-403 FE-2, Phase 1)
@@ -359,6 +401,7 @@ FEATURES: list[Feature] = [
         label="Distance from VWAP %",
         type="float",
         source="intraday_feature_store",
+        scale="percent",
     ),
     Feature(
         key="golden_cross_bars_ago",
@@ -423,6 +466,7 @@ FEATURES: list[Feature] = [
         label="Gap % (today open vs prev close)",
         type="float",
         source="intraday_feature_store",
+        scale="percent",
     ),
     Feature(
         key="orb_high_15min",
@@ -441,12 +485,14 @@ FEATURES: list[Feature] = [
         label="Distance from prev day high %",
         type="float",
         source="intraday_feature_store",
+        scale="percent",
     ),
     Feature(
         key="dist_from_prev_day_low_pct",
         label="Distance from prev day low %",
         type="float",
         source="intraday_feature_store",
+        scale="percent",
     ),
     # Intraday — time
     Feature(
@@ -474,24 +520,28 @@ FEATURES: list[Feature] = [
         label="RS vs NIFTY (15m)",
         type="float",
         source="intraday_feature_store",
+        scale="fraction",
     ),
     Feature(
         key="rs_vs_sector_15m",
         label="RS vs sector (15m)",
         type="float",
         source="intraday_feature_store",
+        scale="fraction",
     ),
     Feature(
         key="market_breadth_pct_above_sma200",
         label="% Nifty-500 above SMA200",
         type="float",
         source="intraday_feature_store",
+        scale="percent",
     ),
     Feature(
         key="advance_decline_ratio",
         label="Advance/decline ratio (15m)",
         type="float",
         source="intraday_feature_store",
+        scale="ratio",
     ),
     # ────────────────────────────────────────────────────────────
     # Intraday — sector rotation + regime link (FE-9, Phase 2)
