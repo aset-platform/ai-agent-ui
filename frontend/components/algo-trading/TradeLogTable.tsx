@@ -102,6 +102,7 @@ export function TradeLogTable({
           onChange={setSelected}
           onReset={reset}
           lockedKeys={["ticker"]}
+          align="left"
         />
         <DownloadCsvButton
           onClick={handleDownload}
