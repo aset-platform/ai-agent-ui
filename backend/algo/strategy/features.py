@@ -530,11 +530,18 @@ FEATURES: list[Feature] = [
         scale="fraction",
     ),
     Feature(
+        # ASETPLTFRM-468 — normalized to fraction scale (was
+        # percentage), matching the daily factor-library sibling
+        # pct_above_200sma (same underlying concept, different
+        # cadence — both were fraction/percent-conflicting before
+        # this fix). Label corrected: this is a batch-cohort
+        # reading of the compute job's own ticker batch, NOT a
+        # fixed Nifty-500 universe.
         key="market_breadth_pct_above_sma200",
-        label="% Nifty-500 above SMA200",
+        label="% universe above SMA200 (intraday, batch cohort)",
         type="float",
         source="intraday_feature_store",
-        scale="percent",
+        scale="fraction",
     ),
     Feature(
         key="advance_decline_ratio",
