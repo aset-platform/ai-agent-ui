@@ -344,9 +344,6 @@ class LiveRuntime:
         self._caps = caps
         self._run_id = run_id
         self._caps_repo = caps_repo
-        self._gtt_limit_headroom_pct: float = float(
-            caps.get("gtt_limit_headroom_pct", 0.01)
-        )
         self._kill_switch_repo = kill_switch_repo
         self._ticker_to_token = ticker_to_token or {}
         self._evaluator = Evaluator()
@@ -1419,6 +1416,25 @@ class LiveRuntime:
                 if not self._trailing_enabled:
                     continue
 
+                # Refresh self._caps before ratcheting so a mid-run
+                # edit to gtt_limit_headroom_pct is picked up by
+                # _ratchet_all_gtts's tick — that method is sync
+                # (thread-safe by design, no await), so it reads
+                # self._caps directly rather than fetching itself.
+                try:
+                    fresh_caps = await self._caps_repo.get(
+                        self._user_id,
+                        self._strategy.id,
+                    )
+                    if fresh_caps:
+                        self._caps = fresh_caps
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "trailing ratchet loop: caps refresh failed "
+                        "— using last-known caps",
+                        exc_info=True,
+                    )
+
                 await asyncio.to_thread(self._ratchet_all_gtts)
 
             except asyncio.CancelledError:
@@ -1625,10 +1641,13 @@ class LiveRuntime:
                     .quantize(Decimal("1"), rounding=ROUND_DOWN)
                     * _tick
                 )
+                _headroom_pct = self._caps.get(
+                    "gtt_limit_headroom_pct", 0.01,
+                )
                 limit = float(
                     (
                         Decimal(str(mgr.current_stop))
-                        * (1 - Decimal(str(self._gtt_limit_headroom_pct)))
+                        * (1 - Decimal(str(_headroom_pct)))
                         / _tick
                     ).quantize(Decimal("1"), rounding=ROUND_DOWN)
                     * _tick
@@ -2126,10 +2145,11 @@ class LiveRuntime:
             .quantize(Decimal("1"), rounding=ROUND_DOWN)
             * _tick
         )
+        _headroom_pct = self._caps.get("gtt_limit_headroom_pct", 0.01)
         limit = float(
             (
                 Decimal(str(mgr.current_stop))
-                * (1 - Decimal(str(self._gtt_limit_headroom_pct)))
+                * (1 - Decimal(str(_headroom_pct)))
                 / _tick
             ).quantize(Decimal("1"), rounding=ROUND_DOWN)
             * _tick
@@ -2636,10 +2656,13 @@ class LiveRuntime:
                 .quantize(Decimal("1"), rounding=ROUND_DOWN)
                 * _tick
             )
+            _headroom_pct = self._caps.get(
+                "gtt_limit_headroom_pct", 0.01,
+            )
             limit = float(
                 (
                     Decimal(str(mgr.current_stop))
-                    * (1 - Decimal(str(self._gtt_limit_headroom_pct)))
+                    * (1 - Decimal(str(_headroom_pct)))
                     / _tick
                 ).quantize(Decimal("1"), rounding=ROUND_DOWN)
                 * _tick
@@ -3874,6 +3897,14 @@ class LiveRuntime:
             )
             or self._caps
         )
+        # Refresh the shared snapshot too — self._caps is read
+        # directly (not re-fetched) by the sync GTT placement call
+        # sites (on_buy_fill_trailing, _ratchet_all_gtts) for
+        # gtt_limit_headroom_pct, since those can't await a PG read.
+        # This keeps that field's staleness window bounded by how
+        # often signals are evaluated, without adding I/O to a
+        # thread-safe-by-design sync path.
+        self._caps = current_caps
 
         # Allowed-tickers gate — BUY only. Runs here (before
         # signal_generated) so a ticker outside the user's allow-list
