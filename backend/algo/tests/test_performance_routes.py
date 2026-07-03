@@ -134,10 +134,14 @@ def test_summary_backtest_mode_aggregates_trade_list(app, monkeypatch):
                 {
                     "ticker": "ITC", "realised_pnl_inr": 500,
                     "closed_at": "2026-06-10",
+                    "qty": 10, "avg_price": 300.0,
+                    "fill_price": 350.0,
                 },
                 {
                     "ticker": "TCS", "realised_pnl_inr": -200,
                     "closed_at": "2026-06-12",
+                    "qty": 2, "avg_price": 3600.0,
+                    "fill_price": 3500.0,
                 },
             ],
         },
@@ -174,6 +178,10 @@ def test_summary_backtest_mode_aggregates_trade_list(app, monkeypatch):
     assert s["biggest_win"]["ticker"] == "ITC"
     assert s["biggest_loss"]["ticker"] == "TCS"
     assert s["max_drawdown_pct"] == 4.2
+    assert s["total_invested_inr"] == 10200.0
+    assert s["total_gain_inr"] == 10500.0
+    assert s["profit_pct"] == 2.94
+    assert "profit_factor" not in s
     assert len(body["trades"]) == 2
 
 
@@ -221,6 +229,9 @@ def test_summary_live_mode_reads_closed_trades(app, monkeypatch):
     assert s["total_trades"] == 1
     assert s["losses"] == 1
     assert s["max_drawdown_pct"] is None
+    assert s["total_invested_inr"] == 3600.0
+    assert s["total_gain_inr"] == 2709.99
+    assert s["profit_pct"] == -24.72
     assert body["trades"][0]["ticker"] == "SHAILY"
     assert body["trades"][0]["holding_days"] == 5
 
