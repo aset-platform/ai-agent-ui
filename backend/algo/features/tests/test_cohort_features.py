@@ -188,7 +188,9 @@ def _build_long_series_for_sma200(
 
 def test_market_breadth_pct_above_sma200():
     """4-ticker cohort, 250 bars each so SMA(200) settles. 2
-    tickers end above their SMA(200) and 2 end below → 50.0%."""
+    tickers end above their SMA(200) and 2 end below → 0.5
+    (fraction scale, ASETPLTFRM-468 — was 50.0 / percentage scale
+    before the fix)."""
     above_a = _build_long_series_for_sma200("ABOVE_A.NS", Decimal("120"))
     above_b = _build_long_series_for_sma200("ABOVE_B.NS", Decimal("110"))
     below_a = _build_long_series_for_sma200("BELOW_A.NS", Decimal("80"))
@@ -207,12 +209,12 @@ def test_market_breadth_pct_above_sma200():
     final_ts = above_a[-1].bar_open_ts_ns
     feats_a = panel["ABOVE_A.NS"][final_ts]
     assert "market_breadth_pct_above_sma200" in feats_a
-    assert feats_a["market_breadth_pct_above_sma200"] == Decimal("50")
+    assert feats_a["market_breadth_pct_above_sma200"] == Decimal("0.5")
     # Same value on every ticker at the same ts_ns (cohort feature).
     for tk in ("ABOVE_B.NS", "BELOW_A.NS", "BELOW_B.NS"):
         assert (
             panel[tk][final_ts]["market_breadth_pct_above_sma200"]
-            == Decimal("50")
+            == Decimal("0.5")
         )
 
 
