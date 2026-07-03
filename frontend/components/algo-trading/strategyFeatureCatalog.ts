@@ -54,10 +54,10 @@ export interface StrategyFeature {
 export const STRATEGY_FEATURES: StrategyFeature[] = [
   // OHLCV
   { key: "today_ltp", label: "Today LTP", type: "float", source: "ohlcv" },
-  { key: "prev_day_ltp", label: "Prev day LTP", type: "float", source: "ohlcv" },
+  { key: "prev_day_ltp", label: "Prev day LTP", type: "float", source: "ohlcv", unwired: true },
   { key: "today_vol", label: "Today volume", type: "int", source: "ohlcv" },
-  { key: "today_x_vol", label: "Today × Vol (vs avg)", type: "float", source: "ohlcv" },
-  { key: "away_from_52week_high", label: "Away from 52w high (%)", type: "float", source: "ohlcv", scale: "percent" },
+  { key: "today_x_vol", label: "Today × Vol (vs avg)", type: "float", source: "ohlcv", unwired: true },
+  { key: "away_from_52week_high", label: "Away from 52w high (%)", type: "float", source: "ohlcv", scale: "percent", unwired: true },
   // Technical
   { key: "golden_cross_days_ago", label: "Golden cross (days ago)", type: "int", source: "technical" },
   { key: "sma_5", label: "SMA 5", type: "float", source: "technical" },

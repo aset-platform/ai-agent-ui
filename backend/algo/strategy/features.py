@@ -87,6 +87,7 @@ FEATURES: list[Feature] = [
         label="Prev day LTP",
         type="float",
         source="ohlcv",
+        unwired=True,
     ),
     Feature(key="today_vol", label="Today volume", type="int", source="ohlcv"),
     Feature(
@@ -94,6 +95,7 @@ FEATURES: list[Feature] = [
         label="Today × Vol (vs avg)",
         type="float",
         source="ohlcv",
+        unwired=True,
     ),
     Feature(
         key="away_from_52week_high",
@@ -101,6 +103,7 @@ FEATURES: list[Feature] = [
         type="float",
         source="ohlcv",
         scale="percent",
+        unwired=True,
     ),
     # Technical
     Feature(
