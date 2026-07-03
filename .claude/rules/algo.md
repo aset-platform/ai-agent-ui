@@ -11,6 +11,51 @@ paths:
 > Lazy-loaded via `paths:` frontmatter — only enters context when Claude
 > reads files under the globs above. Mirrors what was CLAUDE.md §5.16.
 
+## ★ Change-impact discipline for runtime / live / order / GTT code
+
+Any change touching `live/runtime.py`, `live/*.py`, order placement,
+GTT placement, `routes/live.py`, `routes/kill_switch.py`,
+`routes/webhooks.py` (postback), or `broker/kite_client.py` MUST be
+evaluated for impact across the WHOLE surface, not just the call
+site that prompted the change — before calling the fix done:
+
+- **Grep every call site of the changed pattern across the entire
+  backend**, not just the reported one. A bug found at one call site
+  of a Kite SDK call, a budget-reservation write, or a caps read is
+  reason to suspect siblings. (2026-07-03: a reported "₹0 committed"
+  display bug traced to `kiteconnect` swallowing a Content-Type
+  mismatch — the full sweep found 9 unprotected call sites, not the
+  1 originally reported, including the kill-switch's emergency
+  flatten-all and the GTT-cleanup fail-safe.)
+- **Trace BOTH sides of any dual-path / idempotent mechanism.** This
+  codebase's GTT-exit accounting is deliberately two-path (Piece A
+  poll + Piece B postback, "whichever runs first wins") — a fix
+  applied to one path and not the other silently half-fixes the bug.
+  (2026-07-03: neither path released the matching budget reservation
+  on a GTT-triggered exit — a gap that existed in both paths for as
+  long as GTT-triggered exits have existed, undetected because
+  nothing crashed or logged an error.)
+- **Check every piece of downstream state the change touches stays
+  consistent**, not just the one attribute you're directly editing:
+  budget ledger (`algo.budget_reservations`), the in-memory caps
+  snapshot (`self._caps`), the position tracker, `_in_flight` orders,
+  `algo.events`. A fix that updates the position tracker + emits
+  events but forgets the budget ledger looks complete (tests pass,
+  the fill shows up in the UI) while silently corrupting a completely
+  different subsystem's read of "how much capital is free."
+- **The class of failure this discipline exists to catch is silent,
+  not loud.** A gap here doesn't crash, doesn't fail a health check,
+  and often doesn't even log at ERROR — it manifests as a signal
+  that should have produced a BUY quietly producing nothing, or a
+  budget figure that's wrong by exactly the amount of one orphaned
+  reservation. Confirmed 2026-07-03: real trading opportunities
+  during market hours went unmet because a stale budget figure
+  rejected valid BUYs, discovered only because the user happened to
+  be watching the console — not because anything alerted. Treat "the
+  test I wrote passes" as necessary, not sufficient, for this class
+  of code; the standard is "I traced every call site and every piece
+  of state this touches," not "the one thing I changed works."
+
 ## Strategy promotion workflow
 
 - Lifecycle: `draft → paper → live`. Audit table `algo.strategy_mode_transitions`.
@@ -37,6 +82,8 @@ paper-fill realism, so divergence makes promotion meaningless.
 - **eval_node KeyError MUST emit `signal_rejected`** — if a feature is absent from `EvalContext.features` at eval time, append a `signal_rejected` event (`reason="missing_feature"`, `missing_key=str(exc)`) before returning 0. Silent returns mask triage and leave the UI showing no activity for oversold tickers.
 - **GTT-triggered SELLs have no in-flight entry** — Kite fires the GTT autonomously so `_reconcile_terminal_with_in_flight` finds no match → `matched_strategy_id=None` → normal SELL cleanup is skipped. Two-path accounting (both idempotent; whichever runs first wins): **Piece A** — `_ratchet_all_gtts` calls `kite.get_gtts()` once per 15-min tick; any tracked `gtt_id` absent from the active set is treated as triggered — sources qty/price from Kite's own GTT order definition (`orders[0]`, NOT the in-memory position tracker, which can drift out of sync with `_trailing_managers` across a restart), applies the fill, clears state, and emits BOTH `order_filled_live` and `gtt_triggered` (fixed 2026-07-02 — Piece A previously emitted only `gtt_triggered`, so any trade it caught was invisible to the Attribution panel and Strategy Performance page). **Piece B** — postback fallback block calls `get_supervisor().find_live_runtime_with_gtt(user_id, ticker)` then `_apply_gtt_triggered_sell_fill` + `_on_sell_fill_trailing`. → `algo-gtt-trailing-stop`
 - **algo.events fill price key differs by mode**: live `order_filled_live` events (both the direct `live/runtime.py` fill path and the Kite postback webhook path) carry the price under `payload["price"]`; paper's `order_filled` events use `payload["fill_price"]`. Any code reading a fill for its price MUST do `payload.get("fill_price") or payload.get("price")` — a bare `.get("fill_price")` silently zeroes every live-mode trade's price/PnL/return% (bit `routes/attribution.py` and the new `attribution/trade_pairing.py`, fixed 2026-07-02). → `debugging-live-fill-price-key-mismatch`
+- **`self._caps` and any scalar derived from it at `LiveRuntime.__init__` (`allowed_tickers`, `gtt_limit_headroom_pct`) are a startup-time snapshot, frozen for the runtime's lifetime** — a mid-run `PUT /algo/live/caps/{id}` edit is invisible until restart unless the read site re-fetches. Fixed 2026-07-03 by reading `self._caps` directly (not a cached scalar) at every use site, and refreshing `self._caps` itself at two natural points: `_on_bar_close`'s existing fresh-caps PG read, and immediately before each 15-min `_ratchet_all_gtts` tick. Any NEW caps field read in a hot path must follow the same pattern — never cache a caps value into a separate `self._x` at `__init__` without a refresh path. → `live-caps-staleness-mid-run`
+- **GTT-triggered exits MUST release the matching BUY's budget reservation, not just apply the fill to the position tracker + emit `algo.events`.** Both Piece A and Piece B call `_release_budget_reservation_for_gtt_exit()` (creates a SELL reservation and immediately transitions it to FILLED — a GTT fill is detected post-facto, so there's no PENDING/SUBMITTED phase to model) after applying the fill. Skipping this on a new exit path silently overstates `sum_open_position_cost` forever for that position, eating into Cap 0 pool-wide budget headroom for EVERY strategy the user runs, not just the one that closed (found 2026-07-03 — neither existing path had ever done this). → `gtt-exit-budget-reservation-release`
 - **`_reconcile_terminal_with_in_flight` returns a tuple** `(matched_strategy_id, matched_entry)` — callers MUST unpack both. Using `matched_entry` without unpacking was a silent `NameError` (swallowed by `except Exception`) that prevented `_on_sell_fill_trailing` from ever firing via the webhook before this was fixed.
 - **`kite.dry_run` (no underscore)** drives `self._dry_run` in `LiveRuntime.__init__` (`getattr(kite, "dry_run", False)`). Test mocks that set `kite._dry_run = False` (underscore) leave `_dry_run=True` because `MagicMock().dry_run` returns a truthy mock. Set `kite.dry_run = False` or `rt._dry_run = False` directly in tests that exercise the GTT detection block.
 - **`KiteClient` has NO `ltp()` wrapper** — use `self._kite._kc.ltp([f"NSE:{bare}"])` (raw `KiteConnect`). `kite_client.py` exposes `quote()`, `positions()`, `place_order()`, `place_gtt()` etc. but NOT `ltp()`. Wrong call → `AttributeError` silently caught by `except Exception` → `last_price=None` → crash.
