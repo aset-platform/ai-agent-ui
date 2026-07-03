@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
+from kiteconnect.exceptions import DataException
 
 from auth.dependencies import pro_or_superuser
 from auth.models import UserContext
@@ -203,6 +204,57 @@ class TestComputeStrategyCommitment:
 
         assert committed == Decimal("0")
         assert count == 0
+
+
+# ---------------------------------------------------------------
+# The pure recovery helper and the sync/async wrappers now live in
+# backend/algo/broker/kite_client.py (shared across every call site
+# that reads kc.positions()/kc.holdings(), not just this route) --
+# see test_kite_client_content_type_recovery.py for their unit
+# tests. This section only covers _compute_strategy_commitment's
+# own integration with that shared recovery path.
+# ---------------------------------------------------------------
+
+
+class TestComputeStrategyCommitmentContentTypeRecovery:
+    @pytest.mark.asyncio
+    @patch("backend.algo.routes.live._fetch_holding_attribution")
+    @patch("backend.algo.routes.live._build_kite_client_for_user")
+    async def test_recovers_open_position_despite_content_type_bug(
+        self, build_kite, attr,
+    ):
+        """The exact bug found 2026-07-03: kc.positions() raises the
+        Content-Type DataException on every call even though real
+        positions are open (via holdings()). Commitment must reflect
+        the real holdings value, not silently fall back to 0."""
+        from backend.algo.routes.live import (
+            _compute_strategy_commitment,
+        )
+
+        kc = MagicMock()
+        kc.positions.side_effect = DataException(
+            "Unknown Content-Type (text/plain; charset=utf-8) "
+            "with response: (b'{\"status\":\"success\",\"data\":"
+            "{\"net\": [], \"day\": []}}')",
+        )
+        kc.holdings.return_value = [{
+            "tradingsymbol": "MMTC", "exchange": "NSE",
+            "quantity": 42, "t1_quantity": 0,
+            "average_price": 68.84, "product": "CNC",
+        }]
+        kite = MagicMock()
+        kite._kc = kc
+        build_kite.return_value = kite
+        attr.return_value = {
+            "MMTC": {"strategy_id": str(_STRATEGY_ID)},
+        }
+
+        committed, count = await _compute_strategy_commitment(
+            _USER_ID, _STRATEGY_ID,
+        )
+
+        assert committed == Decimal("42") * Decimal("68.84")
+        assert count == 1
 
 
 # ---------------------------------------------------------------

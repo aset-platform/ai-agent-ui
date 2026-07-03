@@ -9,6 +9,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
+from kiteconnect.exceptions import DataException
 
 from backend.algo.routes.portfolio import (
     AlgoPositionRow,
@@ -136,6 +137,50 @@ def _fake_kite(positions_net, holdings):
     outer = MagicMock()
     outer._kc = kc_inner
     return outer
+
+
+@pytest.mark.asyncio
+async def test_recovers_positions_despite_content_type_mismatch(
+    monkeypatch,
+):
+    """Found 2026-07-03: kc.positions()/kc.holdings() raising Kite's
+    Content-Type-mismatch DataException must be recovered, not
+    silently treated as {}/[] (which would drop a real open
+    position from the portfolio view entirely)."""
+    kc_inner = MagicMock()
+    kc_inner.positions.side_effect = DataException(
+        "Unknown Content-Type (text/plain; charset=utf-8) with "
+        "response: (b'{\"status\":\"success\",\"data\":{\"net\":"
+        "[{\"tradingsymbol\": \"INFY\", \"quantity\": 10, "
+        "\"average_price\": 1500, \"last_price\": 1520, "
+        "\"pnl\": 200, \"product\": \"MIS\"}]}}')",
+    )
+    kc_inner.holdings.return_value = []
+    fake_kite = MagicMock()
+    fake_kite._kc = kc_inner
+
+    monkeypatch.setattr(
+        "backend.algo.routes.portfolio._build_kite_for_user",
+        AsyncMock(return_value=fake_kite),
+    )
+    monkeypatch.setattr(
+        "backend.algo.routes.portfolio._fetch_strategy_attribution",
+        AsyncMock(return_value={
+            "INFY": _attr(str(uuid4()), "RSI(2) v3"),
+        }),
+    )
+    monkeypatch.setattr(
+        "backend.algo.routes.portfolio.get_cache",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "backend.algo.routes.portfolio.is_market_open_ist",
+        lambda: False,
+    )
+    out = await _get_algo_positions_impl(user_id=uuid4())
+    assert len(out.positions) == 1
+    assert out.positions[0].internal_ticker == "INFY.NS"
+    assert out.positions[0].quantity == 10
 
 
 @pytest.mark.asyncio

@@ -140,7 +140,10 @@ def create_kill_switch_router() -> APIRouter:
         from backend.algo.broker.credentials_repo import (
             BrokerCredentialsRepo,
         )
-        from backend.algo.broker.kite_client import KiteClient
+        from backend.algo.broker.kite_client import (
+            KiteClient,
+            kite_call_tolerant_async,
+        )
         from backend.cache import get_cache
         from backend.db.duckdb_engine import query_iceberg_table
         from backend.algo.backtest.event_writer import (
@@ -261,13 +264,13 @@ def create_kill_switch_router() -> APIRouter:
         # intraday net. Both can hold algo-opened qty depending on
         # session age.
         try:
-            kc_holdings = await asyncio.to_thread(
+            kc_holdings = await kite_call_tolerant_async(
                 kite._kc.holdings,
             )
         except Exception:  # noqa: BLE001
             kc_holdings = []
         try:
-            kc_positions = await asyncio.to_thread(
+            kc_positions = await kite_call_tolerant_async(
                 kite._kc.positions,
             )
             net_positions = (

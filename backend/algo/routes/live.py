@@ -37,7 +37,10 @@ from auth.models import UserContext
 from backend.algo.broker.credentials_repo import (
     BrokerCredentialsRepo,
 )
-from backend.algo.broker.kite_client import KiteClient
+from backend.algo.broker.kite_client import (
+    KiteClient,
+    kite_call_tolerant_async,
+)
 from backend.cache import get_cache
 from backend.db.duckdb_engine import query_iceberg_table
 
@@ -778,8 +781,8 @@ async def _compute_strategy_commitment(
 
     try:
         raw_pos, raw_hold = await asyncio.gather(
-            asyncio.to_thread(kc.positions),
-            asyncio.to_thread(kc.holdings),
+            kite_call_tolerant_async(kc.positions),
+            kite_call_tolerant_async(kc.holdings),
         )
     except Exception:  # noqa: BLE001
         _logger.warning(
@@ -1318,7 +1321,7 @@ def create_live_router() -> APIRouter:
         kite = await _build_kite_client_for_user(uid)
         kc = kite._kc
         try:
-            positions = await asyncio.to_thread(kc.positions)
+            positions = await kite_call_tolerant_async(kc.positions)
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "kite positions read failed",
@@ -1416,7 +1419,7 @@ def create_live_router() -> APIRouter:
         kite = await _build_kite_client_for_user(uid)
         kc = kite._kc
         try:
-            raw = await asyncio.to_thread(kc.positions)
+            raw = await kite_call_tolerant_async(kc.positions)
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "kite positions read failed",
@@ -1522,7 +1525,7 @@ def create_live_router() -> APIRouter:
         kite = await _build_kite_client_for_user(uid)
         kc = kite._kc
         try:
-            raw = await asyncio.to_thread(kc.holdings)
+            raw = await kite_call_tolerant_async(kc.holdings)
         except Exception:  # noqa: BLE001
             _logger.warning(
                 "kite holdings read failed",

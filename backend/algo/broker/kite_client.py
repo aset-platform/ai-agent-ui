@@ -18,6 +18,9 @@ the runtime synthesises a fill event after ~100 ms.
 
 from __future__ import annotations
 
+import ast
+import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -26,7 +29,11 @@ from typing import Any, AsyncIterator, Callable
 from uuid import uuid4
 
 from kiteconnect import KiteConnect
-from kiteconnect.exceptions import InputException, TokenException
+from kiteconnect.exceptions import (
+    DataException,
+    InputException,
+    TokenException,
+)
 
 from backend.algo.broker.exceptions import (
     BrokerResponseError,
@@ -242,6 +249,94 @@ def _round_to_tick(
         rounding=rounding
     ) * effective_tick
     return float(quantized)
+
+
+def recover_from_kite_content_type_mismatch(
+    exc: DataException,
+) -> dict[str, Any] | None:
+    """Recover a valid JSON payload from a kiteconnect
+    ``DataException`` caused by a Content-Type header mismatch, not
+    a real data problem.
+
+    Found 2026-07-03: Kite's API occasionally serves a valid JSON
+    positions/holdings body under ``Content-Type: text/plain``
+    instead of ``application/json``. ``kiteconnect``'s
+    ``_request()`` does a strict ``"json" in content-type`` sniff
+    before parsing and raises ``DataException`` on any mismatch --
+    discarding a perfectly valid response body that it embeds
+    verbatim in its own error message (format: ``"Unknown
+    Content-Type (...) with response: (b'...')"``). Observed firing
+    on every poll across multiple call sites (live caps display,
+    Positions/Holdings tabs, dashboard summary), permanently zeroing
+    exposure figures even though real positions were open.
+
+    Returns the recovered ``data["data"]`` dict on a genuine
+    success payload. Returns ``None`` (never raises) on any parse
+    failure or on a genuine ``"status": "error"`` payload -- the
+    caller falls back to treating the original exception as a real
+    failure in either case, so this never risks silently
+    fabricating data.
+    """
+    msg = str(exc)
+    marker = "with response: ("
+    idx = msg.find(marker)
+    if idx == -1:
+        return None
+    raw = msg[idx + len(marker):]
+    if raw.endswith(")"):
+        raw = raw[:-1]
+    try:
+        content_bytes = ast.literal_eval(raw)
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(content_bytes, bytes):
+        return None
+    try:
+        data = json.loads(content_bytes)
+    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("status") != "success":
+        return None
+    return data.get("data")
+
+
+def kite_call_tolerant(fn: Callable[[], Any]) -> Any:
+    """Call a sync kiteconnect method (e.g. ``kc.positions``,
+    ``kc.holdings``) directly, recovering from Kite's occasional
+    wrong-Content-Type responses instead of discarding a valid
+    payload. Re-raises unchanged on any other failure, or if
+    recovery parsing itself fails -- see
+    ``recover_from_kite_content_type_mismatch``. Use from sync
+    call sites; see ``kite_call_tolerant_async`` for async ones.
+    """
+    try:
+        return fn()
+    except DataException as exc:
+        recovered = recover_from_kite_content_type_mismatch(exc)
+        if recovered is not None:
+            _logger.info(
+                "kite call recovered from Content-Type mismatch",
+            )
+            return recovered
+        raise
+
+
+async def kite_call_tolerant_async(fn: Callable[[], Any]) -> Any:
+    """Async variant of ``kite_call_tolerant`` -- runs ``fn()`` in a
+    worker thread via ``asyncio.to_thread``, applying the same
+    Content-Type-mismatch recovery. Use from async route handlers
+    calling a sync kiteconnect method.
+    """
+    try:
+        return await asyncio.to_thread(fn)
+    except DataException as exc:
+        recovered = recover_from_kite_content_type_mismatch(exc)
+        if recovered is not None:
+            _logger.info(
+                "kite call recovered from Content-Type mismatch",
+            )
+            return recovered
+        raise
 
 
 class KiteClient:
@@ -2111,7 +2206,7 @@ class KiteClient:
                 "get_positions requires an access_token; "
                 "complete the OAuth handshake first.",
             )
-        resp = self._kc.positions()
+        resp = kite_call_tolerant(self._kc.positions)
         return resp.get("net", [])
 
     # ── GTT (Good Till Triggered) ─────────────────────────────────

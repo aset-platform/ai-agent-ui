@@ -40,6 +40,7 @@ from uuid import UUID, uuid4
 from backend.algo.backtest.event_writer import event_row
 from backend.algo.backtest.positions import PositionTracker
 from backend.algo.backtest.types import Fill
+from backend.algo.broker.kite_client import kite_call_tolerant
 
 _logger = logging.getLogger(__name__)
 
@@ -210,7 +211,9 @@ def hydrate(
     # orders on the same day.
     try:
         kc = getattr(kite, "_kc", None)
-        raw_pos = kc.positions() if kc is not None else {}
+        raw_pos = (
+            kite_call_tolerant(kc.positions) if kc is not None else {}
+        )
     except Exception:  # noqa: BLE001
         _logger.warning(
             "hydration: positions() raised — proceeding with "
@@ -272,7 +275,9 @@ def hydrate(
     already_loaded = {h.symbol for h in out}
     try:
         kc = getattr(kite, "_kc", None)
-        raw_hold = kc.holdings() if kc is not None else []
+        raw_hold = (
+            kite_call_tolerant(kc.holdings) if kc is not None else []
+        )
     except Exception:  # noqa: BLE001
         _logger.warning(
             "hydration: holdings() raised — proceeding with "
