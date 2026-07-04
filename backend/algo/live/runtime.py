@@ -3452,11 +3452,34 @@ class LiveRuntime:
             # pure LTP-cache token (e.g. an index) that cannot be
             # traded. Mark it seen-and-skip so this path is O(1) on
             # every subsequent bar for that token.
+            #
+            # Found 2026-07-04: this check ignored allowed_tickers,
+            # so a ticker added to the strategy's caps mid-run (via
+            # PUT /algo/live/caps/{id}) that ISN'T also part of the
+            # stocks.universe_snapshot rebalance (e.g. a less-liquid
+            # name never covered by that job) got permanently
+            # misclassified as an untradeable index-like token on
+            # its very first bar. Since this branch only ever runs
+            # once per ticker (guarded by ``history is None``), the
+            # ticker's bar history stayed frozen at ``[]`` for the
+            # runtime's entire lifetime — every bar-derived feature
+            # (rsi_2 included) stayed absent forever, surfacing as
+            # recurring signal_rejected reason=missing_feature
+            # events (confirmed: AHLUCONT.NS / MOVALUE.NS /
+            # PRUDENT.NS / SMALLCAP.NS, 5111 events over 5 trading
+            # days) even though stocks.ohlcv had hundreds of bars
+            # available the whole time. ``self._caps`` is refreshed
+            # every bar-close (see the fresh-caps read later in this
+            # function), so checking it here — not just at
+            # __init__-time via ``allowed_for_preload`` — closes the
+            # gap for tickers added after the runtime started.
             if (
                 strategy_interval == "1d"
                 and bar.ticker not in self._bucket_by_ticker
                 and bar.ticker
                 not in self._positions.open_positions()
+                and bar.ticker
+                not in (self._caps.get("allowed_tickers") or [])
             ):
                 self._bars_by_ticker[bar.ticker] = []
                 return 0
