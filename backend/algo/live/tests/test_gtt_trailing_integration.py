@@ -9,7 +9,7 @@ Covers:
 """
 import json
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -192,14 +192,31 @@ class TestRatchetAllGttsPhase2:
         return rt
 
     def test_gtt_ratcheted_on_hwm_advance(self):
+        """runtime.py ~L1802-1811: trigger_price is tick-size-
+        quantized (ROUND_DOWN) before being sent to place_gtt — a
+        stale test asserted the unquantized theoretical value
+        (5212.5); with the get_tick_size fallback for a mocked Kite
+        client (tick=1.0), ROUND_DOWN(5212.5) floors to 5212.0.
+        Mocking get_tick_size explicitly makes this deterministic
+        instead of relying on the fallback."""
         rt = self._make_runtime_in_phase2()
-        with patch.object(rt, "_save_trailing_state"):
+        with patch.object(rt, "_save_trailing_state"), patch(
+            "backend.algo.live.runtime.get_tick_size",
+            return_value=Decimal("0.05"),
+        ):
             rt._ratchet_all_gtts()
         rt._kite.delete_gtt.assert_called_once_with(111)
         rt._kite.place_gtt.assert_called_once()
         call_kwargs = rt._kite.place_gtt.call_args[1]
-        # new stop = hwm - atr * multiplier = 5400 - 125*1.5 = 5212.5
-        assert abs(call_kwargs["trigger_price"] - 5212.5) < 0.01
+        # new stop = hwm - atr * multiplier = 5400 - 125*1.5 = 5212.5,
+        # tick-quantized (ROUND_DOWN, tick=0.05) — already a whole
+        # multiple of 0.05, so quantization is a no-op here.
+        tick = Decimal("0.05")
+        expected_trigger = float(
+            (Decimal("5212.5") / tick)
+            .quantize(Decimal("1"), rounding=ROUND_DOWN) * tick
+        )
+        assert abs(call_kwargs["trigger_price"] - expected_trigger) < 0.01
 
     def test_gtt_ratcheted_event_emitted(self):
         rt = self._make_runtime_in_phase2()

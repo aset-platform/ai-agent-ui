@@ -273,14 +273,23 @@ def test_holding_with_no_matching_event_has_none_entry_ts() -> None:
 # ---------------------------------------------------------------
 
 
-def test_zero_qty_positions_and_non_mis_are_skipped() -> None:
+def test_zero_qty_positions_are_skipped_cnc_in_net_is_kept() -> None:
+    """qty=0 rows (closed intraday) are dropped. A CNC row inside
+    positions()['net'] is intentionally KEPT, not skipped —
+    position_hydration.py L205-211: a same-day CNC BUY appears in
+    positions()['net'] as product='CNC' during the market session
+    but does NOT appear in holdings() until T+1 settlement.
+    Dropping it here would understate committed_inr_now after a
+    restart and let the qty-cap gate allow over-budget orders on
+    the same day. (This test previously asserted the opposite —
+    that non-MIS products in ``net`` were skipped — contradicting
+    the current, intentional design; updated 2026-07-04.)"""
     kite = _kite(
         positions_net=[
             # qty=0 — closed intraday, must be dropped.
             {"tradingsymbol": "FOO", "quantity": 0,
              "product": "MIS", "average_price": 100.0},
-            # product CNC inside the "net" list — Kite shouldn't,
-            # but defence in depth.
+            # same-day CNC buy, not yet in holdings() — must be kept.
             {"tradingsymbol": "BAR", "quantity": 3,
              "product": "CNC", "average_price": 200.0},
         ],
@@ -292,7 +301,11 @@ def test_zero_qty_positions_and_non_mis_are_skipped() -> None:
         allowed_tickers=None,
         events_reader=lambda u, s: None,
     )
-    assert out == []
+    assert len(out) == 1
+    assert out[0].symbol == "BAR.NS"
+    assert out[0].qty == 3
+    assert out[0].product == "CNC"
+    assert out[0].source == "positions"
 
 
 def test_t1_quantity_pending_holding_hydrates_with_t1_flag() -> None:

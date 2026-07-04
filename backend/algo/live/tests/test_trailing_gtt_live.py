@@ -109,12 +109,30 @@ class TestOnBuyFillTrailing:
         assert "INFY.NS" not in rt._trailing_managers
         rt._kite.place_gtt.assert_not_called()
 
-    def test_no_op_when_atr_missing(self):
+    def test_falls_back_to_price_proxy_when_atr_missing(self):
+        """Current design (runtime.py ~L2292-2308): when atr_14 is
+        unavailable from the factor cache or _bars_by_ticker, the
+        runtime does NOT skip trailing-stop init — it falls back to
+        a 2% price-proxy ATR (logging a warning that phase-3 trail
+        may be imprecise) and still creates the manager + places
+        the GTT. A stale pre-fallback test asserted a no-op here;
+        updated to match the current, intentional behavior."""
         rt = _make_runtime()
-        # factor cache empty → atr_14 = 0
-        rt.on_buy_fill_trailing(ticker="INFY.NS", fill_price=1000.0, qty=5)
-        assert "INFY.NS" not in rt._trailing_managers
-        rt._kite.place_gtt.assert_not_called()
+        # A fake ticker guarantees no real stocks.ohlcv/
+        # universe_snapshot data can backfill _bars_by_ticker via
+        # the runtime's own startup preload (using a real, liquid
+        # ticker like INFY.NS here previously let the SECOND
+        # fallback path — real bar-derived ATR — kick in instead of
+        # the 2% proxy, since INFY.NS legitimately has bars). Force
+        # the empty-bars branch explicitly for a deterministic test.
+        ticker = "ZZZ_NOT_A_REAL_TICKER.NS"
+        rt._bars_by_ticker[ticker] = []
+        rt.on_buy_fill_trailing(ticker=ticker, fill_price=1000.0, qty=5)
+        assert ticker in rt._trailing_managers
+        mgr = rt._trailing_managers[ticker]
+        # fallback atr = fill_price * 0.02 = 20.0
+        assert abs(mgr.state.atr - 20.0) < 0.01
+        rt._kite.place_gtt.assert_called_once()
 
     def test_places_gtt_and_creates_manager(self):
         rt = _make_runtime()
@@ -152,8 +170,12 @@ class TestOnBuyFillTrailing:
         call_kwargs = rt._kite.place_gtt.call_args[1]
         trigger = call_kwargs["trigger_price"]
         limit = call_kwargs["limit_price"]
-        # limit must be 1% below trigger
-        expected_limit = trigger * (1.0 - LiveRuntime._GTT_LIMIT_HEADROOM_PCT)
+        # gtt_limit_headroom_pct is a per-user caps setting (mid-run
+        # editable, see live-caps-staleness-mid-run), not a class
+        # constant — runtime.py L2325 reads it via self._caps with
+        # a 0.01 default.
+        headroom_pct = rt._caps.get("gtt_limit_headroom_pct", 0.01)
+        expected_limit = trigger * (1.0 - headroom_pct)
         assert abs(limit - expected_limit) < 0.001
 
     def test_graceful_on_place_gtt_exception(self):
