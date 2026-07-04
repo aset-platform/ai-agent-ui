@@ -182,7 +182,16 @@ async def test_two_buys_one_tick_second_rejected():
     """Critical C4 — two BUYs in one tick whose combined cost
     exceeds the allocation: the first reserves, the second is
     rejected by the atomic gate (the first's PENDING reservation
-    consumed the headroom). place_order fires exactly once."""
+    consumed the headroom). place_order fires exactly once.
+
+    _churn_suppress_kind (the anti-churn guard, added 2026-06-25 —
+    see runtime.py ~L4429-4479) is patched out here: it suppresses
+    a same-(ticker, side) duplicate order regardless of budget, so
+    without this patch the SECOND call was intercepted by the
+    churn guard (emitting order_suppressed_churn) before ever
+    reaching the atomic budget-reservation gate this test exists to
+    verify — r1/r2/place_order.call_count still matched by
+    coincidence, but no signal_rejected event was ever emitted."""
     runtime = _make_runtime()
     runtime._kite._get_redis.return_value = MagicMock()
     runtime._kite.place_order.return_value = "OID-1"
@@ -210,6 +219,8 @@ async def test_two_buys_one_tick_second_rejected():
     ), patch(
         "backend.algo.live.runtime.get_tick_size",
         return_value=Decimal("0.05"),
+    ), patch.object(
+        runtime, "_churn_suppress_kind", return_value=None,
     ):
         r1 = await runtime._submit_order(
             signal=_buy(runtime, qty=1000),

@@ -158,7 +158,18 @@ def _budget_gate_patches():
     tests target the STRATEGY max_inr cap (deployed from open
     positions), so stub the user-pool gate to always pass and report
     zero in-flight reservations — keeps the cap logic under test the
-    sole gate, no real PG."""
+    sole gate, no real PG.
+
+    Also stubs fetch_kite_available_cash — found 2026-07-04: this
+    later-added broker-cash fail-closed check (runtime.py ~L4211-4219)
+    calls it for every live BUY; with a mocked Kite client it raises
+    "Kite not connected" and fetch_kite_available_cash itself fails
+    closed (returns 0), which then binds tighter than the strategy
+    max_inr cap these tests exist to isolate — every BUY was silently
+    rejected for the wrong reason (broker-cash=0) before reaching the
+    qty-adjustment logic under test. Returning Infinity here restores
+    the strategy cap as the sole gate, matching this helper's stated
+    intent."""
     from backend.algo.live.budget_types import UserBudget
 
     async def _load_user(_uid):
@@ -183,6 +194,10 @@ def _budget_gate_patches():
             "backend.algo.live.runtime.budget_active_for_strategy",
             new=_active,
         ),
+        patch(
+            "backend.algo.live.runtime.fetch_kite_available_cash",
+            new=AsyncMock(return_value=Decimal("Infinity")),
+        ),
     )
 
 
@@ -201,7 +216,7 @@ async def test_full_budget_no_adjustment():
     runtime, kite = _make_runtime(buy_qty=5, max_inr=Decimal("10000"))
     _seed_bars(runtime)
 
-    _g1, _g2, _g3 = _budget_gate_patches()
+    _g1, _g2, _g3, _g4 = _budget_gate_patches()
     with patch(
         "backend.algo.live.runtime.pre_trade_check",
         new=AsyncMock(return_value=RiskDecision(outcome="accept")),
@@ -211,7 +226,7 @@ async def test_full_budget_no_adjustment():
     ), patch(
         "backend.algo.live.runtime.budget_transition",
         new=AsyncMock(),
-    ), _g1, _g2, _g3:
+    ), _g1, _g2, _g3, _g4:
         await runtime._on_bar_close(bar=_make_bar(), last_price=_PRICE)
 
     adj = [e for e in runtime._events if e["type"] == "signal_adjusted"]
@@ -245,7 +260,7 @@ async def test_partial_budget_reduces_qty():
     # + 5×400 = 2000 → total deployed = 8869.26, remaining = 1130.74
     # 1130.74 // 614.50 = 1 share → reduced 5→1
 
-    _g1, _g2, _g3 = _budget_gate_patches()
+    _g1, _g2, _g3, _g4 = _budget_gate_patches()
     with patch(
         "backend.algo.live.runtime.pre_trade_check",
         new=AsyncMock(return_value=RiskDecision(outcome="accept")),
@@ -255,7 +270,7 @@ async def test_partial_budget_reduces_qty():
     ), patch(
         "backend.algo.live.runtime.budget_transition",
         new=AsyncMock(),
-    ), _g1, _g2, _g3:
+    ), _g1, _g2, _g3, _g4:
         await runtime._on_bar_close(bar=_make_bar(), last_price=_PRICE)
 
     adj = [e for e in runtime._events if e["type"] == "signal_adjusted"]
@@ -280,11 +295,11 @@ async def test_zero_budget_rejects_signal():
     _seed_open_position(runtime, ticker="HSCL.NS", qty=16, avg_price=Decimal("642.60"))
     # 16 × 642.60 = ₹10281.60 > ₹10000
 
-    _g1, _g2, _g3 = _budget_gate_patches()
+    _g1, _g2, _g3, _g4 = _budget_gate_patches()
     with patch(
         "backend.algo.live.runtime.budget_reserve",
         new=AsyncMock(return_value=uuid4()),
-    ), _g1, _g2, _g3:
+    ), _g1, _g2, _g3, _g4:
         result = await runtime._on_bar_close(bar=_make_bar(), last_price=_PRICE)
 
     assert result == 0
@@ -309,11 +324,13 @@ async def test_zero_budget_rejects_signal():
 
 
 def _gate_patches_with_active(active_inr: Decimal):
-    """Return the three gate patches with active_reserved = active_inr.
+    """Return the four gate patches with active_reserved = active_inr.
 
     Replaces the zero-stub in _budget_gate_patches so the in-flight
     term is exercised as the *sole* source of committed capital (no
     seeded open positions). The user-pool gate is still bypassed.
+    Also stubs fetch_kite_available_cash — see _budget_gate_patches'
+    docstring.
     """
     from backend.algo.live.budget_types import UserBudget
 
@@ -339,6 +356,10 @@ def _gate_patches_with_active(active_inr: Decimal):
             "backend.algo.live.runtime.budget_active_for_strategy",
             new=_active,
         ),
+        patch(
+            "backend.algo.live.runtime.fetch_kite_available_cash",
+            new=AsyncMock(return_value=Decimal("Infinity")),
+        ),
     )
 
 
@@ -358,11 +379,11 @@ async def test_active_reservation_blocks_buy_when_headroom_gone():
     runtime, kite = _make_runtime(buy_qty=5, max_inr=Decimal("10000"))
     _seed_bars(runtime)
 
-    _g1, _g2, _g3 = _gate_patches_with_active(active_reserved)
+    _g1, _g2, _g3, _g4 = _gate_patches_with_active(active_reserved)
     with patch(
         "backend.algo.live.runtime.budget_reserve",
         new=AsyncMock(return_value=uuid4()),
-    ), _g1, _g2, _g3:
+    ), _g1, _g2, _g3, _g4:
         result = await runtime._on_bar_close(
             bar=_make_bar(), last_price=_PRICE
         )
@@ -408,7 +429,7 @@ async def test_active_reservation_shrinks_affordable_qty():
     runtime, kite = _make_runtime(buy_qty=5, max_inr=Decimal("10000"))
     _seed_bars(runtime)
 
-    _g1, _g2, _g3 = _gate_patches_with_active(active_reserved)
+    _g1, _g2, _g3, _g4 = _gate_patches_with_active(active_reserved)
     with patch(
         "backend.algo.live.runtime.pre_trade_check",
         new=AsyncMock(return_value=RiskDecision(outcome="accept")),
@@ -418,7 +439,7 @@ async def test_active_reservation_shrinks_affordable_qty():
     ), patch(
         "backend.algo.live.runtime.budget_transition",
         new=AsyncMock(),
-    ), _g1, _g2, _g3:
+    ), _g1, _g2, _g3, _g4:
         await runtime._on_bar_close(
             bar=_make_bar(), last_price=_PRICE
         )

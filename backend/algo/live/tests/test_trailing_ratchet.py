@@ -11,7 +11,7 @@ Covers:
 """
 import asyncio
 from datetime import date
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from unittest.mock import MagicMock, call, patch
 from uuid import uuid4
 
@@ -254,18 +254,46 @@ class TestRatchetAllGtts:
         assert "INFY.NS" not in rt._gtt_ids
 
     def test_ratchet_uses_limit_headroom(self):
+        """runtime.py ~L1802-1822: both trigger_price and limit_price
+        are tick-size-quantized (ROUND_DOWN), and limit_price is
+        computed from the RAW mgr.current_stop * (1 - headroom_pct)
+        — NOT from the already-quantized trigger_price. A stale test
+        used a naive `trigger * (1 - headroom_pct)` with no
+        quantization, which drifts from the real tick-quantized
+        value; fixed to mirror the production formula exactly with
+        a controlled tick size."""
         rt = _make_runtime()
         _seed_manager(rt, entry_price=1000.0, atr=20.0, gtt_id=11)
         rt._ws_hwm["INFY.NS"] = 1025.0
 
-        with patch.object(rt, "_save_trailing_state"):
+        with patch.object(rt, "_save_trailing_state"), patch(
+            "backend.algo.live.runtime.get_tick_size",
+            return_value=Decimal("0.05"),
+        ):
             rt._ratchet_all_gtts()
 
         call_kwargs = rt._kite.place_gtt.call_args[1]
         trigger = call_kwargs["trigger_price"]
         limit = call_kwargs["limit_price"]
-        expected = trigger * (1.0 - LiveRuntime._GTT_LIMIT_HEADROOM_PCT)
-        assert abs(limit - expected) < 0.001
+        # gtt_limit_headroom_pct is a per-user caps setting (mid-run
+        # editable, see live-caps-staleness-mid-run), not a class
+        # constant — runtime.py L2325 reads it via self._caps with
+        # a 0.01 default.
+        headroom_pct = rt._caps.get("gtt_limit_headroom_pct", 0.01)
+        current_stop = rt._trailing_managers["INFY.NS"].current_stop
+        tick = Decimal("0.05")
+        expected_trigger = float(
+            (Decimal(str(current_stop)) / tick)
+            .quantize(Decimal("1"), rounding=ROUND_DOWN) * tick
+        )
+        expected_limit = float(
+            (
+                Decimal(str(current_stop))
+                * (1 - Decimal(str(headroom_pct))) / tick
+            ).quantize(Decimal("1"), rounding=ROUND_DOWN) * tick
+        )
+        assert abs(trigger - expected_trigger) < 0.001
+        assert abs(limit - expected_limit) < 0.001
 
     def test_ratchet_graceful_when_place_gtt_raises(self):
         rt = _make_runtime()
