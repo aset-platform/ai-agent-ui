@@ -283,8 +283,8 @@ export const FE = {
   algoBacktestSummaryCards: "backtest-summary-cards",
   algoBacktestEquityCurve: "backtest-equity-curve",
   algoBacktestEquityCurveEmpty: "backtest-equity-curve-empty",
-  algoBacktestTradeTable: "backtest-trade-table",
-  algoBacktestTradeTableEmpty: "backtest-trade-table-empty",
+  algoTradeLogTable: "trade-log-table",
+  algoTradeLogTableEmpty: "trade-log-table-empty",
 
   // ── Algo Trading — Walk-forward CV (Slice V2-2) ─
   algoWalkforwardSubTab: "walkforward-sub-tab",
