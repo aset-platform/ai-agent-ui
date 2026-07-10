@@ -120,6 +120,54 @@ def test_query_failure_degrades_open():
     assert closes == []
 
 
+def test_gtt_triggered_phase1_counts_as_failed_exit():
+    """ASETPLTFRM — a GTT-triggered hard-stop (phase 1) must be
+    treated as a failed exit on restart-hydration, mirroring the
+    in-process cooldown recording added to Piece A/B. Without this,
+    a runtime restart between the GTT trigger and the next signal
+    would silently lose the cooldown entry, re-opening the exact
+    same-day re-entry gap it exists to close."""
+    fake_rows = [
+        {"ticker": "SUPRIYA.NS", "last_failed_exit": date(2026, 7, 7)},
+    ]
+    with patch(
+        "backend.db.duckdb_engine.query_iceberg_table",
+        return_value=fake_rows,
+    ) as q:
+        closes = load_recent_failed_exits(
+            user_id=_UID, strategy_id=_SID,
+            cooldown_days=7, as_of=date(2026, 7, 7),
+            runtime_mode="live",
+        )
+    sql = q.call_args.args[1]
+    assert "gtt_triggered" in sql
+    assert "phase" in sql
+    assert {c.ticker for c in closes} == {"SUPRIYA.NS"}
+    assert in_cooldown(
+        ticker="SUPRIYA.NS",
+        bar_date=date(2026, 7, 7),
+        closed_positions=closes,
+        cooldown_days=7,
+    )
+
+
+def test_gtt_triggered_atr_trail_excluded_from_query():
+    """A phase-2 (ATR trail) GTT trigger is a locked-in win, not a
+    thesis failure — the SQL's phase allow-list must be exactly
+    (1, 15), never including phase 2."""
+    with patch(
+        "backend.db.duckdb_engine.query_iceberg_table",
+        return_value=[],
+    ) as q:
+        load_recent_failed_exits(
+            user_id=_UID, strategy_id=_SID,
+            cooldown_days=7, as_of=date(2026, 7, 7),
+            runtime_mode="live",
+        )
+    sql = q.call_args.args[1]
+    assert "('1', '15')" in sql
+
+
 def test_paper_and_live_scoped_to_own_mode():
     # Verify the query filter uses the right mode list per
     # runtime. We check by inspecting the SQL params, not the

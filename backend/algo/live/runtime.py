@@ -59,6 +59,7 @@ from backend.algo.backtest.time_stop_monitor import (
 )
 from backend.algo.backtest.trailing_stop_manager import (
     TrailingStopManager,
+    phase_to_cooldown_reason,
 )
 from backend.algo.features.primitives import wilder_atr as _wilder_atr
 from backend.algo.broker.exceptions import (
@@ -1681,8 +1682,29 @@ class LiveRuntime:
                                 ),
                                 "source": "gtt_poll",
                                 "price_source": _price_source,
+                                "phase": _phase,
                             },
                         )
+                    )
+                    # ASETPLTFRM — record this GTT-triggered exit for
+                    # the repeat-offender cooldown gate. A hard-stop
+                    # or ratcheted-then-reverted GTT (phase 1/15) is
+                    # a thesis failure; an ATR-trail stop (phase 2)
+                    # is a locked-in win, not a failure. Without
+                    # this, cooldown_after_failed_exit_days never
+                    # saw GTT-triggered exits at all (only the
+                    # separate direct stop_loss_pct check appended
+                    # here) — found 2026-07-08, SUPRIYA.NS hard-
+                    # stopped via GTT then re-entered the same
+                    # session ungated.
+                    self._cooldown_history.append(
+                        _HydratedClose(
+                            ticker=ticker,
+                            exit_reason=phase_to_cooldown_reason(
+                                _phase,
+                            ),
+                            closed_at=datetime.now(IST).date(),
+                        ),
                     )
                     # Release the matching BUY's budget reservation
                     # (Cap 0 pool-wide headroom). Sync method on a
@@ -2109,6 +2131,21 @@ class LiveRuntime:
             "gtt-postback: synthetic SELL fill applied "
             "%s qty=%d @₹%.4f",
             ticker, qty, fill_price,
+        )
+        # ASETPLTFRM — mirror Piece A's cooldown-gate recording
+        # (see _ratchet_all_gtts). Read phase from the trailing
+        # manager BEFORE the caller's _on_sell_fill_trailing pops
+        # it; if it's already gone (Piece A won the race a moment
+        # earlier — this call is the idempotent no-op path), default
+        # to phase1_stop rather than silently skipping cooldown.
+        _mgr = self._trailing_managers.get(ticker)
+        _phase = _mgr.state.phase.value if _mgr is not None else 1
+        self._cooldown_history.append(
+            _HydratedClose(
+                ticker=ticker,
+                exit_reason=phase_to_cooldown_reason(_phase),
+                closed_at=datetime.now(IST).date(),
+            ),
         )
         await self._release_budget_reservation_for_gtt_exit(
             ticker=ticker, qty=qty, fill_price=fill_price,

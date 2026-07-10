@@ -29,6 +29,24 @@ class TrailingPhase(int, enum.Enum):
     ATR_TRAIL = 2
 
 
+def phase_to_cooldown_reason(phase_value: int) -> str:
+    """Map a GTT trailing-stop phase to a cooldown exit_reason.
+
+    Mirrors ``cooldown_monitor._FAILED_EXIT_REASONS``: a hard stop
+    (phase 1) or a ratcheted-then-reverted stop (phase 15) is a
+    thesis failure — cooldown-eligible. An ATR-trail stop (phase 2)
+    means the position ran up meaningfully before trailing caught
+    it — a win being locked in, not a failure, so it's deliberately
+    excluded (matches the existing backtest/paper convention in
+    ``execution_simulator._reason_for_phase``).
+    """
+    if phase_value == TrailingPhase.ATR_TRAIL.value:
+        return "trail_stop"
+    if phase_value == TrailingPhase.RATCHETED.value:
+        return "phase1_ratchet"
+    return "phase1_stop"
+
+
 @dataclass
 class TrailingEvent:
     """Returned by ``on_price_update`` when something changes."""

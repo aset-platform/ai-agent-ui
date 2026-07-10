@@ -290,7 +290,11 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
             className="rounded border border-slate-200 px-2 py-1 text-sm
               dark:border-slate-700 dark:text-slate-300"
           >
-            ₹{caps?.cumulative_inr_today?.toLocaleString("en-IN") ?? 0}
+            ₹
+            {(caps?.cumulative_inr_today ?? 0).toLocaleString("en-IN", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })}
             {" · "}
             {caps?.orders_count_today ?? 0} open
           </div>
