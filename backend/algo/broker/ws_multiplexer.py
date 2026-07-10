@@ -399,6 +399,7 @@ class KiteWsMultiplexer:
             "subscribed_tokens": len(self._token_subs),
             "last_tick_at": self.last_tick_at,
             "tick_count_today": self.tick_count_today,
+            "wedge_escalated": self._wedge_escalated,
         }
 
     def reset_tick_count(self) -> None:

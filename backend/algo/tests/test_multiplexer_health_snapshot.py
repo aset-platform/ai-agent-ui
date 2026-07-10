@@ -40,6 +40,7 @@ def test_health_snapshot_initial():
         "subscribed_tokens": 0,
         "last_tick_at": None,
         "tick_count_today": 0,
+        "wedge_escalated": False,
     }
 
 
