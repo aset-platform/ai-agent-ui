@@ -19,7 +19,7 @@ export function LiveWsWedgeBanner({ armed, wedgeEscalated }: Props) {
 
   return (
     <div
-      className="flex items-start gap-2 rounded-md border
+      className="mx-4 mb-3 flex items-start gap-2 rounded-md border
         border-rose-300 bg-rose-50 px-3 py-2
         dark:border-rose-700 dark:bg-rose-950/40"
       data-testid="live-ws-wedge-banner"

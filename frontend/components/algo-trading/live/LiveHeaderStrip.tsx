@@ -48,14 +48,19 @@ export function LiveHeaderStrip() {
     (r) => r.mode === "live" && !r.dry_run,
   );
 
+  // The wedge banner lives INSIDE this sticky container (not as a
+  // sibling below it) so a "persistent" alert stays pinned while the
+  // user scrolls a long Live page rather than scrolling out of view
+  // (ASETPLTFRM-470 review). LiveWsWedgeBanner self-gates to null when
+  // not (armed && wedgeEscalated), so no empty gap appears when the
+  // connection is healthy.
   return (
-    <>
-      <div
-        className="sticky top-0 z-10 flex flex-wrap items-center gap-3
-          bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b
-          border-slate-200 dark:border-slate-700 px-4 py-3"
-        data-testid="live-header-strip"
-      >
+    <div
+      className="sticky top-0 z-10 bg-white/95 dark:bg-slate-900/95
+        backdrop-blur border-b border-slate-200 dark:border-slate-700"
+      data-testid="live-header-strip"
+    >
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3">
         <LiveModeChip
           mode={summary?.mode ?? "live"}
           armed={armed}
@@ -83,7 +88,7 @@ export function LiveHeaderStrip() {
         armed={armed}
         wedgeEscalated={health?.wedge_escalated ?? false}
       />
-    </>
+    </div>
   );
 }
 

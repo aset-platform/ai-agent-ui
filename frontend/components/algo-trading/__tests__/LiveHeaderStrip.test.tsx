@@ -44,6 +44,10 @@ vi.mock("@/hooks/usePaperRuns", () => ({
   }),
 }));
 
+// Mutable so a test can flip the WS into the escalated/"wedged"
+// state that drives the persistent banner.
+const wsHealthState = vi.hoisted(() => ({ wedgeEscalated: false }));
+
 vi.mock("@/hooks/useWsHealth", () => ({
   useWsHealth: () => ({
     health: {
@@ -53,6 +57,7 @@ vi.mock("@/hooks/useWsHealth", () => ({
       tick_age_seconds: 2,
       tick_count_today: 12345,
       last_tick_at: "2026-05-12T05:33:18+00:00",
+      wedge_escalated: wsHealthState.wedgeEscalated,
     },
     loading: false,
     error: null,
@@ -63,6 +68,7 @@ import { LiveHeaderStrip } from "../live/LiveHeaderStrip";
 
 afterEach(() => {
   cleanup();
+  wsHealthState.wedgeEscalated = false;
 });
 
 describe("LiveHeaderStrip", () => {
@@ -94,5 +100,17 @@ describe("LiveHeaderStrip", () => {
     expect(tooltip).toContain("Kite WS:");
     expect(tooltip).toContain("12345");      // ticks today
     expect(tooltip).toContain("Subscribers");
+  });
+
+  it("keeps the wedge banner inside the sticky header region", () => {
+    // Reviewer Minor #1 (ASETPLTFRM-470): a "persistent" alert that
+    // sits as a sibling BELOW the sticky strip scrolls out of view on
+    // a long Live page. It must live INSIDE the sticky container so it
+    // stays pinned while the user scrolls.
+    wsHealthState.wedgeEscalated = true;
+    render(<LiveHeaderStrip />);
+    const strip = screen.getByTestId("live-header-strip");
+    const banner = screen.getByTestId("live-ws-wedge-banner");
+    expect(strip.contains(banner)).toBe(true);
   });
 });
