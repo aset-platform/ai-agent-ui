@@ -495,7 +495,14 @@ class KiteWsMultiplexer:
             await asyncio.sleep(_STALENESS_CHECK_INTERVAL_S)
             if self._closed:
                 return
-            await self._watch_staleness_loop_once()
+            try:
+                await self._watch_staleness_loop_once()
+            except Exception:
+                _logger.exception(
+                    "KiteWsMultiplexer: staleness check raised "
+                    "user=%s — will retry next interval",
+                    self._user_id,
+                )
 
     async def _handle_wedge(self) -> None:
         """Shared rebuild/escalate logic for BOTH the connect-timeout

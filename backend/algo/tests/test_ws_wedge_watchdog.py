@@ -377,3 +377,52 @@ async def test_staleness_watchdog_skips_outside_market_hours(
 
         assert handled == []
         await mux.close()
+
+
+@pytest.mark.asyncio
+async def test_staleness_loop_survives_exception_and_keeps_running(
+    monkeypatch,
+):
+    """A single bad iteration of the staleness check (e.g. a
+    transient exception raised somewhere inside
+    ``is_market_open_ist()`` or the age computation) must not
+    permanently kill ``_staleness_task``. Unlike
+    ``_connect_timeout_task`` (re-armed on every ``_connect()``
+    call), ``_staleness_task`` is created exactly once in
+    ``start()`` — nothing re-arms it if it dies, so the per-
+    iteration try/except inside the loop is the ONLY thing keeping
+    the watchdog alive for the rest of the session. See
+    ASETPLTFRM-470 review round 1."""
+    import backend.algo.broker.ws_multiplexer as _mux_mod
+
+    monkeypatch.setattr(
+        _mux_mod, "_STALENESS_CHECK_INTERVAL_S", 0.02,
+    )
+    calls: list[int] = []
+
+    async with patch_multiplexer_ticker():
+        mux = _make_mux()
+
+        async def _flaky_check():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("simulated transient failure")
+
+        mux._watch_staleness_loop_once = _flaky_check
+
+        await mux.start()
+
+        # Let the loop run past the first (raising) iteration and
+        # into at least a second (succeeding) one.
+        await asyncio.sleep(0.15)
+
+        assert len(calls) >= 2, (
+            "loop must keep invoking the check after the first "
+            "iteration raised"
+        )
+        assert not mux._staleness_task.done(), (
+            "the staleness task itself must still be alive, not "
+            "silently reaped by the unhandled exception"
+        )
+
+        await mux.close()
