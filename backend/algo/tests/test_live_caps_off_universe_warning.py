@@ -6,7 +6,7 @@ stocks.universe_snapshot can never populate a bar-derived feature.
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 from uuid import UUID
 
 from auth.dependencies import pro_or_superuser
@@ -100,3 +100,6 @@ class TestOffUniverseWarning:
 
         assert resp.status_code == 200
         assert resp.json()["off_universe_tickers"] == ["SMALLCAP.NS"]
+        mock_off_universe.assert_called_once_with(
+            ["SMALLCAP.NS"],
+        )
