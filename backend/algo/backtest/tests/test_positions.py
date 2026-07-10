@@ -1,8 +1,8 @@
 """Unit tests for PositionTracker."""
 from __future__ import annotations
 
-from decimal import Decimal
 from datetime import date
+from decimal import Decimal
 from uuid import uuid4
 
 from backend.algo.backtest.positions import PositionTracker
