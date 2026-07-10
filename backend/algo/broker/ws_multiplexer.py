@@ -310,6 +310,12 @@ class KiteWsMultiplexer:
                 await self._connect_timeout_task
             except asyncio.CancelledError:
                 pass
+            except Exception:
+                _logger.warning(
+                    "ws_multiplexer: connect_timeout_task raised "
+                    "on close",
+                    exc_info=True,
+                )
             self._connect_timeout_task = None
 
         # Cancel any in-flight gap-fill (5.2).
@@ -452,7 +458,13 @@ class KiteWsMultiplexer:
             try:
                 self._kt = self._build_ticker()
                 self._kt.connect(threaded=True)
-                self._arm_connect_timeout()
+                # Skip re-arming if connect() already fired
+                # on_connect synchronously (e.g. the test shim) —
+                # on_connect already cleared/cancelled the watchdog
+                # and set _connected=True, so arming here would only
+                # create an immediately-superfluous task.
+                if not self._connected:
+                    self._arm_connect_timeout()
             except Exception:
                 _logger.exception(
                     "KiteWsMultiplexer: fast-rebuild connect() "
@@ -600,6 +612,8 @@ class KiteWsMultiplexer:
                     pass
 
         def on_connect(ws, _resp):
+            if ws is not self._kt:
+                return  # stale callback from an already-replaced kt
             self._connected = True
             self._rebuild_attempts = 0
             self._wedge_escalated = False
@@ -639,7 +653,9 @@ class KiteWsMultiplexer:
                 self._schedule_gap_fill_sync,
             )
 
-        def on_close(_ws, code, reason):
+        def on_close(ws, code, reason):
+            if ws is not self._kt:
+                return  # stale callback from an already-replaced kt
             self._connected = False
             uptime_s = time.monotonic() - self._connect_ts
             # Only reset backoff when the connection was genuinely
@@ -682,7 +698,9 @@ class KiteWsMultiplexer:
                     self._trigger_reconnect,
                 )
 
-        def on_error(_ws, code, reason):
+        def on_error(ws, code, reason):
+            if ws is not self._kt:
+                return  # stale callback from an already-replaced kt
             _logger.error(
                 "KiteWsMultiplexer: error user=%s code=%s %s",
                 self._user_id, code, reason,
@@ -706,8 +724,28 @@ class KiteWsMultiplexer:
         self._connected = False
 
     def _trigger_reconnect(self) -> None:
-        """Schedule reconnect from the event loop thread."""
-        if self._closed or self._auth_failed:
+        """Schedule reconnect from the event loop thread.
+
+        ASETPLTFRM-470 follow-up: ``on_close`` schedules this via
+        ``call_soon_threadsafe``, so it can run one loop-tick AFTER
+        it was queued. When the close being reported was a
+        *deliberate* teardown of a wedged ticker inside
+        ``_handle_wedge()``'s fast-rebuild (the FIRST — and, for a
+        wedge, only — time ``.close()`` ever runs on that ticker,
+        since it never got as far as a real on_close), the
+        immediately-following rebuild can already have connected
+        successfully by the time this callback actually runs. The
+        on_connect/on_close/on_error identity guards above catch a
+        genuinely-stale callback (fired for a ticker generation that
+        no longer matches ``self._kt``), but this queued call has
+        no ticker reference at all to check — so guard on current
+        state instead: never schedule a reconnect while already
+        connected, or a single successful wedge auto-recovery would
+        immediately tear itself back down into a self-sustaining
+        reconnect storm, invisible to rebuild_attempts/
+        wedge_escalated (both already reset by the fast on_connect).
+        """
+        if self._closed or self._auth_failed or self._connected:
             return
         if (
             self._reconnect_task is None

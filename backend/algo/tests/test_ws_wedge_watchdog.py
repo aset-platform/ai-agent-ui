@@ -140,3 +140,106 @@ async def test_successful_reconnect_clears_escalation():
         assert mux.connected is True
         assert mux._wedge_escalated is False
         assert mux._rebuild_attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_wedge_recovery_does_not_cause_reconnect_storm(
+    monkeypatch,
+):
+    """Review finding (Critical, ASETPLTFRM-470): a successful
+    in-process fast-rebuild must NOT leave a spurious
+    _trigger_reconnect queued against the freshly-healthy
+    connection.
+
+    Root cause: a wedge means the OLD ticker's on_close has NEVER
+    fired before, so _handle_wedge()'s own _disconnect_kt() call is
+    the FIRST time .close() ever runs on it — and in this test
+    shim (mirroring how many WS libraries behave for an
+    already-pending/never-upgraded socket) that fires on_close
+    SYNCHRONOUSLY, before self._kt has been reassigned to the new
+    ticker. So the on_close identity guard alone does not catch it
+    (``ws is self._kt`` still holds at that instant) — but its
+    ``call_soon_threadsafe(self._trigger_reconnect)`` side effect
+    is deferred to the next loop tick, by which point the fast
+    rebuild has already connected successfully. Without a
+    self._connected guard inside _trigger_reconnect() itself, this
+    silently tears the healthy connection back down and repeats
+    forever — invisible to rebuild_attempts/wedge_escalated, both
+    already reset by the fast on_connect."""
+    import backend.algo.broker.ws_multiplexer as _mux_mod
+
+    monkeypatch.setattr(_mux_mod, "_CONNECT_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(_mux_mod, "_MIN_BACKOFF_S", 0.05)
+    _capture_ws_events(monkeypatch)
+
+    async with patch_multiplexer_ticker():
+        set_wedge_mode(True)
+        mux = _make_mux()
+
+        start_task = asyncio.ensure_future(mux.start())
+        await asyncio.sleep(0.02)
+        set_wedge_mode(False)
+        await asyncio.sleep(0.2)
+        await start_task
+
+        assert mux.connected is True
+
+        # Give any spuriously-queued reconnect loop a full window to
+        # wake up (backoff patched to 0.05s) and tear the healthy
+        # connection back down, if the storm bug were still present.
+        await asyncio.sleep(0.3)
+
+        assert mux.connected is True
+        assert (
+            mux._reconnect_task is None
+            or mux._reconnect_task.done()
+        ), "a spurious reconnect must never be scheduled while connected"
+
+        await mux.close()
+
+
+@pytest.mark.asyncio
+async def test_stale_close_from_replaced_ticker_is_ignored(
+    monkeypatch,
+):
+    """Review finding (Critical, ASETPLTFRM-470), identity-guard
+    half: a late on_close callback that fires for a ticker
+    generation already replaced by a rebuild must be a no-op.
+
+    Simulates the real-world background-thread race directly — the
+    SDK's close signal reaching the wedged ticker's own thread well
+    AFTER a faster in-process rebuild has already moved self._kt on
+    to a new, healthy ticker — by holding a reference to the first
+    (wedged) shim and manually re-invoking its bound on_close well
+    after the rebuild has succeeded."""
+    import backend.algo.broker.ws_multiplexer as _mux_mod
+    import backend.algo.tests.fixtures.mock_kite_ws_server as _shim_mod
+
+    monkeypatch.setattr(_mux_mod, "_CONNECT_TIMEOUT_S", 0.05)
+    _capture_ws_events(monkeypatch)
+
+    async with patch_multiplexer_ticker():
+        set_wedge_mode(True)
+        mux = _make_mux()
+
+        start_task = asyncio.ensure_future(mux.start())
+        await asyncio.sleep(0.02)
+        old_shim = _shim_mod._current_shim  # still-wedged 1st shim
+        set_wedge_mode(False)
+        await asyncio.sleep(0.2)
+        await start_task
+
+        assert mux.connected is True
+        assert old_shim is not mux._kt  # rebuild replaced it
+
+        # Simulate the deferred real-world callback: the OLD shim's
+        # own on_close fires late, well after the rebuild succeeded.
+        old_shim.on_close(old_shim, 0, "late close from replaced kt")
+
+        assert mux.connected is True
+        assert (
+            mux._reconnect_task is None
+            or mux._reconnect_task.done()
+        )
+
+        await mux.close()
