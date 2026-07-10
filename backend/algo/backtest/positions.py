@@ -141,6 +141,12 @@ class PositionTracker:
     def open_positions(self) -> dict[str, Position]:
         return dict(self._open)
 
+    def has_position(self, ticker: str) -> bool:
+        """O(1) membership check — prefer over
+        ``ticker in open_positions()`` in a per-bar hot path, since
+        ``open_positions()`` copies the whole dict on every call."""
+        return ticker in self._open
+
     def closed_positions(self) -> list[Position]:
         return list(self._closed)
 
