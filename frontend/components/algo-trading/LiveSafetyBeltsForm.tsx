@@ -11,21 +11,40 @@ interface Props {
 
 // ── Ticker chip ───────────────────────────────────────────────────
 
-function TickerChip({
+export function TickerChip({
   ticker,
+  offUniverse,
   onRemove,
 }: {
   ticker: string;
+  offUniverse: boolean;
   onRemove: () => void;
 }) {
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-full border
-        border-indigo-200 bg-indigo-100 pl-2.5 pr-1 py-0.5
-        text-[11px] font-mono font-medium text-indigo-800
-        dark:border-indigo-700 dark:bg-indigo-900/40
-        dark:text-indigo-300"
+      className={
+        offUniverse
+          ? "inline-flex items-center gap-1 rounded-full border " +
+            "border-red-300 bg-red-50 pl-2.5 pr-1 py-0.5 text-[11px] " +
+            "font-mono font-medium text-red-700 dark:border-red-700 " +
+            "dark:bg-red-900/20 dark:text-red-400"
+          : "inline-flex items-center gap-1 rounded-full border " +
+            "border-indigo-200 bg-indigo-100 pl-2.5 pr-1 py-0.5 " +
+            "text-[11px] font-mono font-medium text-indigo-800 " +
+            "dark:border-indigo-700 dark:bg-indigo-900/40 " +
+            "dark:text-indigo-300"
+      }
+      title={
+        offUniverse
+          ? "Not in the liquidity-screened trading universe " +
+            "(ADTV/market-cap floor, or an ETF with no fundamentals " +
+            "row). Bar-derived features can never populate for this " +
+            "ticker — signals on it will always be rejected."
+          : undefined
+      }
+      data-testid={`live-caps-ticker-${ticker}`}
     >
+      {offUniverse ? "⚠ " : ""}
       {ticker}
       <button
         type="button"
@@ -55,9 +74,11 @@ function TickerChip({
 function TickerTagInput({
   value,
   onChange,
+  offUniverseTickers,
 }: {
   value: string[];
   onChange: (v: string[]) => void;
+  offUniverseTickers: string[];
 }) {
   const [input, setInput] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -106,6 +127,7 @@ function TickerTagInput({
         <TickerChip
           key={t}
           ticker={t}
+          offUniverse={offUniverseTickers.includes(t)}
           onRemove={() => onChange(value.filter((x) => x !== t))}
         />
       ))}
@@ -287,7 +309,11 @@ export function LiveSafetyBeltsForm({ strategyId }: Props) {
             ({tickerList.length} NSE symbols)
           </span>
         </span>
-        <TickerTagInput value={tickerList} onChange={setTickerList} />
+        <TickerTagInput
+          value={tickerList}
+          onChange={setTickerList}
+          offUniverseTickers={caps?.off_universe_tickers ?? []}
+        />
         <span className="text-[10px] text-slate-400">
           Type symbol + Enter (or comma) to add · × to remove ·
           paste comma-separated to bulk-add. Empty = all signals

@@ -22,6 +22,7 @@ export interface LiveCaps {
   cumulative_inr_today: number;
   orders_count_today: number;
   gtt_limit_headroom_pct: number;
+  off_universe_tickers: string[];
 }
 
 export interface UpsertCapsPayload {
