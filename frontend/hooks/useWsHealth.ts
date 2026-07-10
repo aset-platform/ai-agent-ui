@@ -20,6 +20,7 @@ export interface WsHealth {
   last_tick_at: string | null;
   tick_age_seconds: number | null;
   tick_count_today: number;
+  wedge_escalated: boolean;
 }
 
 export const WS_HEALTH_KEY = `${API_URL}/algo/live/ws-health`;

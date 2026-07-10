@@ -184,6 +184,7 @@ class WsHealth(BaseModel):
     last_tick_at: str | None = None
     tick_age_seconds: int | None = None
     tick_count_today: int = 0
+    wedge_escalated: bool = False
 
 
 # ---------------------------------------------------------------
@@ -1705,6 +1706,7 @@ def create_live_router() -> APIRouter:
             last_tick_at=_iso_utc(last),
             tick_age_seconds=age,
             tick_count_today=int(snap.get("tick_count_today", 0)),
+            wedge_escalated=bool(snap.get("wedge_escalated", False)),
         )
 
     # ----------------------------------------------------------

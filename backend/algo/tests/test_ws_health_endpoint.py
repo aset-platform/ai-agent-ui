@@ -81,6 +81,7 @@ def test_no_mux_returns_disconnected(app):
         "last_tick_at": None,
         "tick_age_seconds": None,
         "tick_count_today": 0,
+        "wedge_escalated": False,
     }
 
 
@@ -155,3 +156,23 @@ def test_unauthorized_without_pro_or_superuser_returns_403():
     client = TestClient(app)
     r = client.get("/v1/algo/live/ws-health")
     assert r.status_code == 403
+
+
+def test_wedge_escalated_surfaces_from_mux(app):
+    """A multiplexer mid-escalation must surface wedge_escalated=True
+    (ASETPLTFRM-470) — this is what drives the frontend's persistent
+    wedge banner."""
+    uid = UUID(SUPERUSER_ID)
+    _seed_mux(user_id=uid, connected=True)
+    ws_registry._registry[uid].health_snapshot.return_value = {
+        "connected": True,
+        "subscriber_count": 2,
+        "subscribed_tokens": 4,
+        "last_tick_at": None,
+        "tick_count_today": 17,
+        "wedge_escalated": True,
+    }
+    client = TestClient(app)
+    r = client.get("/v1/algo/live/ws-health")
+    assert r.status_code == 200, r.text
+    assert r.json()["wedge_escalated"] is True

@@ -2,9 +2,11 @@
 
 import { useLiveDashboardSummary } from "@/hooks/useLiveDashboardSummary";
 import { usePaperRuns } from "@/hooks/usePaperRuns";
+import { useWsHealth } from "@/hooks/useWsHealth";
 
 import { LiveWsHealthDot } from "../LiveWsHealthDot";
 import { LiveModeChip } from "./LiveModeChip";
+import { LiveWsWedgeBanner } from "./LiveWsWedgeBanner";
 
 function inr(value: string | undefined): string {
   if (value == null) return "—";
@@ -41,39 +43,51 @@ function signed(value: string | undefined): string {
 export function LiveHeaderStrip() {
   const { summary } = useLiveDashboardSummary();
   const { runs } = usePaperRuns();
+  const { health } = useWsHealth();
   const armed = runs.some(
     (r) => r.mode === "live" && !r.dry_run,
   );
 
+  // The wedge banner lives INSIDE this sticky container (not as a
+  // sibling below it) so a "persistent" alert stays pinned while the
+  // user scrolls a long Live page rather than scrolling out of view
+  // (ASETPLTFRM-470 review). LiveWsWedgeBanner self-gates to null when
+  // not (armed && wedgeEscalated), so no empty gap appears when the
+  // connection is healthy.
   return (
     <div
-      className="sticky top-0 z-10 flex flex-wrap items-center gap-3
-        bg-white/95 dark:bg-slate-900/95 backdrop-blur border-b
-        border-slate-200 dark:border-slate-700 px-4 py-3"
+      className="sticky top-0 z-10 bg-white/95 dark:bg-slate-900/95
+        backdrop-blur border-b border-slate-200 dark:border-slate-700"
       data-testid="live-header-strip"
     >
-      <LiveModeChip
-        mode={summary?.mode ?? "live"}
-        armed={armed}
-      />
-      <Kpi label="Today P&L" value={signed(summary?.today_pnl_inr)} />
-      <Kpi label="Open P&L" value={signed(summary?.open_pnl_inr)} />
-      <Kpi
-        label="Realised"
-        value={signed(summary?.realised_pnl_inr)}
-      />
-      <Kpi label="Cash" value={inr(summary?.cash_inr)} />
-      <Kpi
-        label="Open"
-        value={String(summary?.open_position_count ?? 0)}
-      />
-      <div
-        className="flex items-center gap-1 text-xs text-slate-500"
-        data-testid="live-ws-age"
-      >
-        <span>WS</span>
-        <LiveWsHealthDot />
+      <div className="flex flex-wrap items-center gap-3 px-4 py-3">
+        <LiveModeChip
+          mode={summary?.mode ?? "live"}
+          armed={armed}
+        />
+        <Kpi label="Today P&L" value={signed(summary?.today_pnl_inr)} />
+        <Kpi label="Open P&L" value={signed(summary?.open_pnl_inr)} />
+        <Kpi
+          label="Realised"
+          value={signed(summary?.realised_pnl_inr)}
+        />
+        <Kpi label="Cash" value={inr(summary?.cash_inr)} />
+        <Kpi
+          label="Open"
+          value={String(summary?.open_position_count ?? 0)}
+        />
+        <div
+          className="flex items-center gap-1 text-xs text-slate-500"
+          data-testid="live-ws-age"
+        >
+          <span>WS</span>
+          <LiveWsHealthDot />
+        </div>
       </div>
+      <LiveWsWedgeBanner
+        armed={armed}
+        wedgeEscalated={health?.wedge_escalated ?? false}
+      />
     </div>
   );
 }

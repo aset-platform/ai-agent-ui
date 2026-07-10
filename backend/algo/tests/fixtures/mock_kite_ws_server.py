@@ -63,6 +63,11 @@ class KiteTickerShim:
         self.on_close = None
         self.on_error = None
 
+        # Test-only: mirrors the module-level _force_wedge_mode flag
+        # at construction time — see set_wedge_mode() below for why
+        # this can't be a per-instance flag a test sets directly.
+        self.wedge_mode: bool = _force_wedge_mode
+
     # -- Kite API surface -------------------------------------------
 
     def subscribe(self, tokens: list[int]) -> None:
@@ -85,8 +90,14 @@ class KiteTickerShim:
 
         Calls ``on_connect`` synchronously so tests can assert
         ``mux.connected`` immediately after ``await mux.start()``.
+
+        When ``wedge_mode`` is True, simulates a silently-wedged
+        Kite WS registration instead — marks ``_running`` but never
+        calls any callback (ASETPLTFRM-470 regression coverage).
         """
         self._running = True
+        if self.wedge_mode:
+            return
         if self.on_connect:
             self.on_connect(self, None)
 
@@ -139,6 +150,22 @@ def _ticker_to_token(ticker: str) -> int:
     return abs(hash(ticker)) % (2**20)
 
 
+# Test-only: read by _ShimFactory at construction time so a test can
+# control whether the NEXT shim built (including ones built by an
+# in-process rebuild, e.g. KiteWsMultiplexer._handle_wedge) starts
+# wedged. See KiteTickerShim.connect()'s wedge_mode branch.
+_force_wedge_mode: bool = False
+
+
+def set_wedge_mode(value: bool) -> None:
+    """Test helper — controls whether the NEXT KiteTickerShim built
+    by _ShimFactory starts in wedge_mode. Call this BEFORE
+    mux.start() (or between rebuild attempts, from inside a test) to
+    simulate a wedged Kite WS connection (ASETPLTFRM-470)."""
+    global _force_wedge_mode
+    _force_wedge_mode = value
+
+
 # Per-test shim registry — set after the shim is instantiated.
 _current_shim: KiteTickerShim | None = None
 
@@ -181,6 +208,7 @@ async def patch_multiplexer_ticker():
     """
     global _current_shim
     _current_shim = None
+    set_wedge_mode(False)
     factory = _ShimFactory()
     with patch(
         "kiteconnect.KiteTicker",
@@ -188,6 +216,7 @@ async def patch_multiplexer_ticker():
     ):
         yield _ShimProxy()
     _current_shim = None
+    set_wedge_mode(False)
 
 
 class _ShimProxy:

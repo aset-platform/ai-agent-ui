@@ -230,11 +230,23 @@ function formatTradeTime(
 }
 
 function ExitReasonBadge({ reason }: { reason: string }) {
+  const rose =
+    "bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-700";
   const styles: Record<string, string> = {
     signal:
       "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-600",
-    stop_loss:
-      "bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-700",
+    stop_loss: rose,
+    trail_stop: rose,
+    time_stop:
+      "bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-700",
+    regime_exit:
+      "bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-700",
+    gtt_triggered:
+      "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700",
+    panic_close:
+      "bg-red-200 text-red-900 border-red-400 dark:bg-red-900/50 dark:text-red-200 dark:border-red-600",
+    user_exit:
+      "bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-900/30 dark:text-sky-300 dark:border-sky-700",
     mis_square_off:
       "bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-900/30 dark:text-sky-300 dark:border-sky-700",
     period_end_mtm:
@@ -244,12 +256,26 @@ function ExitReasonBadge({ reason }: { reason: string }) {
   const labels: Record<string, string> = {
     signal: "Signal",
     stop_loss: "Stop-loss",
+    trail_stop: "Trailing stop",
+    time_stop: "Time stop",
+    regime_exit: "Regime exit",
+    gtt_triggered: "GTT stop",
+    panic_close: "Panic close",
+    user_exit: "Manual exit",
     mis_square_off: "MIS square-off",
     period_end_mtm: "Period end (MTM)",
   };
   const titles: Record<string, string> = {
     signal: "Closed by the strategy's exit rule.",
     stop_loss: "Per-trade stop-loss tripped.",
+    trail_stop: "Trailing stop tightened and tripped.",
+    time_stop: "Held past the strategy's max holding period.",
+    regime_exit: "Closed on a market-regime exit rule.",
+    gtt_triggered:
+      "Exited when the GTT (trailing/hard stop) order triggered on Kite.",
+    panic_close:
+      "Force-closed by the panic kill-switch (flatten all positions).",
+    user_exit: "Closed manually by the user.",
     mis_square_off:
       "Auto-closed at the end of the trading day (MIS contract).",
     period_end_mtm:
