@@ -306,3 +306,74 @@ async def test_schedule_reconnect_skips_when_already_connected(
         assert build_calls == []  # _build_ticker never called
 
         await mux.close()
+
+
+@pytest.mark.asyncio
+async def test_staleness_watchdog_fires_when_ticks_stop(
+    monkeypatch,
+):
+    """connected=True but last_tick_at is stale despite subscribed
+    tokens must trigger the same _handle_wedge() rebuild path."""
+    import backend.algo.broker.ws_multiplexer as _mux_mod
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(_mux_mod, "_STALE_TICK_THRESHOLD_S", 1.0)
+    monkeypatch.setattr(
+        "backend.algo.live.reconciliation.is_market_open_ist",
+        lambda: True,
+    )
+    handled: list[bool] = []
+
+    async with patch_multiplexer_ticker():
+        mux = _make_mux()
+        await mux.start()
+        mux._token_subs[12345] = {uuid4()}
+        mux.last_tick_at = datetime.now(timezone.utc).replace(
+            tzinfo=None,
+        ) - timedelta(seconds=5)
+
+        async def _fake_handle_wedge():
+            handled.append(True)
+
+        monkeypatch.setattr(mux, "_handle_wedge", _fake_handle_wedge)
+
+        await mux._watch_staleness_loop_once()
+
+        assert handled == [True]
+        await mux.close()
+
+
+@pytest.mark.asyncio
+async def test_staleness_watchdog_skips_outside_market_hours(
+    monkeypatch,
+):
+    """Outside NSE session hours, no ticks are expected — the
+    staleness check must NOT fire, even with a very old
+    last_tick_at."""
+    import backend.algo.broker.ws_multiplexer as _mux_mod
+    from datetime import datetime, timedelta, timezone
+
+    monkeypatch.setattr(_mux_mod, "_STALE_TICK_THRESHOLD_S", 1.0)
+    monkeypatch.setattr(
+        "backend.algo.live.reconciliation.is_market_open_ist",
+        lambda: False,
+    )
+    handled: list[bool] = []
+
+    async with patch_multiplexer_ticker():
+        mux = _make_mux()
+        await mux.start()
+        mux._token_subs[12345] = {uuid4()}
+        mux.last_tick_at = datetime.now(timezone.utc).replace(
+            tzinfo=None,
+        ) - timedelta(seconds=999)
+
+        async def _fake_handle_wedge():
+            handled.append(True)
+
+        monkeypatch.setattr(mux, "_handle_wedge", _fake_handle_wedge)
+
+        await mux._watch_staleness_loop_once()
+
+        assert handled == []
+        await mux.close()

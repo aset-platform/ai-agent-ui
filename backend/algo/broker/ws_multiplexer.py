@@ -61,6 +61,8 @@ _MIN_BACKOFF_S = 1.0
 _GAP_TOO_LARGE_S = 3_600  # 1 hour: abandon gap-fill
 _CONNECT_TIMEOUT_S = 15.0
 _MAX_FAST_REBUILD_ATTEMPTS = 2
+_STALENESS_CHECK_INTERVAL_S = 60.0
+_STALE_TICK_THRESHOLD_S = 90.0
 
 
 class KiteWsMultiplexer:
@@ -128,6 +130,7 @@ class KiteWsMultiplexer:
         self._connect_timeout_task: asyncio.Task | None = None
         self._rebuild_attempts: int = 0
         self._wedge_escalated: bool = False
+        self._staleness_task: asyncio.Task | None = None
 
         # Backpressure-drop aggregation — per strategy_id rolling
         # counter + last-emit timestamp (ns). See _BP_AGG_WINDOW_S.
@@ -156,6 +159,9 @@ class KiteWsMultiplexer:
             raise RuntimeError("Multiplexer already closed")
         self._loop = asyncio.get_running_loop()
         await self._connect()
+        self._staleness_task = asyncio.ensure_future(
+            self._watch_staleness_loop(),
+        )
 
     def subscribe(
         self,
@@ -318,6 +324,19 @@ class KiteWsMultiplexer:
                 )
             self._connect_timeout_task = None
 
+        if self._staleness_task is not None:
+            self._staleness_task.cancel()
+            try:
+                await self._staleness_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                _logger.warning(
+                    "ws_multiplexer: staleness_task raised on close",
+                    exc_info=True,
+                )
+            self._staleness_task = None
+
         # Cancel any in-flight gap-fill (5.2).
         if self._gap_fill_task is not None and not (
             self._gap_fill_task.done()
@@ -436,6 +455,47 @@ class KiteWsMultiplexer:
             "attempt": self._rebuild_attempts + 1,
         })
         await self._handle_wedge()
+
+    async def _watch_staleness_loop_once(self) -> None:
+        """One staleness check — split out from the sleep loop so
+        tests can invoke it directly without waiting real wall-clock
+        time. See ASETPLTFRM-470."""
+        from backend.algo.live.reconciliation import (
+            is_market_open_ist,
+        )
+
+        if not is_market_open_ist():
+            return
+        if not self._connected:
+            return  # the connect-timeout watchdog owns this case
+        has_tokens = bool(self._token_subs or self._universe_tokens)
+        if not has_tokens:
+            return
+        if self.last_tick_at is None:
+            return  # freshly connected, no tick expected yet
+        age_s = (
+            datetime.now(UTC).replace(tzinfo=None)
+            - self.last_tick_at
+        ).total_seconds()
+        if age_s < _STALE_TICK_THRESHOLD_S:
+            return
+        _logger.error(
+            "KiteWsMultiplexer: tick stream stale (%.0fs, "
+            "threshold %.0fs) despite connected=True user=%s — "
+            "treating as silent stall",
+            age_s, _STALE_TICK_THRESHOLD_S, self._user_id,
+        )
+        self._emit_ws_event("ws_stale_stream_detected", {
+            "age_s": int(age_s),
+        })
+        await self._handle_wedge()
+
+    async def _watch_staleness_loop(self) -> None:
+        while not self._closed:
+            await asyncio.sleep(_STALENESS_CHECK_INTERVAL_S)
+            if self._closed:
+                return
+            await self._watch_staleness_loop_once()
 
     async def _handle_wedge(self) -> None:
         """Shared rebuild/escalate logic for BOTH the connect-timeout
