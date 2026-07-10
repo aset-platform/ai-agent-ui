@@ -3423,6 +3423,37 @@ class LiveRuntime:
         # interval_sec; multiple bars share a date so the date alone
         # can't tell us when a new bar starts.
         strategy_interval = self._strategy.schedule.interval
+
+        # ASETPLTFRM-471 — a ticker can be ticked here purely because
+        # it's in the user's watchlist/holdings (the live-WS
+        # subscription scope; see routes/paper.py's
+        # ``_scoped_tickers(user, "watchlist")``) while never having
+        # been part of THIS strategy's own ``allowed_tickers`` and
+        # also absent from the liquidity-screened
+        # ``stocks.universe_snapshot`` (``_bucket_by_ticker``). Such a
+        # ticker can never populate a bar-derived feature. The
+        # PR #307 gate below (inside ``if history is None:``) already
+        # recognizes this on the ticker's FIRST bar, but that gate
+        # only ever runs once — every bar after the first fell
+        # through to full feature assembly + eval_node, hitting the
+        # SAME KeyError and emitting a fresh
+        # ``signal_rejected reason=missing_feature`` WARNING +
+        # algo.events row every single eval cycle, forever (confirmed
+        # live 2026-07-06, AHLUCONT.NS / PRUDENT.NS recurring every
+        # ~60s). Checking on EVERY bar-close closes this —
+        # ``self._caps`` is refreshed each bar-close, so a ticker
+        # added to allowed_tickers mid-run still reaches the real
+        # preload attempt below on its very next bar.
+        if (
+            strategy_interval == "1d"
+            and bar.ticker not in self._bucket_by_ticker
+            and not self._positions.has_position(bar.ticker)
+            and bar.ticker
+            not in (self._caps.get("allowed_tickers") or [])
+        ):
+            self._bars_by_ticker.setdefault(bar.ticker, [])
+            return 0
+
         if strategy_interval == "1d":
             bucket_key: Any = bar_date_obj
             bucket_open_ns: int | None = None
@@ -3444,45 +3475,14 @@ class LiveRuntime:
         # right warmup module based on strategy cadence.
         history = self._bars_by_ticker.get(bar.ticker)
         if history is None:
-            # Skip expensive Kite preload for tickers that are only
-            # in the universe LTP subscription (indices, instruments
-            # not in the strategy's evaluation universe). After a
-            # full startup warmup, _bars_by_ticker already covers all
-            # bucket_by_ticker entries; an absent entry here means a
-            # pure LTP-cache token (e.g. an index) that cannot be
-            # traded. Mark it seen-and-skip so this path is O(1) on
-            # every subsequent bar for that token.
-            #
-            # Found 2026-07-04: this check ignored allowed_tickers,
-            # so a ticker added to the strategy's caps mid-run (via
-            # PUT /algo/live/caps/{id}) that ISN'T also part of the
-            # stocks.universe_snapshot rebalance (e.g. a less-liquid
-            # name never covered by that job) got permanently
-            # misclassified as an untradeable index-like token on
-            # its very first bar. Since this branch only ever runs
-            # once per ticker (guarded by ``history is None``), the
-            # ticker's bar history stayed frozen at ``[]`` for the
-            # runtime's entire lifetime — every bar-derived feature
-            # (rsi_2 included) stayed absent forever, surfacing as
-            # recurring signal_rejected reason=missing_feature
-            # events (confirmed: AHLUCONT.NS / MOVALUE.NS /
-            # PRUDENT.NS / SMALLCAP.NS, 5111 events over 5 trading
-            # days) even though stocks.ohlcv had hundreds of bars
-            # available the whole time. ``self._caps`` is refreshed
-            # every bar-close (see the fresh-caps read later in this
-            # function), so checking it here — not just at
-            # __init__-time via ``allowed_for_preload`` — closes the
-            # gap for tickers added after the runtime started.
-            if (
-                strategy_interval == "1d"
-                and bar.ticker not in self._bucket_by_ticker
-                and bar.ticker
-                not in self._positions.open_positions()
-                and bar.ticker
-                not in (self._caps.get("allowed_tickers") or [])
-            ):
-                self._bars_by_ticker[bar.ticker] = []
-                return 0
+            # The out-of-scope short-circuit above already returns
+            # early for any ticker that's neither in
+            # _bucket_by_ticker, an open position, nor in
+            # allowed_tickers — so anything reaching this point for
+            # strategy_interval == "1d" always warrants a real
+            # preload attempt. (Intraday strategies have no
+            # equivalent short-circuit above — unchanged from prior
+            # behavior — so this preload always fires for them too.)
             try:
                 if strategy_interval == "1d":
                     lazy = await asyncio.to_thread(
