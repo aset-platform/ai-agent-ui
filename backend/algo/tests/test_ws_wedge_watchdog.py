@@ -243,3 +243,66 @@ async def test_stale_close_from_replaced_ticker_is_ignored(
         )
 
         await mux.close()
+
+
+@pytest.mark.asyncio
+async def test_schedule_reconnect_skips_when_already_connected(
+    monkeypatch,
+):
+    """Review finding round 2 (Important, ASETPLTFRM-470): the real
+    (threaded) Kite SDK's on_connect fires asynchronously — unlike
+    this test shim's synchronous connect() — so in production there
+    is a narrow window where a stale ``call_soon_threadsafe(
+    self._trigger_reconnect)`` could still run while
+    ``self._connected`` is momentarily False (the fast-rebuild's new
+    ticker hasn't fired its real on_connect yet), letting one
+    spurious ``_schedule_reconnect()`` task get scheduled despite
+    the ``_trigger_reconnect()`` guard from round 1.
+
+    Defense-in-depth: ``_schedule_reconnect()`` now re-checks
+    ``self._connected`` right after its own backoff sleep — by which
+    point (at minimum ``_MIN_BACKOFF_S`` real seconds later, far
+    slower than any real Kite handshake) the connection is expected
+    to already be genuinely healthy, so the loop can bail out before
+    touching anything.
+
+    This test deliberately BYPASSES ``_trigger_reconnect()``'s own
+    guard — it schedules ``_schedule_reconnect()`` directly, as if a
+    stale callback had already slipped past that layer — to isolate
+    and prove THIS specific defense layer in isolation."""
+    import backend.algo.broker.ws_multiplexer as _mux_mod
+
+    monkeypatch.setattr(_mux_mod, "_MIN_BACKOFF_S", 0.05)
+    build_calls: list[int] = []
+
+    async with patch_multiplexer_ticker():
+        mux = _make_mux()
+        await mux.start()
+        assert mux.connected is True
+
+        orig_build = mux._build_ticker
+
+        def _spy_build():
+            build_calls.append(1)
+            return orig_build()
+
+        mux._build_ticker = _spy_build
+        kt_before = mux._kt
+
+        # Deliberately bypass _trigger_reconnect()'s own connected
+        # guard (round 1's fix) by scheduling _schedule_reconnect()
+        # directly — simulating a stale trigger that already slipped
+        # past that layer in the real SDK's narrow timing window.
+        mux._backoff_s = _mux_mod._MIN_BACKOFF_S
+        mux._reconnect_task = asyncio.ensure_future(
+            mux._schedule_reconnect(),
+        )
+
+        # Wait past the (patched-short) backoff window.
+        await asyncio.sleep(0.2)
+
+        assert mux.connected is True
+        assert mux._kt is kt_before  # untouched — no rebuild ran
+        assert build_calls == []  # _build_ticker never called
+
+        await mux.close()

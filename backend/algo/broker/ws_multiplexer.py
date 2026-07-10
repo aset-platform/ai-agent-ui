@@ -766,6 +766,13 @@ class KiteWsMultiplexer:
             await asyncio.sleep(backoff)
             if self._closed:
                 return
+            if self._connected:
+                _logger.info(
+                    "KiteWsMultiplexer: skipping scheduled "
+                    "reconnect — already connected (user=%s)",
+                    self._user_id,
+                )
+                return
             self._backoff_s = min(
                 self._backoff_s * 2, _MAX_BACKOFF_S,
             )
