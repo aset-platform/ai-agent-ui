@@ -28,6 +28,26 @@ _logger = logging.getLogger(__name__)
 
 _FILL_TYPES = ("order_filled", "order_filled_live")
 
+# Authoritative live-fill ``reason`` values → the exit-reason label the
+# Performance page displays. A live SELL fill carries the true exit
+# cause under ``payload["reason"]`` (stamped from the in-flight entry
+# by the postback reconciler, or set directly on the runtime fill
+# path); the pairing reads it in preference to any source/event
+# heuristic. ``mis_auto_square_off`` is normalised to the badge's
+# ``mis_square_off`` key. Entry-side/rebalance reasons
+# (``set_target_weight``) and the generic ``exit`` are intentionally
+# absent so they fall through to the signal/panic/gtt fallbacks.
+_REASON_TO_EXIT: dict[str, str] = {
+    "stop_loss": "stop_loss",
+    "trail_stop": "trail_stop",
+    "time_stop": "time_stop",
+    "regime_exit": "regime_exit",
+    "user_exit": "user_exit",
+    "gtt_triggered": "gtt_triggered",
+    "mis_auto_square_off": "mis_square_off",
+    "mis_square_off": "mis_square_off",
+}
+
 
 def pair_fills_by_strategy_and_ticker(
     events: list[dict[str, Any]],
@@ -238,21 +258,29 @@ def _resolve_exit_reason(
 
     1. An explicit ``exit_reason`` on the fill payload wins (backtest
        trade_list rows carry real reasons like ``stop_loss``).
-    2. A fill whose ``kite_order_id`` matches a panic-close submit
-       event → ``panic_close``. Checked BEFORE the GTT rule because
-       panic-close deletes GTTs on Kite but not the runtime's
+    2. The authoritative live-fill ``reason`` field, when it maps to a
+       known exit reason (``user_exit``, ``stop_loss``, ``trail_stop``,
+       ``time_stop``, ``regime_exit``, ``gtt_triggered``, MIS
+       square-off). This is where a user-initiated close and a
+       stop-loss get their true label — panic fills carry no ``reason``
+       (they bypass the in-flight ledger) so they fall through.
+    3. A fill whose ``kite_order_id`` matches a panic-close submit
+       event → ``panic_close``. Checked BEFORE the GTT fallback
+       because panic-close deletes GTTs on Kite but not the runtime's
        in-memory state, so a panic fill's postback also trips a
        spurious ``gtt_triggered`` event for the same ticker+date.
-    3. A GTT / trailing-stop fill → ``gtt_triggered``: either the
-       fill's own ``source`` is ``gtt_poll`` (Piece A) or a
-       ``gtt_triggered`` event exists for the same (ticker, date)
-       (Piece B, whose postback fill is source ``kite_postback``).
-    4. Otherwise ``signal`` (the pre-existing default — genuine
-       strategy-rule exits and anything unrecognised).
+    4. GTT fallback for a fill with no usable ``reason``: source
+       ``gtt_poll`` (Piece A) or a ``gtt_triggered`` event for the
+       same (ticker, date) (Piece B) → ``gtt_triggered``.
+    5. Otherwise ``signal`` (genuine strategy-rule exits, rebalance
+       sells, and anything unrecognised).
     """
     explicit = sell_payload.get("exit_reason")
     if explicit:
         return str(explicit)
+    mapped = _REASON_TO_EXIT.get(str(sell_payload.get("reason") or ""))
+    if mapped:
+        return mapped
     koid = str(sell_payload.get("kite_order_id") or "")
     if koid and koid in panic_order_ids:
         return "panic_close"

@@ -361,6 +361,61 @@ def test_panic_close_wins_over_spurious_gtt_triggered_event():
     assert trades[0]["exit_reason"] == "panic_close"
 
 
+def test_user_exit_labeled_from_fill_reason_field():
+    """A user-initiated close (LiveRuntime.user_exit_position) places
+    the SELL through _submit_order, so the postback-reconciled
+    order_filled_live carries the authoritative reason='user_exit'
+    (confirmed against real events: 8 such fills). The closed trade
+    must surface exit_reason='user_exit', not 'signal'."""
+    events = [
+        _fill(
+            strategy_id="s1", event_id="b1", symbol="KTKBANK",
+            side="BUY", qty=10, fill_price=260.0,
+            event_type="order_filled_live",
+            ts=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        ),
+        {
+            "event_id": "f1", "strategy_id": "s1",
+            "type": "order_filled_live",
+            "payload_json": json.dumps({
+                "symbol": "KTKBANK", "side": "SELL", "qty": 10,
+                "price": "267.0", "source": "kite_postback",
+                "reason": "user_exit",
+            }),
+            "ts_ns": _ts(datetime(2026, 7, 2, tzinfo=timezone.utc)),
+        },
+    ]
+    trades = pair_fills_by_strategy_and_ticker(events)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "user_exit"
+
+
+def test_stop_loss_labeled_from_fill_reason_field():
+    """A stop-loss exit's fill carries the authoritative
+    reason='stop_loss' (real events: 11 such fills); it must be
+    labeled stop_loss, not collapsed to 'signal' or 'gtt_triggered'."""
+    events = [
+        _fill(
+            strategy_id="s1", event_id="b1", symbol="ZENTEC",
+            side="BUY", qty=1, fill_price=1800.0,
+            event_type="order_filled_live",
+            ts=datetime(2026, 7, 1, tzinfo=timezone.utc),
+        ),
+        {
+            "event_id": "f1", "strategy_id": "s1",
+            "type": "order_filled_live",
+            "payload_json": json.dumps({
+                "symbol": "ZENTEC", "side": "SELL", "qty": 1,
+                "price": "1700.0", "reason": "stop_loss",
+            }),
+            "ts_ns": _ts(datetime(2026, 7, 2, tzinfo=timezone.utc)),
+        },
+    ]
+    trades = pair_fills_by_strategy_and_ticker(events)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "stop_loss"
+
+
 def test_orphan_sell_with_no_matching_buy_is_skipped():
     """A strategy-less SELL for a ticker no strategy ever bought must
     NOT be fabricated into a trade -- it has nothing to inherit a
