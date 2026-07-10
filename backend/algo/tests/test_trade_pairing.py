@@ -228,6 +228,51 @@ def test_panic_close_orphan_sell_pairs_with_open_buy_strategy():
     assert t["sell_event_id"] == "s1"
 
 
+def test_panic_close_sell_labeled_from_submit_event_source():
+    """The panic SELL's order_filled_live (from the Kite postback)
+    carries NO exit_reason — only the order_submitted_live it shares a
+    kite_order_id with carries source='panic_close' (confirmed against
+    real 2026-07-10 events: submit koid 260710220809327 source
+    panic_close, fill koid 260710220809327 source kite_postback, no
+    exit_reason on either fill). The closed trade must surface
+    exit_reason='panic_close' via that join, not the 'signal' fallback,
+    so the Performance trade log tells the truth about why the
+    position closed rather than mislabeling a forced flatten as a
+    strategy signal."""
+    events = [
+        _fill(
+            strategy_id="s1", event_id="b1", symbol="ARVIND",
+            side="BUY", qty=7, fill_price=523.75,
+            event_type="order_filled_live",
+            ts=datetime(2026, 7, 8, tzinfo=timezone.utc),
+        ),
+        {
+            "event_id": "sub1", "strategy_id": None,
+            "type": "order_submitted_live",
+            "payload_json": json.dumps({
+                "symbol": "ARVIND", "side": "SELL", "qty": 7,
+                "kite_order_id": "260710220809327",
+                "source": "panic_close",
+            }),
+            "ts_ns": _ts(datetime(2026, 7, 10, 0, 0, tzinfo=timezone.utc)),
+        },
+        {
+            "event_id": "f1", "strategy_id": None,
+            "type": "order_filled_live",
+            "payload_json": json.dumps({
+                "symbol": "ARVIND", "side": "SELL", "qty": 7,
+                "price": "530.41", "kite_order_id": "260710220809327",
+                "source": "kite_postback",
+            }),
+            "ts_ns": _ts(datetime(2026, 7, 10, 0, 1, tzinfo=timezone.utc)),
+        },
+    ]
+    trades = pair_fills_by_strategy_and_ticker(events)
+    assert len(trades) == 1
+    assert trades[0]["strategy_id"] == "s1"
+    assert trades[0]["exit_reason"] == "panic_close"
+
+
 def test_orphan_sell_with_no_matching_buy_is_skipped():
     """A strategy-less SELL for a ticker no strategy ever bought must
     NOT be fabricated into a trade -- it has nothing to inherit a

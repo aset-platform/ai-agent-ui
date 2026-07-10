@@ -58,13 +58,30 @@ def pair_fills_by_strategy_and_ticker(
     ``algo.closed_trades`` (found 2026-07-10 — a panic-close left
     three real exits invisible on the Live Performance page).
     """
-    # First pass: parse fills once, and record which strategies
-    # opened BUYs per ticker (earliest-buy-first, deduped) so a
-    # strategy-less SELL can inherit the owning strategy.
+    # First pass: parse fills once, record which strategies opened
+    # BUYs per ticker (earliest-buy-first, deduped) so a strategy-less
+    # SELL can inherit the owning strategy, and collect the
+    # kite_order_ids of panic-close orders so the resulting closed
+    # trade can be labelled exit_reason='panic_close'. A panic SELL's
+    # order_filled_live (from the Kite postback) carries no exit_reason
+    # or source marker — the panic intent survives only on the
+    # order_submitted_live it shares a kite_order_id with.
     parsed: list[tuple[dict, dict, str]] = []
     _buy_strat_ts: dict[str, list[tuple[int, str]]] = {}
+    panic_order_ids: set[str] = set()
     for ev in events:
-        if ev.get("type") not in _FILL_TYPES:
+        etype = ev.get("type")
+        if etype == "order_submitted_live":
+            try:
+                sub_payload = json.loads(ev.get("payload_json") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                sub_payload = {}
+            if sub_payload.get("source") == "panic_close":
+                koid = str(sub_payload.get("kite_order_id") or "")
+                if koid:
+                    panic_order_ids.add(koid)
+            continue
+        if etype not in _FILL_TYPES:
             continue
         try:
             payload = json.loads(ev.get("payload_json") or "{}")
@@ -175,9 +192,8 @@ def pair_fills_by_strategy_and_ticker(
                 "closed_at_ts_ns": lot["sell_ts_ns"],
                 "realised_pnl_inr": realised_pnl_inr,
                 "return_pct": return_pct,
-                "exit_reason": (
-                    sell_fill["_payload"].get("exit_reason")
-                    or "signal"
+                "exit_reason": _resolve_exit_reason(
+                    sell_fill["_payload"], panic_order_ids,
                 ),
                 "dry_run": bool(
                     sell_fill["_payload"].get("dry_run", False),
@@ -186,6 +202,29 @@ def pair_fills_by_strategy_and_ticker(
                 "sell_event_id": lot["sell_event_id"],
             })
     return out
+
+
+def _resolve_exit_reason(
+    sell_payload: dict[str, Any],
+    panic_order_ids: set[str],
+) -> str:
+    """Best-effort exit-reason label for a SELL fill.
+
+    Priority: an explicit ``exit_reason`` on the fill payload wins;
+    otherwise a fill whose ``kite_order_id`` matches a panic-close
+    submit event is labelled ``panic_close``; everything else falls
+    back to ``signal`` (the pre-existing default). GTT-triggered and
+    normal-signal live fills carry no exit_reason either and continue
+    to fall through to ``signal`` unchanged — this only rescues the
+    panic-close case the user can otherwise never see labelled.
+    """
+    explicit = sell_payload.get("exit_reason")
+    if explicit:
+        return str(explicit)
+    koid = str(sell_payload.get("kite_order_id") or "")
+    if koid and koid in panic_order_ids:
+        return "panic_close"
+    return "signal"
 
 
 def _ts_ns_to_date(ts_ns: int) -> date:

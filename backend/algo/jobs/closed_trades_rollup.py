@@ -170,11 +170,17 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
 def _fetch_fill_events(
     today: date, window_days: int,
 ) -> list[dict[str, Any]]:
-    """Pull paper + live order_filled(_live) events across every
-    user for the trailing window. Column-projected, date-filtered
-    — never a full-table scan, including the backfill caller
-    (Task 5), which passes a large but bounded ``window_days``
-    rather than an unbounded scan."""
+    """Pull paper + live fill events (plus order_submitted_live, whose
+    ``source='panic_close'`` marker is the only place a panic exit's
+    intent survives — the fill itself carries no exit_reason) across
+    every user for the trailing window. Column-projected,
+    date-filtered — never a full-table scan, including the backfill
+    caller (Task 5), which passes a large but bounded ``window_days``
+    rather than an unbounded scan.
+
+    ``order_submitted_live`` rows are ignored by the pairing loop's
+    fill-type filter; they are carried only so the pairing helper can
+    build its kite_order_id → panic-close map."""
     from backend.db.duckdb_engine import query_iceberg_table
 
     modes_clause = " OR ".join(
@@ -186,7 +192,8 @@ def _fetch_fill_events(
         "       payload_json, ts_ns "
         "FROM events "
         f"WHERE ({modes_clause}) "
-        "  AND type IN ('order_filled', 'order_filled_live') "
+        "  AND type IN ('order_filled', 'order_filled_live', "
+        "               'order_submitted_live') "
         "  AND ts_date >= ? AND ts_date <= ? "
         "ORDER BY ts_ns"
     )
