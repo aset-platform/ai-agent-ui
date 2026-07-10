@@ -31,6 +31,7 @@ await runtime._on_bar_close(...)).
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -217,3 +218,124 @@ async def test_ticker_truly_outside_universe_and_allowlist_still_skipped():
 
     mock_preload.assert_not_called()
     assert runtime._bars_by_ticker[untradeable_token] == []
+
+
+def _rsi_condition_strategy_payload() -> dict:
+    """Same shape as _strategy_payload() but with an AST condition
+    that references a bar-derived feature (rsi_2), so eval_node
+    actually raises KeyError when features are empty — the bare
+    {"type": "buy"} root in _strategy_payload() never exercises that
+    path at all."""
+    payload = _strategy_payload()
+    payload["root"] = {
+        "type": "if",
+        "cond": {
+            "type": "compare",
+            "op": "<=",
+            "left": {"feature": "rsi_2"},
+            "right": {"literal": 5},
+        },
+        "then": {"type": "buy", "qty": {"shares": 1}},
+        "else": {"type": "hold"},
+    }
+    return payload
+
+
+def _make_runtime_with_payload(payload: dict):
+    from backend.algo.live.runtime import LiveRuntime
+    from backend.algo.strategy.ast import parse_strategy
+
+    strategy = parse_strategy(payload)
+
+    caps_repo = AsyncMock()
+    caps_repo.get.return_value = {
+        "live_orders_enabled": True,
+        "max_inr": Decimal("10000000"),
+        "max_orders_per_day": 100,
+        "allowed_tickers": [],
+        "cumulative_inr_today": Decimal("0"),
+        "orders_count_today": 0,
+    }
+    caps_repo.update_in_flight = AsyncMock()
+    caps_repo.increment_daily_counters = AsyncMock()
+
+    kill_switch_repo = AsyncMock()
+    kill_switch_repo.is_active.return_value = False
+
+    kite = MagicMock()
+    kite.dry_run = False
+    kite.place_order = MagicMock(return_value="KITE_ORDER_TEST")
+
+    caps = {"live_orders_enabled": True, "allowed_tickers": []}
+
+    with patch(
+        "backend.algo.live.position_hydration.hydrate",
+        return_value=[],
+    ), patch(
+        "backend.algo.live.runtime.LiveRuntime._load_bucket_by_ticker",
+        return_value={},
+    ):
+        runtime = LiveRuntime(
+            strategy=strategy,
+            user_id=uuid4(),
+            initial_capital_inr=Decimal("500000"),
+            fee_as_of=date(2026, 7, 4),
+            kite=kite,
+            caps=caps,
+            run_id=uuid4(),
+            caps_repo=caps_repo,
+            kill_switch_repo=kill_switch_repo,
+        )
+    return runtime
+
+
+@pytest.mark.asyncio
+async def test_out_of_scope_ticker_never_reaches_eval_on_repeat_bars():
+    """ASETPLTFRM-471. A ticker that is NEITHER in _bucket_by_ticker
+    NOR in allowed_tickers NOR an open position must never emit
+    signal_rejected reason=missing_feature — not on the first bar
+    (already covered by the control test above) and NOT on any
+    subsequent bar either. Before the fix, only the first bar was
+    gated; every bar after that fell through to eval_node and
+    emitted a fresh missing_feature event every single cycle."""
+    runtime = _make_runtime_with_payload(
+        _rsi_condition_strategy_payload(),
+    )
+    out_of_scope_ticker = "MOVALUE.NS"
+    assert out_of_scope_ticker not in runtime._bucket_by_ticker
+    assert out_of_scope_ticker not in (
+        runtime._caps.get("allowed_tickers") or []
+    )
+
+    with patch(
+        "backend.algo.live.daily_bar_warmup.preload_daily_bars",
+    ) as mock_preload:
+        # First bar.
+        result_1 = await runtime._on_bar_close(
+            bar=_make_bar(out_of_scope_ticker), last_price=_PRICE,
+        )
+        # Second bar for the SAME ticker — this is the case that
+        # was broken: history is no longer None, so the old gate
+        # (nested inside `if history is None:`) never re-ran.
+        result_2 = await runtime._on_bar_close(
+            bar=_make_bar(out_of_scope_ticker), last_price=_PRICE,
+        )
+
+    assert result_1 == 0
+    assert result_2 == 0
+    mock_preload.assert_not_called()
+    # event_row() stores the payload as a JSON string under
+    # "payload_json", not a nested "payload" dict — see
+    # debugging-event-row-payload-json-not-payload. A naive
+    # e.get("payload", {}) filter would silently match nothing.
+    missing_feature_events = [
+        e for e in runtime._events
+        if e.get("type") == "signal_rejected"
+        and json.loads(e.get("payload_json", "{}")).get("reason")
+        == "missing_feature"
+    ]
+    assert missing_feature_events == [], (
+        "out-of-scope ticker emitted signal_rejected "
+        "reason=missing_feature — the per-bar short-circuit did not "
+        "fire on a repeat bar-close"
+    )

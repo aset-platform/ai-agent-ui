@@ -59,6 +59,7 @@ from backend.algo.backtest.time_stop_monitor import (
 )
 from backend.algo.backtest.trailing_stop_manager import (
     TrailingStopManager,
+    phase_to_cooldown_reason,
 )
 from backend.algo.features.primitives import wilder_atr as _wilder_atr
 from backend.algo.broker.exceptions import (
@@ -1681,8 +1682,29 @@ class LiveRuntime:
                                 ),
                                 "source": "gtt_poll",
                                 "price_source": _price_source,
+                                "phase": _phase,
                             },
                         )
+                    )
+                    # ASETPLTFRM — record this GTT-triggered exit for
+                    # the repeat-offender cooldown gate. A hard-stop
+                    # or ratcheted-then-reverted GTT (phase 1/15) is
+                    # a thesis failure; an ATR-trail stop (phase 2)
+                    # is a locked-in win, not a failure. Without
+                    # this, cooldown_after_failed_exit_days never
+                    # saw GTT-triggered exits at all (only the
+                    # separate direct stop_loss_pct check appended
+                    # here) — found 2026-07-08, SUPRIYA.NS hard-
+                    # stopped via GTT then re-entered the same
+                    # session ungated.
+                    self._cooldown_history.append(
+                        _HydratedClose(
+                            ticker=ticker,
+                            exit_reason=phase_to_cooldown_reason(
+                                _phase,
+                            ),
+                            closed_at=datetime.now(IST).date(),
+                        ),
                     )
                     # Release the matching BUY's budget reservation
                     # (Cap 0 pool-wide headroom). Sync method on a
@@ -2109,6 +2131,21 @@ class LiveRuntime:
             "gtt-postback: synthetic SELL fill applied "
             "%s qty=%d @₹%.4f",
             ticker, qty, fill_price,
+        )
+        # ASETPLTFRM — mirror Piece A's cooldown-gate recording
+        # (see _ratchet_all_gtts). Read phase from the trailing
+        # manager BEFORE the caller's _on_sell_fill_trailing pops
+        # it; if it's already gone (Piece A won the race a moment
+        # earlier — this call is the idempotent no-op path), default
+        # to phase1_stop rather than silently skipping cooldown.
+        _mgr = self._trailing_managers.get(ticker)
+        _phase = _mgr.state.phase.value if _mgr is not None else 1
+        self._cooldown_history.append(
+            _HydratedClose(
+                ticker=ticker,
+                exit_reason=phase_to_cooldown_reason(_phase),
+                closed_at=datetime.now(IST).date(),
+            ),
         )
         await self._release_budget_reservation_for_gtt_exit(
             ticker=ticker, qty=qty, fill_price=fill_price,
@@ -3423,6 +3460,37 @@ class LiveRuntime:
         # interval_sec; multiple bars share a date so the date alone
         # can't tell us when a new bar starts.
         strategy_interval = self._strategy.schedule.interval
+
+        # ASETPLTFRM-471 — a ticker can be ticked here purely because
+        # it's in the user's watchlist/holdings (the live-WS
+        # subscription scope; see routes/paper.py's
+        # ``_scoped_tickers(user, "watchlist")``) while never having
+        # been part of THIS strategy's own ``allowed_tickers`` and
+        # also absent from the liquidity-screened
+        # ``stocks.universe_snapshot`` (``_bucket_by_ticker``). Such a
+        # ticker can never populate a bar-derived feature. The
+        # PR #307 gate below (inside ``if history is None:``) already
+        # recognizes this on the ticker's FIRST bar, but that gate
+        # only ever runs once — every bar after the first fell
+        # through to full feature assembly + eval_node, hitting the
+        # SAME KeyError and emitting a fresh
+        # ``signal_rejected reason=missing_feature`` WARNING +
+        # algo.events row every single eval cycle, forever (confirmed
+        # live 2026-07-06, AHLUCONT.NS / PRUDENT.NS recurring every
+        # ~60s). Checking on EVERY bar-close closes this —
+        # ``self._caps`` is refreshed each bar-close, so a ticker
+        # added to allowed_tickers mid-run still reaches the real
+        # preload attempt below on its very next bar.
+        if (
+            strategy_interval == "1d"
+            and bar.ticker not in self._bucket_by_ticker
+            and not self._positions.has_position(bar.ticker)
+            and bar.ticker
+            not in (self._caps.get("allowed_tickers") or [])
+        ):
+            self._bars_by_ticker.setdefault(bar.ticker, [])
+            return 0
+
         if strategy_interval == "1d":
             bucket_key: Any = bar_date_obj
             bucket_open_ns: int | None = None
@@ -3444,45 +3512,14 @@ class LiveRuntime:
         # right warmup module based on strategy cadence.
         history = self._bars_by_ticker.get(bar.ticker)
         if history is None:
-            # Skip expensive Kite preload for tickers that are only
-            # in the universe LTP subscription (indices, instruments
-            # not in the strategy's evaluation universe). After a
-            # full startup warmup, _bars_by_ticker already covers all
-            # bucket_by_ticker entries; an absent entry here means a
-            # pure LTP-cache token (e.g. an index) that cannot be
-            # traded. Mark it seen-and-skip so this path is O(1) on
-            # every subsequent bar for that token.
-            #
-            # Found 2026-07-04: this check ignored allowed_tickers,
-            # so a ticker added to the strategy's caps mid-run (via
-            # PUT /algo/live/caps/{id}) that ISN'T also part of the
-            # stocks.universe_snapshot rebalance (e.g. a less-liquid
-            # name never covered by that job) got permanently
-            # misclassified as an untradeable index-like token on
-            # its very first bar. Since this branch only ever runs
-            # once per ticker (guarded by ``history is None``), the
-            # ticker's bar history stayed frozen at ``[]`` for the
-            # runtime's entire lifetime — every bar-derived feature
-            # (rsi_2 included) stayed absent forever, surfacing as
-            # recurring signal_rejected reason=missing_feature
-            # events (confirmed: AHLUCONT.NS / MOVALUE.NS /
-            # PRUDENT.NS / SMALLCAP.NS, 5111 events over 5 trading
-            # days) even though stocks.ohlcv had hundreds of bars
-            # available the whole time. ``self._caps`` is refreshed
-            # every bar-close (see the fresh-caps read later in this
-            # function), so checking it here — not just at
-            # __init__-time via ``allowed_for_preload`` — closes the
-            # gap for tickers added after the runtime started.
-            if (
-                strategy_interval == "1d"
-                and bar.ticker not in self._bucket_by_ticker
-                and bar.ticker
-                not in self._positions.open_positions()
-                and bar.ticker
-                not in (self._caps.get("allowed_tickers") or [])
-            ):
-                self._bars_by_ticker[bar.ticker] = []
-                return 0
+            # The out-of-scope short-circuit above already returns
+            # early for any ticker that's neither in
+            # _bucket_by_ticker, an open position, nor in
+            # allowed_tickers — so anything reaching this point for
+            # strategy_interval == "1d" always warrants a real
+            # preload attempt. (Intraday strategies have no
+            # equivalent short-circuit above — unchanged from prior
+            # behavior — so this preload always fires for them too.)
             try:
                 if strategy_interval == "1d":
                     lazy = await asyncio.to_thread(

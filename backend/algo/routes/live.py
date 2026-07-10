@@ -41,6 +41,7 @@ from backend.algo.broker.kite_client import (
     KiteClient,
     kite_call_tolerant_async,
 )
+from backend.algo.universe.membership import get_off_universe_tickers
 from backend.cache import get_cache
 from backend.db.duckdb_engine import query_iceberg_table
 
@@ -147,6 +148,7 @@ class CapsResponse(BaseModel):
     cumulative_inr_today: Decimal
     orders_count_today: int
     gtt_limit_headroom_pct: Decimal = Decimal("0.01")
+    off_universe_tickers: list[str] = Field(default_factory=list)
 
 
 class GatesStatus(BaseModel):
@@ -1115,10 +1117,14 @@ def create_live_router() -> APIRouter:
         committed, open_count = await _compute_strategy_commitment(
             uid, strategy_id,
         )
+        off_universe = get_off_universe_tickers(
+            row.get("allowed_tickers") or [],
+        )
         row = {
             **row,
             "cumulative_inr_today": committed,
             "orders_count_today": open_count,
+            "off_universe_tickers": off_universe,
         }
         return CapsResponse(
             **{k: row[k] for k in CapsResponse.model_fields if k in row}
@@ -1146,6 +1152,10 @@ def create_live_router() -> APIRouter:
             last_walkforward_run_id=body.last_walkforward_run_id,
             gtt_limit_headroom_pct=body.gtt_limit_headroom_pct,
         )
+        off_universe = get_off_universe_tickers(
+            row.get("allowed_tickers") or [],
+        )
+        row = {**row, "off_universe_tickers": off_universe}
         return CapsResponse(
             **{k: row[k] for k in CapsResponse.model_fields if k in row}
         )

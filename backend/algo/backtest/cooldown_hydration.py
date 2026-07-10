@@ -107,14 +107,32 @@ def load_recent_failed_exits(
             f"WHERE user_id = ? "
             f"  AND strategy_id = ? "
             f"  AND mode IN ({modes_in}) "
-            f"  AND type IN ({types_in}) "
             f"  AND ts_date >= ? "
-            f"  AND COALESCE("
-            f"      json_extract_string(payload_json, "
-            f"          '$.exit_reason'), "
-            f"      json_extract_string(payload_json, "
-            f"          '$.reason')"
-            f"  ) IN ('time_stop', 'stop_loss', 'regime_exit') "
+            f"  AND ("
+            f"    ("
+            f"      type IN ({types_in}) "
+            f"      AND COALESCE("
+            f"          json_extract_string(payload_json, "
+            f"              '$.exit_reason'), "
+            f"          json_extract_string(payload_json, "
+            f"              '$.reason')"
+            f"      ) IN ('time_stop', 'stop_loss', 'regime_exit')"
+            f"    )"
+            f"    OR ("
+            # ASETPLTFRM — a GTT-triggered hard-stop/ratcheted exit
+            # (phase 1/15) is a thesis failure just like a direct
+            # stop_loss; an ATR-trail exit (phase 2) is a locked-in
+            # win and deliberately excluded (mirrors
+            # trailing_stop_manager.phase_to_cooldown_reason). This
+            # is durable rehydration for the in-process append Piece
+            # A/B now do at trigger time — without it, a runtime
+            # restart between a GTT trigger and the next signal
+            # would silently lose the cooldown entry.
+            f"      type = 'gtt_triggered' "
+            f"      AND json_extract_string(payload_json, "
+            f"          '$.phase') IN ('1', '15')"
+            f"    )"
+            f"  ) "
             f"GROUP BY ticker",
             [str(user_id), str(strategy_id), cutoff],
         )

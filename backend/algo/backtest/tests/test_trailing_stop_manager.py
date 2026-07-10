@@ -3,6 +3,7 @@ from backend.algo.strategy.ast import RiskPerTrade
 from backend.algo.backtest.trailing_stop_manager import (
     TrailingPhase,
     TrailingStopManager,
+    phase_to_cooldown_reason,
 )
 
 _RISK_V5 = RiskPerTrade(
@@ -224,3 +225,32 @@ class TestSerialization:
         mgr = _mgr()
         d = mgr.to_dict()
         assert isinstance(d["phase"], int)
+
+
+# ── phase_to_cooldown_reason — ASETPLTFRM (live GTT-trigger cooldown) ──
+
+
+class TestPhaseToCooldownReason:
+    def test_hard_stop_is_phase1_stop(self):
+        assert (
+            phase_to_cooldown_reason(TrailingPhase.HARD_STOP.value)
+            == "phase1_stop"
+        )
+
+    def test_ratcheted_is_phase1_ratchet(self):
+        assert (
+            phase_to_cooldown_reason(TrailingPhase.RATCHETED.value)
+            == "phase1_ratchet"
+        )
+
+    def test_atr_trail_is_trail_stop(self):
+        assert (
+            phase_to_cooldown_reason(TrailingPhase.ATR_TRAIL.value)
+            == "trail_stop"
+        )
+
+    def test_unknown_phase_defaults_to_phase1_stop(self):
+        # Fail-safe: an unrecognised phase value should be treated
+        # as a thesis failure (cooldown-eligible) rather than
+        # silently skipping cooldown tracking.
+        assert phase_to_cooldown_reason(99) == "phase1_stop"

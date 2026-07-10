@@ -446,12 +446,25 @@ async def kite_postback(request: Request) -> dict:
                 )
             )
             if _gtt_rt is not None and _gtt_strat_id is not None:
-                # Capture gtt_id before _on_sell_fill_trailing pops it.
+                # Capture gtt_id + phase before _on_sell_fill_trailing
+                # pops the trailing-manager state. Phase is needed on
+                # the event payload so cooldown_hydration's restart
+                # query can distinguish a thesis failure (phase 1/15)
+                # from a locked-in win (phase 2) — see
+                # trailing_stop_manager.phase_to_cooldown_reason.
                 _captured_gtt_id = (
                     _gtt_rt._gtt_ids.get(_ticker_ns, 0)
                 )
+                _captured_mgr = _gtt_rt._trailing_managers.get(
+                    _ticker_ns,
+                )
+                _captured_phase = (
+                    _captured_mgr.state.phase.value
+                    if _captured_mgr is not None else 1
+                )
                 # Apply synthetic fill to position tracker + release
-                # the matching BUY's budget reservation.
+                # the matching BUY's budget reservation + record the
+                # cooldown-gate entry.
                 await _gtt_rt._apply_gtt_triggered_sell_fill(
                     ticker=_ticker_ns,
                     fill_price=_avg,
@@ -479,6 +492,7 @@ async def kite_postback(request: Request) -> dict:
                             "gtt_id": _captured_gtt_id,
                             "dry_run": False,
                             "source": "postback",
+                            "phase": _captured_phase,
                         },
                     )
                 )

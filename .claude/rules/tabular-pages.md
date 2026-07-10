@@ -22,3 +22,5 @@ Every new table/list page (catalog ≥ 8 cols) MUST use:
 - Stale-data chip per CLAUDE.md §5.5 when aggregate uses ffill
 
 Reference: ScreenerTab, ScreenQLTab, RecommendationHistoryTab, Admin Users. → `tabular-page-pattern`
+
+**`<ColumnSelector>` popover clips if the trigger sits near the LEFT edge of a scroll container** — the popover always expands via `right-0` by default (safe when the trigger is on the right of its row, the common case). Pass `align="left"` when `<ColumnSelector>` is the FIRST child in a `justify-between` row (paired with a right-aligned download button) — found 2026-07-04 on `TradeLogTable`. → `column-selector-popover-clipping`
