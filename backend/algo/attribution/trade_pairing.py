@@ -46,8 +46,23 @@ def pair_fills_by_strategy_and_ticker(
 
     Unmatched fills (an open position with no closing SELL yet)
     are skipped — they are not "closed trades".
+
+    Strategy-less SELL fills (``strategy_id`` empty/None) are
+    attributed to the strategy that holds the open BUY for the same
+    ticker. Panic-close SELLs — and any order placed outside the
+    LiveRuntime in-flight ledger — are emitted by the postback
+    reconciler with ``strategy_id=None`` (no in-flight entry to match
+    against). Without this attribution the strategy-less SELL lands in
+    a different ``(strategy_id, ticker)`` bucket from its opening BUY
+    and never FIFO-pairs, so the exit is silently dropped from
+    ``algo.closed_trades`` (found 2026-07-10 — a panic-close left
+    three real exits invisible on the Live Performance page).
     """
-    fills_by_key: dict[tuple[str, str], list[dict]] = {}
+    # First pass: parse fills once, and record which strategies
+    # opened BUYs per ticker (earliest-buy-first, deduped) so a
+    # strategy-less SELL can inherit the owning strategy.
+    parsed: list[tuple[dict, dict, str]] = []
+    _buy_strat_ts: dict[str, list[tuple[int, str]]] = {}
     for ev in events:
         if ev.get("type") not in _FILL_TYPES:
             continue
@@ -63,7 +78,39 @@ def pair_fills_by_strategy_and_ticker(
         sym = str(raw_sym).upper().removesuffix(".NS")
         if not sym:
             continue
+        parsed.append((ev, payload, sym))
+        if payload.get("side") == "BUY":
+            sid = str(ev.get("strategy_id") or "")
+            if sid:
+                _buy_strat_ts.setdefault(sym, []).append(
+                    (int(ev.get("ts_ns") or 0), sid),
+                )
+    buy_strategies_by_ticker: dict[str, list[str]] = {}
+    for sym, pairs in _buy_strat_ts.items():
+        ordered: list[str] = []
+        for _ts, sid in sorted(pairs):
+            if sid not in ordered:
+                ordered.append(sid)
+        buy_strategies_by_ticker[sym] = ordered
+
+    fills_by_key: dict[tuple[str, str], list[dict]] = {}
+    for ev, payload, sym in parsed:
         strategy_id = str(ev.get("strategy_id") or "")
+        if not strategy_id and payload.get("side") == "SELL":
+            candidates = buy_strategies_by_ticker.get(sym, [])
+            if candidates:
+                strategy_id = candidates[0]
+                if len(candidates) > 1:
+                    _logger.warning(
+                        "trade_pairing: strategy-less SELL for %s "
+                        "(event_id=%s) — %d strategies hold this "
+                        "ticker; attributing to earliest-buying "
+                        "strategy %s",
+                        sym, ev.get("event_id"),
+                        len(candidates), strategy_id,
+                    )
+            # No BUY for this ticker → leave "" so the unmatched SELL
+            # is dropped by match_fifo rather than fabricated.
         key = (strategy_id, sym)
         fills_by_key.setdefault(key, []).append(
             {**ev, "_payload": payload},

@@ -192,6 +192,57 @@ def test_live_fills_use_price_key_not_fill_price():
     assert t["return_pct"] != 0.0
 
 
+def test_panic_close_orphan_sell_pairs_with_open_buy_strategy():
+    """Panic-close SELLs are placed outside the LiveRuntime in-flight
+    ledger, so the postback reconciler can't match them to an entry
+    and emits ``order_filled_live`` with ``strategy_id=None``. The
+    BUY that opened the position carries the real strategy_id. Without
+    orphan-SELL resolution the two land in different (strategy, ticker)
+    buckets and never FIFO-pair -> the panic exit is silently dropped
+    from algo.closed_trades and the Live Performance page never shows
+    it (found 2026-07-10, ADANIGREEN/ARVIND/CARBORUNIV). The orphan
+    SELL must inherit the strategy of the open BUY for its ticker."""
+    events = [
+        _fill(
+            strategy_id="s1", event_id="b1", symbol="CARBORUNIV",
+            side="BUY", qty=5, fill_price=100.0,
+            event_type="order_filled_live",
+            ts=datetime(2026, 7, 8, tzinfo=timezone.utc),
+        ),
+        _fill(
+            strategy_id=None, event_id="s1", symbol="CARBORUNIV",
+            side="SELL", qty=5, fill_price=110.0,
+            event_type="order_filled_live", exit_reason="panic_close",
+            ts=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+    ]
+    trades = pair_fills_by_strategy_and_ticker(events)
+    assert len(trades) == 1
+    t = trades[0]
+    assert t["strategy_id"] == "s1"
+    assert t["ticker"] == "CARBORUNIV"
+    assert t["qty"] == 5
+    assert t["realised_pnl_inr"] == 50.0
+    assert t["exit_reason"] == "panic_close"
+    assert t["buy_event_id"] == "b1"
+    assert t["sell_event_id"] == "s1"
+
+
+def test_orphan_sell_with_no_matching_buy_is_skipped():
+    """A strategy-less SELL for a ticker no strategy ever bought must
+    NOT be fabricated into a trade -- it has nothing to inherit a
+    strategy_id from and no BUY to close."""
+    events = [
+        _fill(
+            strategy_id=None, event_id="s1", symbol="ORPHAN",
+            side="SELL", qty=3, fill_price=50.0,
+            event_type="order_filled_live", exit_reason="panic_close",
+            ts=datetime(2026, 7, 10, tzinfo=timezone.utc),
+        ),
+    ]
+    assert pair_fills_by_strategy_and_ticker(events) == []
+
+
 def test_strips_ns_suffix_and_ignores_non_fill_events():
     events = [
         {
