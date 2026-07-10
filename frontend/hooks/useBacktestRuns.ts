@@ -32,6 +32,11 @@ export interface TradeRow {
   // Why this position closed:
   //   "signal"          — strategy exit rule fired (default)
   //   "stop_loss"       — per-trade stop-loss tripped
+  //   "trail_stop"      — trailing stop tripped
+  //   "time_stop"       — held past max holding period
+  //   "regime_exit"     — market-regime exit rule
+  //   "gtt_triggered"   — GTT (trailing/hard stop) order fired on Kite
+  //   "panic_close"     — panic kill-switch flatten-all
   //   "mis_square_off"  — MIS auto-square-off at day end
   //   "period_end_mtm"  — backtest force-closed at last bar
   exit_reason?: string;
