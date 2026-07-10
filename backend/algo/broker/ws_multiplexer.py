@@ -59,6 +59,8 @@ _BP_AGG_WINDOW_NS = _BP_AGG_WINDOW_S * 1_000_000_000
 _MAX_BACKOFF_S = 60.0
 _MIN_BACKOFF_S = 1.0
 _GAP_TOO_LARGE_S = 3_600  # 1 hour: abandon gap-fill
+_CONNECT_TIMEOUT_S = 15.0
+_MAX_FAST_REBUILD_ATTEMPTS = 2
 
 
 class KiteWsMultiplexer:
@@ -116,6 +118,16 @@ class KiteWsMultiplexer:
         # drops should NOT reset backoff to MIN (that causes a
         # reconnect storm and Kite rate-limiting).
         self._connect_ts: float = 0.0
+
+        # ASETPLTFRM-470 — connect-timeout watchdog. Every existing
+        # reconnect mechanism below is triggered by a Kite callback
+        # (on_close/on_error) — in the documented wedge incident, NO
+        # callback ever fired for 16 hours. This watchdog is timer-
+        # based instead, so it doesn't depend on a callback that may
+        # never come.
+        self._connect_timeout_task: asyncio.Task | None = None
+        self._rebuild_attempts: int = 0
+        self._wedge_escalated: bool = False
 
         # Backpressure-drop aggregation — per strategy_id rolling
         # counter + last-emit timestamp (ns). See _BP_AGG_WINDOW_S.
@@ -292,6 +304,14 @@ class KiteWsMultiplexer:
                 )
             self._reconnect_task = None
 
+        if self._connect_timeout_task is not None:
+            self._connect_timeout_task.cancel()
+            try:
+                await self._connect_timeout_task
+            except asyncio.CancelledError:
+                pass
+            self._connect_timeout_task = None
+
         # Cancel any in-flight gap-fill (5.2).
         if self._gap_fill_task is not None and not (
             self._gap_fill_task.done()
@@ -377,12 +397,83 @@ class KiteWsMultiplexer:
             self._kt = self._build_ticker()
             self._kt.connect(threaded=True)
             # _connected flag is set inside on_connect callback.
+            self._arm_connect_timeout()
         except Exception:
             _logger.exception(
                 "KiteWsMultiplexer: connect() raised for user=%s",
                 self._user_id,
             )
             await self._schedule_reconnect()
+
+    def _arm_connect_timeout(self) -> None:
+        """Start (or restart) the connect-timeout watchdog task."""
+        if self._connect_timeout_task is not None:
+            self._connect_timeout_task.cancel()
+        self._connect_timeout_task = asyncio.ensure_future(
+            self._watch_connect_timeout(),
+        )
+
+    async def _watch_connect_timeout(self) -> None:
+        """Timer-based wedge detection — does NOT depend on any
+        Kite callback firing. See ASETPLTFRM-470."""
+        await asyncio.sleep(_CONNECT_TIMEOUT_S)
+        if self._connected or self._closed or self._auth_failed:
+            return
+        _logger.error(
+            "KiteWsMultiplexer: connect() wedged (no callback "
+            "within %.0fs) user=%s attempt=%d",
+            _CONNECT_TIMEOUT_S, self._user_id,
+            self._rebuild_attempts + 1,
+        )
+        self._emit_ws_event("ws_connect_timeout", {
+            "timeout_s": _CONNECT_TIMEOUT_S,
+            "attempt": self._rebuild_attempts + 1,
+        })
+        await self._handle_wedge()
+
+    async def _handle_wedge(self) -> None:
+        """Shared rebuild/escalate logic for BOTH the connect-timeout
+        watchdog and the staleness watchdog (Task 2). Fast in-process
+        rebuild for the first _MAX_FAST_REBUILD_ATTEMPTS attempts,
+        then escalate (alert, once) and fall back to the existing
+        exponential-backoff reconnect loop — escalation is an
+        ALERTING signal, not a give-up signal; retries continue."""
+        if self._closed or self._auth_failed:
+            return
+        self._rebuild_attempts += 1
+        if self._rebuild_attempts <= _MAX_FAST_REBUILD_ATTEMPTS:
+            _logger.warning(
+                "KiteWsMultiplexer: fast-rebuild attempt %d/%d "
+                "user=%s",
+                self._rebuild_attempts, _MAX_FAST_REBUILD_ATTEMPTS,
+                self._user_id,
+            )
+            self._disconnect_kt()
+            try:
+                self._kt = self._build_ticker()
+                self._kt.connect(threaded=True)
+                self._arm_connect_timeout()
+            except Exception:
+                _logger.exception(
+                    "KiteWsMultiplexer: fast-rebuild connect() "
+                    "raised user=%s", self._user_id,
+                )
+                await self._handle_wedge()
+            return
+        if not self._wedge_escalated:
+            self._wedge_escalated = True
+            _logger.error(
+                "KiteWsMultiplexer: wedge ESCALATED after %d fast "
+                "rebuild attempts user=%s — falling back to "
+                "backoff reconnect loop, manual restart may be "
+                "required",
+                self._rebuild_attempts, self._user_id,
+            )
+            self._emit_ws_event("ws_wedge_escalated", {
+                "attempts": self._rebuild_attempts,
+            })
+        self._disconnect_kt()
+        self._trigger_reconnect()
 
     def _build_ticker(self):
         """Import KiteTicker and wire callbacks.
@@ -510,6 +601,11 @@ class KiteWsMultiplexer:
 
         def on_connect(ws, _resp):
             self._connected = True
+            self._rebuild_attempts = 0
+            self._wedge_escalated = False
+            if self._connect_timeout_task is not None:
+                self._connect_timeout_task.cancel()
+                self._connect_timeout_task = None
             self._connect_ts = time.monotonic()
             # Reset backoff only if the PREVIOUS connection was stable
             # (≥ 30s). A brief connect-then-drop must keep the growing
@@ -639,6 +735,7 @@ class KiteWsMultiplexer:
             try:
                 self._kt = self._build_ticker()
                 self._kt.connect(threaded=True)
+                self._arm_connect_timeout()
                 return  # on_connect callback will set connected flag
             except Exception:
                 _logger.exception(
