@@ -273,6 +273,94 @@ def test_panic_close_sell_labeled_from_submit_event_source():
     assert trades[0]["exit_reason"] == "panic_close"
 
 
+def test_gtt_triggered_sell_labeled_gtt_triggered():
+    """A GTT / trailing-stop exit must surface exit_reason=
+    'gtt_triggered', not the 'signal' fallback — a stop-out is not a
+    strategy signal. Piece A emits order_filled_live(source=gtt_poll)
+    alongside a gtt_triggered event; neither the fill nor the
+    gtt_triggered event carries an exit_reason (confirmed against real
+    events, e.g. TRITURBINE 2026-07-08)."""
+    events = [
+        _fill(
+            strategy_id="s1", event_id="b1", symbol="TRITURBINE",
+            side="BUY", qty=4, fill_price=500.0,
+            event_type="order_filled_live",
+            ts=datetime(2026, 7, 7, tzinfo=timezone.utc),
+        ),
+        {
+            "event_id": "f1", "strategy_id": "s1",
+            "type": "order_filled_live",
+            "payload_json": json.dumps({
+                "symbol": "TRITURBINE", "side": "SELL", "qty": 4,
+                "price": "490.0", "source": "gtt_poll",
+            }),
+            "ts_ns": _ts(datetime(2026, 7, 8, tzinfo=timezone.utc)),
+        },
+        {
+            "event_id": "g1", "strategy_id": "s1",
+            "type": "gtt_triggered",
+            "payload_json": json.dumps({
+                "ticker": "TRITURBINE.NS", "source": "gtt_poll",
+            }),
+            "ts_ns": _ts(datetime(2026, 7, 8, tzinfo=timezone.utc)),
+        },
+    ]
+    trades = pair_fills_by_strategy_and_ticker(events)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "gtt_triggered"
+
+
+def test_panic_close_wins_over_spurious_gtt_triggered_event():
+    """Panic-close deletes GTTs on Kite but not the runtime's
+    in-memory _gtt_ids, so the panic fill's postback ALSO trips a
+    spurious gtt_triggered event for the same ticker+date (observed
+    2026-07-10 for ADANIGREEN/ARVIND/CARBORUNIV). The kite_order_id
+    panic join must take priority so these are labeled panic_close,
+    not gtt_triggered."""
+    events = [
+        _fill(
+            strategy_id="s1", event_id="b1", symbol="ADANIGREEN",
+            side="BUY", qty=2, fill_price=1485.3,
+            event_type="order_filled_live",
+            ts=datetime(2026, 7, 9, tzinfo=timezone.utc),
+        ),
+        {
+            "event_id": "sub1", "strategy_id": None,
+            "type": "order_submitted_live",
+            "payload_json": json.dumps({
+                "symbol": "ADANIGREEN", "side": "SELL", "qty": 2,
+                "kite_order_id": "K1", "source": "panic_close",
+            }),
+            "ts_ns": _ts(datetime(2026, 7, 10, tzinfo=timezone.utc)),
+        },
+        {
+            "event_id": "f1", "strategy_id": None,
+            "type": "order_filled_live",
+            "payload_json": json.dumps({
+                "symbol": "ADANIGREEN", "side": "SELL", "qty": 2,
+                "price": "1532.1", "kite_order_id": "K1",
+                "source": "kite_postback",
+            }),
+            "ts_ns": _ts(
+                datetime(2026, 7, 10, 0, 1, tzinfo=timezone.utc)
+            ),
+        },
+        {
+            "event_id": "g1", "strategy_id": "s1",
+            "type": "gtt_triggered",
+            "payload_json": json.dumps({
+                "ticker": "ADANIGREEN.NS", "source": "postback",
+            }),
+            "ts_ns": _ts(
+                datetime(2026, 7, 10, 0, 1, tzinfo=timezone.utc)
+            ),
+        },
+    ]
+    trades = pair_fills_by_strategy_and_ticker(events)
+    assert len(trades) == 1
+    assert trades[0]["exit_reason"] == "panic_close"
+
+
 def test_orphan_sell_with_no_matching_buy_is_skipped():
     """A strategy-less SELL for a ticker no strategy ever bought must
     NOT be fabricated into a trade -- it has nothing to inherit a

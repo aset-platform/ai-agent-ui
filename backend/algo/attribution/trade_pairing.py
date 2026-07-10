@@ -69,6 +69,11 @@ def pair_fills_by_strategy_and_ticker(
     parsed: list[tuple[dict, dict, str]] = []
     _buy_strat_ts: dict[str, list[tuple[int, str]]] = {}
     panic_order_ids: set[str] = set()
+    # (ticker, closed-date) keys where a GTT / trailing-stop fired.
+    # Both exit pieces emit a gtt_triggered event (Piece A source
+    # gtt_poll, Piece B source postback), so a SELL fill whose
+    # (ticker, date) matches one is a stop-out, not a strategy signal.
+    gtt_exit_keys: set[tuple[str, date]] = set()
     for ev in events:
         etype = ev.get("type")
         if etype == "order_submitted_live":
@@ -80,6 +85,18 @@ def pair_fills_by_strategy_and_ticker(
                 koid = str(sub_payload.get("kite_order_id") or "")
                 if koid:
                     panic_order_ids.add(koid)
+            continue
+        if etype == "gtt_triggered":
+            try:
+                gtt_payload = json.loads(ev.get("payload_json") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                gtt_payload = {}
+            graw = gtt_payload.get("ticker") or gtt_payload.get("symbol")
+            gsym = str(graw or "").upper().removesuffix(".NS")
+            if gsym:
+                gtt_exit_keys.add(
+                    (gsym, _ts_ns_to_date(int(ev.get("ts_ns") or 0))),
+                )
             continue
         if etype not in _FILL_TYPES:
             continue
@@ -193,7 +210,11 @@ def pair_fills_by_strategy_and_ticker(
                 "realised_pnl_inr": realised_pnl_inr,
                 "return_pct": return_pct,
                 "exit_reason": _resolve_exit_reason(
-                    sell_fill["_payload"], panic_order_ids,
+                    sell_fill["_payload"],
+                    panic_order_ids,
+                    gtt_exit_keys,
+                    sym,
+                    _ts_ns_to_date(lot["sell_ts_ns"]),
                 ),
                 "dry_run": bool(
                     sell_fill["_payload"].get("dry_run", False),
@@ -207,16 +228,27 @@ def pair_fills_by_strategy_and_ticker(
 def _resolve_exit_reason(
     sell_payload: dict[str, Any],
     panic_order_ids: set[str],
+    gtt_exit_keys: set[tuple[str, date]],
+    sym: str,
+    closed_at: date,
 ) -> str:
     """Best-effort exit-reason label for a SELL fill.
 
-    Priority: an explicit ``exit_reason`` on the fill payload wins;
-    otherwise a fill whose ``kite_order_id`` matches a panic-close
-    submit event is labelled ``panic_close``; everything else falls
-    back to ``signal`` (the pre-existing default). GTT-triggered and
-    normal-signal live fills carry no exit_reason either and continue
-    to fall through to ``signal`` unchanged — this only rescues the
-    panic-close case the user can otherwise never see labelled.
+    Priority (most specific first):
+
+    1. An explicit ``exit_reason`` on the fill payload wins (backtest
+       trade_list rows carry real reasons like ``stop_loss``).
+    2. A fill whose ``kite_order_id`` matches a panic-close submit
+       event → ``panic_close``. Checked BEFORE the GTT rule because
+       panic-close deletes GTTs on Kite but not the runtime's
+       in-memory state, so a panic fill's postback also trips a
+       spurious ``gtt_triggered`` event for the same ticker+date.
+    3. A GTT / trailing-stop fill → ``gtt_triggered``: either the
+       fill's own ``source`` is ``gtt_poll`` (Piece A) or a
+       ``gtt_triggered`` event exists for the same (ticker, date)
+       (Piece B, whose postback fill is source ``kite_postback``).
+    4. Otherwise ``signal`` (the pre-existing default — genuine
+       strategy-rule exits and anything unrecognised).
     """
     explicit = sell_payload.get("exit_reason")
     if explicit:
@@ -224,6 +256,11 @@ def _resolve_exit_reason(
     koid = str(sell_payload.get("kite_order_id") or "")
     if koid and koid in panic_order_ids:
         return "panic_close"
+    if (
+        sell_payload.get("source") == "gtt_poll"
+        or (sym, closed_at) in gtt_exit_keys
+    ):
+        return "gtt_triggered"
     return "signal"
 
 

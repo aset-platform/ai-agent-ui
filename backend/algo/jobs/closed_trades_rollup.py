@@ -193,7 +193,7 @@ def _fetch_fill_events(
         "FROM events "
         f"WHERE ({modes_clause}) "
         "  AND type IN ('order_filled', 'order_filled_live', "
-        "               'order_submitted_live') "
+        "               'order_submitted_live', 'gtt_triggered') "
         "  AND ts_date >= ? AND ts_date <= ? "
         "ORDER BY ts_ns"
     )
