@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pandas as pd
-
 from entry_strength_score import (
     absorption_volume_score,
     atr_expansion_score,
@@ -219,7 +218,10 @@ def test_atr_expansion_insufficient_history_returns_none():
 
 def test_compute_ess_gated_row_still_has_score_and_reason():
     result = compute_ess(
-        open_=100, high=100, low=80, close=82,  # >10% below SMA50 fixture
+        open_=100,
+        high=100,
+        low=80,
+        close=82,  # >10% below SMA50 fixture
         volume_series=_series([1_000_000.0] * 21),
         sma50_series=_series([100.0] * 11),
         atr_series=_series([2.0] * 11),
@@ -235,7 +237,10 @@ def test_compute_ess_gated_row_still_has_score_and_reason():
 
 def test_compute_ess_healthy_pullback_scores_high():
     result = compute_ess(
-        open_=120, high=120, low=112, close=119,
+        open_=120,
+        high=120,
+        low=112,
+        close=119,
         volume_series=_series([1_000_000.0] * 20 + [1_800_000.0]),
         sma50_series=_series([100.0 + i * 0.05 for i in range(11)]),
         atr_series=_series([2.0] * 10 + [2.1]),
@@ -252,7 +257,10 @@ def test_compute_ess_missing_factor_renormalizes():
     # Too little history for trend_stability/selling_deceleration/roc5/
     # atr_expansion — only absorption+volume and sma50_proximity available.
     result = compute_ess(
-        open_=120, high=120, low=112, close=119,
+        open_=120,
+        high=120,
+        low=112,
+        close=119,
         volume_series=_series([1_000_000.0] * 20 + [1_800_000.0]),
         sma50_series=_series([100.0]),
         atr_series=_series([2.0]),

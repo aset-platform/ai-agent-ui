@@ -38,12 +38,18 @@ def selling_absorption_score(
 # (absorption_band, volume_band) -> score. Illustrative starting grid —
 # refine once real allowed_tickers outcome data accumulates (see spec §6.1).
 _ABSORPTION_VOLUME_GRID: dict[tuple[str, str], float] = {
-    ("weak", "low"): 55, ("weak", "normal"): 45,
-    ("weak", "elevated"): 25, ("weak", "extreme"): 10,
-    ("neutral", "low"): 65, ("neutral", "normal"): 70,
-    ("neutral", "elevated"): 55, ("neutral", "extreme"): 35,
-    ("strong", "low"): 70, ("strong", "normal"): 85,
-    ("strong", "elevated"): 95, ("strong", "extreme"): 80,
+    ("weak", "low"): 55,
+    ("weak", "normal"): 45,
+    ("weak", "elevated"): 25,
+    ("weak", "extreme"): 10,
+    ("neutral", "low"): 65,
+    ("neutral", "normal"): 70,
+    ("neutral", "elevated"): 55,
+    ("neutral", "extreme"): 35,
+    ("strong", "low"): 70,
+    ("strong", "normal"): 85,
+    ("strong", "elevated"): 95,
+    ("strong", "extreme"): 80,
 }
 
 
@@ -53,7 +59,7 @@ def relative_volume_ratio(
     if len(volume_series) < window + 1:
         return None
     today = float(volume_series.iloc[-1])
-    avg = float(volume_series.iloc[-(window + 1):-1].mean())
+    avg = float(volume_series.iloc[-(window + 1) : -1].mean())
     if avg <= 0:
         return None
     return round(today / avg, 4)
@@ -87,8 +93,12 @@ def absorption_volume_score(
 
 
 _SMA50_PROXIMITY_POINTS: list[tuple[float, float]] = [
-    (0.0, 60.0), (-2.0, 95.0), (-3.0, 100.0),
-    (-5.0, 90.0), (-7.0, 70.0), (-10.0, 40.0),
+    (0.0, 60.0),
+    (-2.0, 95.0),
+    (-3.0, 100.0),
+    (-5.0, 90.0),
+    (-7.0, 70.0),
+    (-10.0, 40.0),
 ]
 
 
@@ -132,7 +142,10 @@ def check_hard_gates(
 
 
 _TREND_STABILITY_POINTS: list[tuple[float, float]] = [
-    (-3.0, 20.0), (0.0, 50.0), (1.0, 80.0), (3.0, 100.0),
+    (-3.0, 20.0),
+    (0.0, 50.0),
+    (1.0, 80.0),
+    (3.0, 100.0),
 ]
 
 
@@ -150,7 +163,10 @@ def trend_stability_score(
 
 
 _SELLING_DECELERATION_POINTS: list[tuple[float, float]] = [
-    (-2.0, 20.0), (0.0, 50.0), (1.0, 80.0), (3.0, 100.0),
+    (-2.0, 20.0),
+    (0.0, 50.0),
+    (1.0, 80.0),
+    (3.0, 100.0),
 ]
 
 
@@ -165,14 +181,15 @@ def selling_deceleration_score(
     last2 = returns.iloc[-2:].mean()
     prev2 = returns.iloc[-4:-2].mean()
     deceleration = float(last2 - prev2)
-    return _piecewise_closeness(
-        _SELLING_DECELERATION_POINTS, deceleration
-    )
+    return _piecewise_closeness(_SELLING_DECELERATION_POINTS, deceleration)
 
 
 _ROC5_POINTS: list[tuple[float, float]] = [
-    (0.0, 90.0), (-4.0, 100.0), (-8.0, 70.0),
-    (-12.0, 40.0), (-18.0, 10.0),
+    (0.0, 90.0),
+    (-4.0, 100.0),
+    (-8.0, 70.0),
+    (-12.0, 40.0),
+    (-18.0, 10.0),
 ]
 
 
@@ -190,8 +207,11 @@ def roc5_score(
 
 
 _ATR_EXPANSION_POINTS: list[tuple[float, float]] = [
-    (0.7, 90.0), (1.0, 90.0), (1.3, 60.0),
-    (1.6, 30.0), (2.0, 10.0),
+    (0.7, 90.0),
+    (1.0, 90.0),
+    (1.3, 60.0),
+    (1.6, 30.0),
+    (2.0, 10.0),
 ]
 
 
@@ -254,9 +274,7 @@ def compute_ess(
         ),
         "sma50_proximity_score": sma50_proximity_score(dist_sma50_pct),
         "trend_stability_score": trend_stability_score(sma50_series),
-        "selling_deceleration_score": selling_deceleration_score(
-            close_series
-        ),
+        "selling_deceleration_score": selling_deceleration_score(close_series),
         "roc5_score": None,
         "atr_expansion_score": atr_expansion_score(atr_series),
     }
@@ -271,9 +289,7 @@ def compute_ess(
     ess_score: float | None
     if available:
         total_weight = sum(w for _, w in available)
-        ess_score = round(
-            sum(v * w for v, w in available) / total_weight, 4
-        )
+        ess_score = round(sum(v * w for v, w in available) / total_weight, 4)
     else:
         ess_score = None
 
