@@ -185,3 +185,22 @@ def roc5_score(
         return None, None
     raw = round((today - past) / past * 100, 4)
     return raw, _piecewise_closeness(_ROC5_POINTS, raw)
+
+
+_ATR_EXPANSION_POINTS: list[tuple[float, float]] = [
+    (0.7, 90.0), (1.0, 90.0), (1.3, 60.0),
+    (1.6, 30.0), (2.0, 10.0),
+]
+
+
+def atr_expansion_score(
+    atr_series: pd.Series, lookback: int = 10
+) -> float | None:
+    if len(atr_series) < lookback + 1:
+        return None
+    today = float(atr_series.iloc[-1])
+    past = float(atr_series.iloc[-(lookback + 1)])
+    if past <= 0:
+        return None
+    ratio = today / past
+    return _piecewise_closeness(_ATR_EXPANSION_POINTS, ratio)

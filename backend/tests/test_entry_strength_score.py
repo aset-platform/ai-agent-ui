@@ -4,6 +4,7 @@ import pandas as pd
 
 from entry_strength_score import (
     absorption_volume_score,
+    atr_expansion_score,
     check_hard_gates,
     close_location_value,
     lower_wick_ratio,
@@ -194,3 +195,18 @@ def test_roc5_falling_knife_scores_low():
 def test_roc5_insufficient_history_returns_none():
     closes = pd.Series([100.0, 99.0])
     assert roc5_score(closes) == (None, None)
+
+
+def test_atr_expansion_stable_scores_high():
+    atr = pd.Series([2.0] * 10 + [1.9])  # ratio 0.95, within flat plateau
+    assert atr_expansion_score(atr, lookback=10) == 90
+
+
+def test_atr_expansion_exploding_scores_low():
+    atr = pd.Series([2.0] * 10 + [4.0])  # ratio 2.0
+    assert atr_expansion_score(atr, lookback=10) == 10
+
+
+def test_atr_expansion_insufficient_history_returns_none():
+    atr = pd.Series([2.0, 2.1])
+    assert atr_expansion_score(atr, lookback=10) is None
