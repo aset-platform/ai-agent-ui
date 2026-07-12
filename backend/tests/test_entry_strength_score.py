@@ -70,4 +70,6 @@ def test_absorption_volume_weak_and_elevated_scores_worst():
 
 
 def test_absorption_volume_none_rel_volume_returns_none():
-    assert absorption_volume_score(absorption_score=85, rel_volume=None) is None
+    assert (
+        absorption_volume_score(absorption_score=85, rel_volume=None) is None
+    )
