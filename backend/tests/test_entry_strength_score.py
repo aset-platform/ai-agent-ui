@@ -9,6 +9,7 @@ from entry_strength_score import (
     lower_wick_ratio,
     relative_volume_ratio,
     selling_absorption_score,
+    selling_deceleration_score,
     sma50_proximity_score,
     trend_stability_score,
 )
@@ -154,3 +155,22 @@ def test_trend_stability_declining_sma50_scores_low():
 def test_trend_stability_insufficient_history_returns_none():
     sma50 = pd.Series([100.0, 101.0])
     assert trend_stability_score(sma50, lookback=10) is None
+
+
+def test_selling_deceleration_improving_scores_high():
+    # Daily closes implying returns roughly -4%,-3%,-1%,-0.3%
+    closes = pd.Series([104.5, 100.32, 97.31, 96.34, 96.05])
+    score = selling_deceleration_score(closes)
+    assert score > 70
+
+
+def test_selling_deceleration_accelerating_scores_low():
+    # Returns roughly -1%,-1%,-4%,-4%
+    closes = pd.Series([100.0, 99.0, 98.01, 94.09, 90.33])
+    score = selling_deceleration_score(closes)
+    assert score < 30
+
+
+def test_selling_deceleration_insufficient_history_returns_none():
+    closes = pd.Series([100.0, 99.0, 98.0])
+    assert selling_deceleration_score(closes) is None

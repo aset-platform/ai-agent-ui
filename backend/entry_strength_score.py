@@ -145,3 +145,24 @@ def trend_stability_score(
         return None
     slope_pct = (today - past) / past * 100
     return _piecewise_closeness(_TREND_STABILITY_POINTS, slope_pct)
+
+
+_SELLING_DECELERATION_POINTS: list[tuple[float, float]] = [
+    (-2.0, 20.0), (0.0, 50.0), (1.0, 80.0), (3.0, 100.0),
+]
+
+
+def selling_deceleration_score(
+    close_series: pd.Series,
+) -> float | None:
+    if len(close_series) < 5:
+        return None
+    returns = close_series.pct_change().dropna() * 100
+    if len(returns) < 4:
+        return None
+    last2 = returns.iloc[-2:].mean()
+    prev2 = returns.iloc[-4:-2].mean()
+    deceleration = float(last2 - prev2)
+    return _piecewise_closeness(
+        _SELLING_DECELERATION_POINTS, deceleration
+    )
