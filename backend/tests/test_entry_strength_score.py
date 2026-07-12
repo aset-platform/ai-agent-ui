@@ -90,26 +90,36 @@ def test_sma50_proximity_none_when_missing():
     assert sma50_proximity_score(None) is None
 
 
+def test_sma50_proximity_extrapolates_below_lowest_point():
+    # Beyond -10.0, the piecewise function continues the downward slope
+    # from the (-10.0, 40) → (-7.0, 70) segment. Verify extrapolation
+    # works (result < value at -10.0) rather than flat/clamped early.
+    result = sma50_proximity_score(-15.0)
+    assert result < sma50_proximity_score(-10.0)
+    assert 0.0 <= result <= 100.0
+
+
+def test_sma50_proximity_extrapolates_above_highest_point_and_clamps():
+    # Above 0.0 (price far above SMA50), linear extrapolation from
+    # (-2.0, 95) → (0.0, 60) segment goes deeply negative. Clamp to 0
+    # verifies the boundary condition (not just within-range behavior).
+    assert sma50_proximity_score(50.0) == 0.0
+
+
 def test_hard_gate_rejects_price_below_sma200():
-    passed, reason = check_hard_gates(
-        close=90, sma200=100, dist_sma50_pct=-1
-    )
+    passed, reason = check_hard_gates(close=90, sma200=100, dist_sma50_pct=-1)
     assert passed is False
     assert reason == "price_below_sma200"
 
 
 def test_hard_gate_rejects_extended_below_sma50():
-    passed, reason = check_hard_gates(
-        close=100, sma200=90, dist_sma50_pct=-12
-    )
+    passed, reason = check_hard_gates(close=100, sma200=90, dist_sma50_pct=-12)
     assert passed is False
     assert reason == "sma50_extended_beyond_10pct"
 
 
 def test_hard_gate_passes_healthy_pullback():
-    passed, reason = check_hard_gates(
-        close=100, sma200=90, dist_sma50_pct=-3
-    )
+    passed, reason = check_hard_gates(close=100, sma200=90, dist_sma50_pct=-3)
     assert passed is True
     assert reason is None
 
