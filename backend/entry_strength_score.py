@@ -166,3 +166,22 @@ def selling_deceleration_score(
     return _piecewise_closeness(
         _SELLING_DECELERATION_POINTS, deceleration
     )
+
+
+_ROC5_POINTS: list[tuple[float, float]] = [
+    (0.0, 90.0), (-4.0, 100.0), (-8.0, 70.0),
+    (-12.0, 40.0), (-18.0, 10.0),
+]
+
+
+def roc5_score(
+    close_series: pd.Series,
+) -> tuple[float | None, float | None]:
+    if len(close_series) < 6:
+        return None, None
+    today = float(close_series.iloc[-1])
+    past = float(close_series.iloc[-6])
+    if past <= 0:
+        return None, None
+    raw = round((today - past) / past * 100, 4)
+    return raw, _piecewise_closeness(_ROC5_POINTS, raw)

@@ -8,6 +8,7 @@ from entry_strength_score import (
     close_location_value,
     lower_wick_ratio,
     relative_volume_ratio,
+    roc5_score,
     selling_absorption_score,
     selling_deceleration_score,
     sma50_proximity_score,
@@ -174,3 +175,22 @@ def test_selling_deceleration_accelerating_scores_low():
 def test_selling_deceleration_insufficient_history_returns_none():
     closes = pd.Series([100.0, 99.0, 98.0])
     assert selling_deceleration_score(closes) is None
+
+
+def test_roc5_healthy_dip_scores_high():
+    closes = pd.Series([100.0] * 5 + [96.0])  # -4%
+    raw, score = roc5_score(closes)
+    assert raw == -4.0
+    assert score == 100
+
+
+def test_roc5_falling_knife_scores_low():
+    closes = pd.Series([100.0] * 5 + [82.0])  # -18%
+    raw, score = roc5_score(closes)
+    assert raw == -18.0
+    assert score == 10
+
+
+def test_roc5_insufficient_history_returns_none():
+    closes = pd.Series([100.0, 99.0])
+    assert roc5_score(closes) == (None, None)
