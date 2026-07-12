@@ -7,6 +7,7 @@ from entry_strength_score import (
     atr_expansion_score,
     check_hard_gates,
     close_location_value,
+    compute_ess,
     lower_wick_ratio,
     relative_volume_ratio,
     roc5_score,
@@ -15,6 +16,10 @@ from entry_strength_score import (
     sma50_proximity_score,
     trend_stability_score,
 )
+
+
+def _series(vals: list[float]) -> pd.Series:
+    return pd.Series(vals)
 
 
 def test_clv_close_at_high_is_one():
@@ -210,3 +215,50 @@ def test_atr_expansion_exploding_scores_low():
 def test_atr_expansion_insufficient_history_returns_none():
     atr = pd.Series([2.0, 2.1])
     assert atr_expansion_score(atr, lookback=10) is None
+
+
+def test_compute_ess_gated_row_still_has_score_and_reason():
+    result = compute_ess(
+        open_=100, high=100, low=80, close=82,  # >10% below SMA50 fixture
+        volume_series=_series([1_000_000.0] * 21),
+        sma50_series=_series([100.0] * 11),
+        atr_series=_series([2.0] * 11),
+        close_series=_series([100.0] * 6),
+        sma200=70,
+        dist_sma50_pct=-18.0,
+    )
+    assert result.gate_passed is False
+    assert result.gate_reason == "sma50_extended_beyond_10pct"
+    # still computed for review, per spec §3
+    assert result.ess_score is not None
+
+
+def test_compute_ess_healthy_pullback_scores_high():
+    result = compute_ess(
+        open_=120, high=120, low=112, close=119,
+        volume_series=_series([1_000_000.0] * 20 + [1_800_000.0]),
+        sma50_series=_series([100.0 + i * 0.05 for i in range(11)]),
+        atr_series=_series([2.0] * 10 + [2.1]),
+        close_series=_series([104.0, 100.0, 97.5, 96.5, 96.2, 96.0]),
+        sma200=90,
+        dist_sma50_pct=-3.0,
+    )
+    assert result.gate_passed is True
+    assert result.ess_score is not None
+    assert result.ess_score > 60
+
+
+def test_compute_ess_missing_factor_renormalizes():
+    # Too little history for trend_stability/selling_deceleration/roc5/
+    # atr_expansion — only absorption+volume and sma50_proximity available.
+    result = compute_ess(
+        open_=120, high=120, low=112, close=119,
+        volume_series=_series([1_000_000.0] * 20 + [1_800_000.0]),
+        sma50_series=_series([100.0]),
+        atr_series=_series([2.0]),
+        close_series=_series([100.0]),
+        sma200=90,
+        dist_sma50_pct=-3.0,
+    )
+    assert result.ess_score is not None
+    assert result.trend_stability_score is None

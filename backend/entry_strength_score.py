@@ -3,6 +3,8 @@ Stocks, orthogonal to the existing Quality Score."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pandas as pd
 
 
@@ -204,3 +206,86 @@ def atr_expansion_score(
         return None
     ratio = today / past
     return _piecewise_closeness(_ATR_EXPANSION_POINTS, ratio)
+
+
+_ESS_WEIGHTS: list[tuple[str, float]] = [
+    ("absorption_volume_score", 0.30),
+    ("sma50_proximity_score", 0.20),
+    ("trend_stability_score", 0.15),
+    ("selling_deceleration_score", 0.15),
+    ("roc5_score", 0.12),
+    ("atr_expansion_score", 0.08),
+]
+
+
+@dataclass
+class EssResult:
+    ess_score: float | None
+    gate_passed: bool
+    gate_reason: str | None
+    absorption_volume_score: float | None
+    sma50_proximity_score: float | None
+    trend_stability_score: float | None
+    selling_deceleration_score: float | None
+    roc5_score: float | None
+    roc5_raw_pct: float | None
+    atr_expansion_score: float | None
+
+
+def compute_ess(
+    open_: float,
+    high: float,
+    low: float,
+    close: float,
+    volume_series: pd.Series,
+    sma50_series: pd.Series,
+    atr_series: pd.Series,
+    close_series: pd.Series,
+    sma200: float | None,
+    dist_sma50_pct: float | None,
+) -> EssResult:
+    gate_passed, gate_reason = check_hard_gates(close, sma200, dist_sma50_pct)
+
+    absorption = selling_absorption_score(open_, high, low, close)
+    rel_vol = relative_volume_ratio(volume_series)
+    parts = {
+        "absorption_volume_score": absorption_volume_score(
+            absorption, rel_vol
+        ),
+        "sma50_proximity_score": sma50_proximity_score(dist_sma50_pct),
+        "trend_stability_score": trend_stability_score(sma50_series),
+        "selling_deceleration_score": selling_deceleration_score(
+            close_series
+        ),
+        "roc5_score": None,
+        "atr_expansion_score": atr_expansion_score(atr_series),
+    }
+    roc5_raw, roc5_val = roc5_score(close_series)
+    parts["roc5_score"] = roc5_val
+
+    available = [
+        (parts[name], weight)
+        for name, weight in _ESS_WEIGHTS
+        if parts[name] is not None
+    ]
+    ess_score: float | None
+    if available:
+        total_weight = sum(w for _, w in available)
+        ess_score = round(
+            sum(v * w for v, w in available) / total_weight, 4
+        )
+    else:
+        ess_score = None
+
+    return EssResult(
+        ess_score=ess_score,
+        gate_passed=gate_passed,
+        gate_reason=gate_reason,
+        absorption_volume_score=parts["absorption_volume_score"],
+        sma50_proximity_score=parts["sma50_proximity_score"],
+        trend_stability_score=parts["trend_stability_score"],
+        selling_deceleration_score=parts["selling_deceleration_score"],
+        roc5_score=parts["roc5_score"],
+        roc5_raw_pct=roc5_raw,
+        atr_expansion_score=parts["atr_expansion_score"],
+    )
