@@ -127,3 +127,21 @@ def check_hard_gates(
     if dist_sma50_pct is not None and dist_sma50_pct < -10.0:
         return False, "sma50_extended_beyond_10pct"
     return True, None
+
+
+_TREND_STABILITY_POINTS: list[tuple[float, float]] = [
+    (-3.0, 20.0), (0.0, 50.0), (1.0, 80.0), (3.0, 100.0),
+]
+
+
+def trend_stability_score(
+    sma50_series: pd.Series, lookback: int = 10
+) -> float | None:
+    if len(sma50_series) < lookback + 1:
+        return None
+    today = float(sma50_series.iloc[-1])
+    past = float(sma50_series.iloc[-(lookback + 1)])
+    if past <= 0:
+        return None
+    slope_pct = (today - past) / past * 100
+    return _piecewise_closeness(_TREND_STABILITY_POINTS, slope_pct)

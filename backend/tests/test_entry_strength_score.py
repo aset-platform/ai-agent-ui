@@ -10,6 +10,7 @@ from entry_strength_score import (
     relative_volume_ratio,
     selling_absorption_score,
     sma50_proximity_score,
+    trend_stability_score,
 )
 
 
@@ -131,3 +132,25 @@ def test_hard_gate_missing_data_defaults_pass():
     )
     assert passed is True
     assert reason is None
+
+
+def test_trend_stability_rising_sma50_scores_high():
+    sma50 = pd.Series([100.0 + i * 0.10 for i in range(11)])
+    score = trend_stability_score(sma50, lookback=10)
+    assert score > 70
+
+
+def test_trend_stability_flat_sma50_scores_mid():
+    sma50 = pd.Series([100.0] * 11)
+    assert trend_stability_score(sma50, lookback=10) == 50
+
+
+def test_trend_stability_declining_sma50_scores_low():
+    sma50 = pd.Series([100.0 - i * 0.4 for i in range(11)])
+    score = trend_stability_score(sma50, lookback=10)
+    assert score < 30
+
+
+def test_trend_stability_insufficient_history_returns_none():
+    sma50 = pd.Series([100.0, 101.0])
+    assert trend_stability_score(sma50, lookback=10) is None
