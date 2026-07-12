@@ -97,3 +97,6 @@ test-results/
 # Sprint 9 source-of-design CSV fixtures (kept locally for
 # reference; data is now ingested via the live pipeline)
 csv/
+
+# Git worktrees for isolated feature-branch execution
+.worktrees/
