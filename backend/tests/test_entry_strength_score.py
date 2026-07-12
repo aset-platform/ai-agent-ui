@@ -4,10 +4,12 @@ import pandas as pd
 
 from entry_strength_score import (
     absorption_volume_score,
+    check_hard_gates,
     close_location_value,
     lower_wick_ratio,
     relative_volume_ratio,
     selling_absorption_score,
+    sma50_proximity_score,
 )
 
 
@@ -73,3 +75,49 @@ def test_absorption_volume_none_rel_volume_returns_none():
     assert (
         absorption_volume_score(absorption_score=85, rel_volume=None) is None
     )
+
+
+def test_sma50_proximity_peaks_near_ideal_range():
+    assert sma50_proximity_score(-3.0) == 100
+    assert sma50_proximity_score(-2.0) == 95
+
+
+def test_sma50_proximity_drops_at_extension():
+    assert sma50_proximity_score(-10.0) == 40
+
+
+def test_sma50_proximity_none_when_missing():
+    assert sma50_proximity_score(None) is None
+
+
+def test_hard_gate_rejects_price_below_sma200():
+    passed, reason = check_hard_gates(
+        close=90, sma200=100, dist_sma50_pct=-1
+    )
+    assert passed is False
+    assert reason == "price_below_sma200"
+
+
+def test_hard_gate_rejects_extended_below_sma50():
+    passed, reason = check_hard_gates(
+        close=100, sma200=90, dist_sma50_pct=-12
+    )
+    assert passed is False
+    assert reason == "sma50_extended_beyond_10pct"
+
+
+def test_hard_gate_passes_healthy_pullback():
+    passed, reason = check_hard_gates(
+        close=100, sma200=90, dist_sma50_pct=-3
+    )
+    assert passed is True
+    assert reason is None
+
+
+def test_hard_gate_missing_data_defaults_pass():
+    # Can't evaluate a gate without data — don't reject on missing inputs.
+    passed, reason = check_hard_gates(
+        close=100, sma200=None, dist_sma50_pct=None
+    )
+    assert passed is True
+    assert reason is None

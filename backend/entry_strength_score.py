@@ -82,3 +82,48 @@ def absorption_volume_score(
         return None
     key = (_absorption_band(absorption_score), _volume_band(rel_volume))
     return _ABSORPTION_VOLUME_GRID[key]
+
+
+_SMA50_PROXIMITY_POINTS: list[tuple[float, float]] = [
+    (0.0, 60.0), (-2.0, 95.0), (-3.0, 100.0),
+    (-5.0, 90.0), (-7.0, 70.0), (-10.0, 40.0),
+]
+
+
+def _piecewise_closeness(
+    points: list[tuple[float, float]], value: float
+) -> float:
+    pts = sorted(points, key=lambda p: p[0])
+    if value <= pts[0][0]:
+        (x0, y0), (x1, y1) = pts[0], pts[1]
+    elif value >= pts[-1][0]:
+        (x0, y0), (x1, y1) = pts[-2], pts[-1]
+    else:
+        x0 = y0 = x1 = y1 = None
+        for i in range(len(pts) - 1):
+            if pts[i][0] <= value <= pts[i + 1][0]:
+                (x0, y0), (x1, y1) = pts[i], pts[i + 1]
+                break
+    slope = (y1 - y0) / (x1 - x0)
+    result = y0 + slope * (value - x0)
+    return round(max(0.0, min(100.0, result)), 4)
+
+
+def sma50_proximity_score(
+    dist_sma50_pct: float | None,
+) -> float | None:
+    if dist_sma50_pct is None:
+        return None
+    return _piecewise_closeness(_SMA50_PROXIMITY_POINTS, dist_sma50_pct)
+
+
+def check_hard_gates(
+    close: float,
+    sma200: float | None,
+    dist_sma50_pct: float | None,
+) -> tuple[bool, str | None]:
+    if sma200 is not None and close < sma200:
+        return False, "price_below_sma200"
+    if dist_sma50_pct is not None and dist_sma50_pct < -10.0:
+        return False, "sma50_extended_beyond_10pct"
+    return True, None
