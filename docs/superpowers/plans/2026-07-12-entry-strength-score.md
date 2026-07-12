@@ -1602,6 +1602,7 @@ from sqlalchemy import text
 
 from backend.db.engine import disposable_pg_session
 from backend.iceberg_reader import query_iceberg_df  # confirm exact import
+from backend.tools._analysis_indicators import _calculate_technical_indicators
 from entry_strength_score import compute_ess, compute_nifty_market_context
 
 _logger = logging.getLogger(__name__)
@@ -1663,20 +1664,42 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
         grp = grp.sort_values("date")
         if len(grp) < 6:
             continue
+
+        # MUST use the exact same indicator computation the watchlist
+        # route uses (Task 11), not an approximation — otherwise the
+        # persisted snapshot silently disagrees with what the page
+        # showed that day, which breaks the §9 validation premise
+        # (comparing "what ESS said" against real outcomes only works
+        # if it's the same number the user actually saw).
+        df_in = grp.rename(
+            columns={
+                "open": "Open", "high": "High", "low": "Low",
+                "close": "Close", "volume": "Volume",
+            }
+        ).set_index(pd.DatetimeIndex(grp["date"]))
+        ind = _calculate_technical_indicators(df_in)
+        last = ind.iloc[-1]
+
+        dist_sma50_pct = None
+        if last.get("SMA_50") and last["SMA_50"] > 0:
+            dist_sma50_pct = round(
+                (float(last["Close"]) - float(last["SMA_50"]))
+                / float(last["SMA_50"]) * 100, 4,
+            )
+
         ess = compute_ess(
             open_=float(grp["open"].iloc[-1]),
             high=float(grp["high"].iloc[-1]),
             low=float(grp["low"].iloc[-1]),
             close=float(grp["close"].iloc[-1]),
             volume_series=grp["volume"].astype(float),
-            sma50_series=grp["close"].rolling(50).mean().dropna(),
-            atr_series=grp["close"].diff().abs().rolling(14).mean().dropna(),
+            sma50_series=ind["SMA_50"].dropna(),
+            atr_series=ind["ATR_14"].dropna(),
             close_series=grp["close"].astype(float),
             sma200=(
-                float(grp["close"].rolling(200).mean().iloc[-1])
-                if len(grp) >= 200 else None
+                float(last["SMA_200"]) if last.get("SMA_200") else None
             ),
-            dist_sma50_pct=None,  # filled in alongside SMA50 above
+            dist_sma50_pct=dist_sma50_pct,
         )
         rows.append(
             {
