@@ -87,17 +87,27 @@ Evaluated per ticker; a failing gate flags the row (doesn't hide it):
    too extended to call a "pullback." **Flag for review if -6% was actually
    intended.**)
 
-One gate is **market-wide, not per-ticker**, and is surfaced as a **page-level
-banner**, not a per-row flag (repeating an identical value on every row would be
-noise): **Nifty < SMA200 → banner: "Market regime unfavorable for new longs."**
-This reuses the existing `compute_market_regime()` function
-(`backend/algo/backtest/indicators.py`). This is a *display flag only* — it doesn't
-filter rows. (Note: a mid-trade version of a regime check was already tried for
-this exact RSI(2) strategy and shown to hurt performance — see project memory on
-the v4 mid-trade-regime result. That finding is about a *mid-trade exit* check, not
-a *new-entry* gate, so it doesn't disqualify this, but this entry-side gate
-shouldn't be assumed to help without the same walk-forward scrutiny, once/if it
-ever becomes more than a display banner.)
+Two gates are **market-wide, not per-ticker**, and are surfaced as **page-level
+banners**, not per-row flags (repeating an identical value on every row would be
+noise):
+
+1. **Nifty < SMA200 → banner: "Market regime unfavorable for new longs."** Reuses
+   the existing `compute_market_regime()` function
+   (`backend/algo/backtest/indicators.py`). (Note: a mid-trade version of a regime
+   check was already tried for this exact RSI(2) strategy and shown to hurt
+   performance — see project memory on the v4 mid-trade-regime result. That
+   finding is about a *mid-trade exit* check, not a *new-entry* gate, so it
+   doesn't disqualify this, but this entry-side gate shouldn't be assumed to help
+   without the same walk-forward scrutiny, once/if it ever becomes more than a
+   display banner.)
+2. **Nifty 5-day ROC worse than -6% → second banner: "Broad market falling
+   fast — index itself down >6% over 5 sessions."** Mirrors the per-stock ROC5
+   factor (§6.5) but applied to the index — a market-wide falling-knife check,
+   distinct from the SMA200-regime banner above (a Nifty that's above its SMA200
+   but dropping sharply over the last week is a different risk than a Nifty
+   that's been below SMA200 for a while).
+
+Both banners are *display flags only* — they don't filter or hide any row.
 
 ## 6. Continuous ESS factors
 
@@ -221,6 +231,7 @@ tickers that were in `allowed_tickers` (union across live, non-archived strategi
 | `ess_gate_reason` | String (nullable) | which hard gate fired, if any |
 | `ess_absorption_volume_score`, `ess_sma50_proximity_score`, `ess_trend_stability_score`, `ess_selling_deceleration_score`, `ess_roc5_score`, `ess_atr_expansion_score` | Double | ESS sub-factors |
 | `nifty_return_pct` | Double | market-breadth context, not blended |
+| `nifty_roc5_pct` | Double | index 5-day ROC, backs the -6% banner (§5) |
 | `nifty_below_sma200` | Boolean | regime context |
 | `in_allowed_tickers` | Boolean | was this ticker whitelisted that day |
 | `written_at` | Timestamp | |
@@ -272,8 +283,11 @@ purge.
 - Exact control-point values for all six continuous factors and the 2-D
   absorption/volume grid — ship with the illustrative anchors above as the
   starting hypothesis, refine once outcome data accumulates.
-- Confirm the -10% SMA50 hard-gate threshold (§5) — flagged above as a resolution
-  of an earlier inconsistency, not an explicit confirmation.
 - Whether `Trend Stability`'s lookback window is a simple delta or a linear
   regression slope (both cheap; regression is slightly more robust to a single
   noisy day).
+
+**Confirmed during review (2026-07-12):** -10% SMA50 hard-gate threshold; Market
+Breadth as page-level context + persisted column, not a blended factor; Nifty
+5-day ROC < -6% added as a second market-wide banner (§5), mirroring the per-stock
+ROC5 factor at the index level.
