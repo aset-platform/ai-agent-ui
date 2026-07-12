@@ -718,7 +718,7 @@ from entry_strength_score import atr_expansion_score
 
 
 def test_atr_expansion_stable_scores_high():
-    atr = pd.Series([2.0] * 10 + [2.1])  # ratio ~1.05
+    atr = pd.Series([2.0] * 10 + [1.9])  # ratio 0.95, within flat plateau
     assert atr_expansion_score(atr, lookback=10) == 90
 
 
