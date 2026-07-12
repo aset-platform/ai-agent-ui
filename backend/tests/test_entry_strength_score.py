@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import pandas as pd
+
 from entry_strength_score import (
+    absorption_volume_score,
     close_location_value,
     lower_wick_ratio,
+    relative_volume_ratio,
     selling_absorption_score,
 )
 
@@ -42,3 +46,28 @@ def test_selling_absorption_marubozu_scores_low():
     strong = selling_absorption_score(120, 120, 112, 119)
     weak = selling_absorption_score(120, 120, 112, 113)
     assert weak < strong
+
+
+def test_relative_volume_ratio_basic():
+    # Last value is "today"; window average excludes it.
+    vols = pd.Series([100.0] * 20 + [150.0])
+    assert relative_volume_ratio(vols, window=20) == 1.5
+
+
+def test_relative_volume_ratio_insufficient_history_returns_none():
+    vols = pd.Series([100.0, 110.0])
+    assert relative_volume_ratio(vols, window=20) is None
+
+
+def test_absorption_volume_strong_and_elevated_scores_best():
+    score = absorption_volume_score(absorption_score=85, rel_volume=2.0)
+    assert score == 95
+
+
+def test_absorption_volume_weak_and_elevated_scores_worst():
+    score = absorption_volume_score(absorption_score=20, rel_volume=2.0)
+    assert score == 25
+
+
+def test_absorption_volume_none_rel_volume_returns_none():
+    assert absorption_volume_score(absorption_score=85, rel_volume=None) is None
