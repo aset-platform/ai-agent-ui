@@ -2537,6 +2537,7 @@ function EssMultiSelect({
 
 function ColumnTooltip({ text }: { text: string }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [coords, setCoords] = useState<{
     x: number; y: number; above: boolean;
   } | null>(null);
@@ -2548,21 +2549,39 @@ function ColumnTooltip({ text }: { text: string }) {
     return () => { cancelled = true; };
   }, []);
 
+  const clearHideTimeout = useCallback(() => {
+    if (hideTimeoutRef.current !== null) {
+      clearTimeout(hideTimeoutRef.current);
+      hideTimeoutRef.current = null;
+    }
+  }, []);
+
   const show = useCallback(() => {
+    clearHideTimeout();
     if (!triggerRef.current) return;
     const r = triggerRef.current.getBoundingClientRect();
     const above = r.top > 220;
     setCoords({ x: r.right, y: above ? r.top - 6 : r.bottom + 6, above });
-  }, []);
+  }, [clearHideTimeout]);
 
-  const hide = useCallback(() => setCoords(null), []);
+  // Delay hide (rather than hiding immediately on mouse-leave) so the
+  // cursor has time to travel from the trigger icon onto the portaled
+  // tooltip itself — otherwise content taller than the available space
+  // (needing internal scroll) can never actually be scrolled, since
+  // moving toward it would hide it first.
+  const scheduleHide = useCallback(() => {
+    clearHideTimeout();
+    hideTimeoutRef.current = setTimeout(() => setCoords(null), 150);
+  }, [clearHideTimeout]);
+
+  useEffect(() => () => clearHideTimeout(), [clearHideTimeout]);
 
   return (
     <span
       ref={triggerRef}
       className="inline-flex"
       onMouseEnter={show}
-      onMouseLeave={hide}
+      onMouseLeave={scheduleHide}
       onClick={(e) => e.stopPropagation()}
     >
       <svg
@@ -2577,6 +2596,8 @@ function ColumnTooltip({ text }: { text: string }) {
       </svg>
       {mounted && coords && createPortal(
         <div
+          onMouseEnter={clearHideTimeout}
+          onMouseLeave={scheduleHide}
           style={{
             position: "fixed",
             top: coords.above ? undefined : coords.y,
@@ -2597,7 +2618,7 @@ function ColumnTooltip({ text }: { text: string }) {
             overflowY: "auto",
             zIndex: 9999,
           }}
-          className="w-72 rounded-lg bg-gray-900 dark:bg-gray-700 px-3 py-2.5 text-[11px] text-gray-100 shadow-2xl whitespace-pre-line leading-relaxed pointer-events-none"
+          className="w-72 rounded-lg bg-gray-900 dark:bg-gray-700 px-3 py-2.5 text-[11px] text-gray-100 shadow-2xl whitespace-pre-line leading-relaxed"
         >
           {text}
         </div>,
