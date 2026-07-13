@@ -3,7 +3,7 @@
 Chains all India-only regime jobs into a single dependency-ordered
 pipeline (matches the existing India / USA Daily Pipeline pattern):
 
-  Daily steps (run mon-fri 23:30 IST):
+  Daily steps (run mon-fri 22:00 IST):
   1. Detect Market Regime          — regime_classifier_daily
   2. Notify Regime Change          — regime_change_notifier
   3. Compute Daily Factors         — compute_daily_factors
@@ -13,8 +13,16 @@ pipeline (matches the existing India / USA Daily Pipeline pattern):
   5. Refresh Top-200 Universe      — universe_snapshot_monthly
   6. Run Factor Regression         — attribution_monthly_regression
 
+  Entry Strength Score snapshot (every run, before maintenance):
+  7. Capture Entry Quality Snapshot — entry_quality_snapshot
+     Depends on stocks.ohlcv only (already fresh by this point in
+     the day), not on any earlier step's output. Runs here — rather
+     than as its own standalone schedule — so its writes land in
+     the SAME daily run this pipeline's maintenance step compacts
+     and backs up, per ASETPLTFRM's "no orphaned schedules" pattern.
+
   Maintenance (every run):
-  7. Compact + Backup Iceberg      — iceberg_maintenance
+  8. Compact + Backup Iceberg      — iceberg_maintenance
 
 Idempotency:
   - Each daily step's wrapper skips if today's row already exists
@@ -23,15 +31,21 @@ Idempotency:
     when the month's row already exists.
   - ``force=True`` pre-deletes today's (or this-month's) row(s)
     before re-running.
+  - Step 7 (entry_quality_snapshot) re-derives its own idempotency
+    via the scoped delete-then-append in ``_append_snapshot_rows``
+    (backend/jobs/entry_quality_snapshot.py) — a same-day re-run
+    doesn't duplicate rows.
 
 The maintenance step runs unconditionally — it compacts every
 hot Iceberg table including the new v3 ones (stocks.regime_history,
-stocks.daily_factors, stocks.universe_snapshot, stocks.regime_hmm_state)
-plus the existing stocks.ohlcv / sentiment / company_info /
-analysis_summary, and takes a backup before touching anything.
+stocks.daily_factors, stocks.universe_snapshot, stocks.regime_hmm_state),
+the ESS/QM snapshot table (stocks.entry_quality_daily), plus the
+existing stocks.ohlcv / sentiment / company_info / analysis_summary,
+and takes a backup before touching anything.
 
-Schedule: mon-fri 23:30 IST (post-close + after existing
-22:00 sentiment + 23:00 daily-factors-as-standalone).
+Schedule: mon-fri 22:00 IST (post-close + after existing sentiment
+run; live pipeline row was already running at 22:00 — this script's
+cron_time is kept in sync with that, not the earlier 23:30 draft).
 
 Idempotent — re-running this script updates the pipeline row +
 rebuilds steps but does NOT duplicate.
@@ -107,9 +121,19 @@ STEPS = [
         "job_type": "attribution_monthly_regression",
         "job_name": "Run Factor Regression",
     },
+    # Entry Strength Score snapshot ------------------------------
+    {
+        # Moved off its own standalone 16:00 IST schedule so it
+        # runs (and gets compacted/backed-up) as part of this
+        # single daily pipeline instead — its only real dependency
+        # is stocks.ohlcv, which is already fresh by this point.
+        "step_order": 8,
+        "job_type": "entry_quality_snapshot",
+        "job_name": "Capture Entry Quality Snapshot (QM + ESS)",
+    },
     # Maintenance ----------------------------------------------
     {
-        "step_order": 8,
+        "step_order": 9,
         "job_type": "iceberg_maintenance",
         "job_name": "Compact + Backup Iceberg",
         # ASETPLTFRM-418: scope to the regime engine's
@@ -121,6 +145,10 @@ STEPS = [
         # rows there with interval_sec=86400. Without
         # enrolling, daily writes would accumulate parquets
         # until the next India Daily Pipeline maintenance run.
+        # Added ``stocks.entry_quality_daily`` alongside step 8
+        # moving in above — same reasoning, low-write table but
+        # still wants a same-day compaction/backup pass rather
+        # than waiting for a separate maintenance cycle.
         "payload": {
             "tables": [
                 "stocks.regime_history",
@@ -128,6 +156,7 @@ STEPS = [
                 "stocks.daily_factors",
                 "stocks.universe_snapshot",
                 "stocks.intraday_features",
+                "stocks.entry_quality_daily",
             ],
         },
     },
@@ -143,7 +172,7 @@ async def seed() -> None:
                 "(pipeline_id, name, scope, cron_days, "
                 " cron_time, cron_dates, enabled) "
                 "VALUES (:pid, :name, 'india', "
-                "        'mon,tue,wed,thu,fri', '23:30', "
+                "        'mon,tue,wed,thu,fri', '22:00', "
                 "        NULL, TRUE) "
                 "ON CONFLICT (name) DO UPDATE SET "
                 "  scope = EXCLUDED.scope, "
