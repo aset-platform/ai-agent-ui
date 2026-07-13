@@ -3838,6 +3838,36 @@ def _job_algo_closed_trades_rollup(
     return result
 
 
+@register_job("entry_quality_snapshot")
+def _job_entry_quality_snapshot(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Daily EOD snapshot of ESS + QM Score sub-factors into
+    ``stocks.entry_quality_daily`` for the allowed_tickers universe
+    (ASETPLTFRM Entry Strength Score, Task 14).
+
+    Standalone job (not a pipeline step) — bridged via
+    ``asyncio.run()``, so it must self-report success, mirroring
+    ``_job_algo_closed_trades_rollup`` /
+    ``_job_algo_kite_instruments_refresh``: scheduler_service.py's
+    dispatcher only sets ``duration_secs`` on the success path,
+    leaving ``status`` up to the executor. Skipping this call would
+    leave the run row stuck at ``status='running'`` forever.
+    """
+    from backend.jobs.entry_quality_snapshot import (
+        run_entry_quality_snapshot_job,
+    )
+
+    result = run_entry_quality_snapshot_job(payload or {})
+    _algo_job_success(repo, run_id)
+    return result
+
+
 @register_job("intraday_features_daily_compute")
 def execute_intraday_features_daily_compute(
     scope: str | None = None,
