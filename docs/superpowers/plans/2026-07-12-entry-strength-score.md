@@ -1600,8 +1600,8 @@ from typing import Any
 
 from sqlalchemy import text
 
+from backend.db.duckdb_engine import query_iceberg_df
 from backend.db.engine import disposable_pg_session
-from backend.iceberg_reader import query_iceberg_df  # confirm exact import
 from backend.tools._analysis_indicators import _calculate_technical_indicators
 from entry_strength_score import compute_ess, compute_nifty_market_context
 
@@ -1743,19 +1743,20 @@ def run_entry_quality_snapshot_job(
 ```
 
 **Note for implementer:** the `qm_score`/`qm_*_pctile` fields and the "QM>=58"
-half of the universe union are marked with inline comments rather than
-finalized code because QM Score's percentile-rank inputs require the same
-cross-stock batch computation already living in `insights_routes.py` (it can't
-be computed for one ticker in isolation, unlike ESS). Before finishing this
-task, factor the existing post-loop QM Score block (lines ~2565-2665 in
-`insights_routes.py`, confirmed in Task 11's Step 1 read-back) into a
-standalone callable (e.g. `compute_qm_scores(ohlcv_df) -> dict[str, QmResult]`)
-that both the route and this job can call — this is a real, non-optional part
-of the task, not a nice-to-have, since without it `qm_score` stays `None` for
-every persisted row and half the spec's stated goal ("measure QM Score
-effectiveness too") isn't met. Also confirm the exact `query_iceberg_df`
-import path (`backend.iceberg_reader` above is a placeholder name — grep
-`from .* import query_iceberg_df` in `insights_routes.py` for the real one).
+half of the universe union are INTENTIONALLY left as `None`/placeholder in
+THIS task — ship it as a valid, self-contained intermediate state where ESS
+persistence works standalone. Do NOT attempt the QM Score extraction here.
+**Task 15 (the very next task in this plan) does that extraction as its own
+fully-specified task** (`compute_qm_scores(ohlcv_df) -> dict[str, QmResult]`,
+factored out of `insights_routes.py`'s post-loop QM Score block) and retrofits
+real values into both this job and the route. An earlier draft of this note
+told the Task 14 implementer to do the extraction "before finishing this
+task," which directly duplicates/contradicts Task 15's own scope — that
+instruction is superseded by this correction; Task 15 owns it exclusively.
+
+Also: the real `query_iceberg_df` import (confirmed during Task 11) is
+`from backend.db.duckdb_engine import query_iceberg_df` — use that, not the
+`backend.iceberg_reader` placeholder path shown in the code skeleton above.
 
 - [ ] **Step 5: Run the test**
 
