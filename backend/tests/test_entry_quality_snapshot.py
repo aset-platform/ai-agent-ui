@@ -265,6 +265,86 @@ def test_delete_predicate_is_exact_not_cross_product():
     assert not _matches(pred, "INFY.NS", d1)
 
 
+def test_delete_predicate_grouped_by_date_is_exact_multi_ticker():
+    """Regression test for the deep left-nested ``Or`` scalability
+    finding: the fixed ``_delete_predicate`` groups by ``trade_date``
+    and builds a single ``In("ticker", ...)`` per distinct date
+    instead of one ``Or`` term per row. This must remain EXACTLY as
+    precise as the old per-row version — no cross-product regression.
+
+    Batch: 3 tickers share the common EOD ``trade_date`` (d1,
+    normal case — the job runs once daily), and 1 ticker lagged a
+    day behind (d2). This is the shape Task 14's fix specifically
+    guarded against: a grouped-by-date predicate must NOT let d1's
+    ``In("ticker", ...)`` leak into matching d2's ticker, and vice
+    versa — each date's ticker list stays scoped to only the
+    tickers actually mapped to that date."""
+    from pyiceberg.expressions import And, EqualTo, In, Or
+
+    from backend.jobs.entry_quality_snapshot import _delete_predicate
+
+    d1 = date(2026, 7, 12)
+    d2 = date(2026, 7, 11)  # RELIANCE.NS lagged a day behind
+    rows = [
+        {"trade_date": d1, "ticker": "TCS.NS", "market": "india"},
+        {"trade_date": d1, "ticker": "INFY.NS", "market": "india"},
+        {"trade_date": d1, "ticker": "WIPRO.NS", "market": "india"},
+        {"trade_date": d2, "ticker": "RELIANCE.NS", "market": "india"},
+    ]
+
+    pred = _delete_predicate(rows)
+
+    # Tree shape: shallow — top-level Or across 2 distinct dates,
+    # not a left-nested Or per row (4 rows would have meant depth 4
+    # under the old per-row reduce(Or, terms)).
+    assert isinstance(pred, Or)
+
+    def _matches(p, ticker: str, trade_date: date) -> bool:
+        if isinstance(p, And):
+            return _matches(p.left, ticker, trade_date) and _matches(
+                p.right, ticker, trade_date
+            )
+        if isinstance(p, Or):
+            return _matches(p.left, ticker, trade_date) or _matches(
+                p.right, ticker, trade_date
+            )
+        if isinstance(p, In):
+            name = p.term.name
+            assert name == "ticker"
+            return ticker in {lit.value for lit in p.literals}
+        if isinstance(p, EqualTo):
+            name = p.term.name
+            if name == "ticker":
+                return ticker == p.literal.value
+            if name == "trade_date":
+                epoch_days = p.literal.value
+                lit_date = date(1970, 1, 1) + timedelta(days=epoch_days)
+                return trade_date == lit_date
+            raise AssertionError(f"unexpected column {name}")
+        raise AssertionError(f"unexpected node {p!r}")
+
+    # All 4 pairs actually in the batch MUST match.
+    assert _matches(pred, "TCS.NS", d1)
+    assert _matches(pred, "INFY.NS", d1)
+    assert _matches(pred, "WIPRO.NS", d1)
+    assert _matches(pred, "RELIANCE.NS", d2)
+
+    # Cross-date combinations that were NEVER written and are NOT
+    # part of this batch MUST NOT match — the grouping-by-date fix
+    # must not reintroduce the whole-batch cross-product bug Task 14
+    # eliminated. In particular, d1's ``In("ticker", ...)`` (TCS,
+    # INFY, WIPRO) must not leak into matching d2, and RELIANCE.NS
+    # must not match d1.
+    assert not _matches(pred, "TCS.NS", d2)
+    assert not _matches(pred, "INFY.NS", d2)
+    assert not _matches(pred, "WIPRO.NS", d2)
+    assert not _matches(pred, "RELIANCE.NS", d1)
+    # A combination touching neither ticker nor date correctly must
+    # also not match.
+    assert not _matches(pred, "HDFC.NS", d1)
+    assert not _matches(pred, "HDFC.NS", d2)
+
+
 def test_delete_predicate_none_for_empty_rows():
     """Zero rows must short-circuit to ``None`` (no-op delete) —
     the caller (``_run``) already guards ``if rows:`` before
@@ -342,6 +422,77 @@ async def test_snapshot_job_uses_detect_market_not_hardcoded_india():
 
     written_rows = mock_append.call_args.args[0]
     assert written_rows[0]["market"] == "us"
+
+
+@pytest.mark.asyncio
+async def test_snapshot_job_degrades_when_nifty_fetch_fails():
+    """A transient Nifty (``^NSEI``) fetch hiccup must not abort the
+    ENTIRE EOD run — Nifty data only feeds auxiliary market-breadth
+    columns (nifty_return_pct / nifty_roc5_pct / nifty_below_sma200),
+    never the core ESS/QM computation. Mirrors
+    ``insights_routes.py``'s equivalent try/except degrade pattern
+    (Important review finding). The job must still process and write
+    rows for the qualifying universe, with the Nifty columns falling
+    back to ``None``."""
+    ohlcv_df = pd.DataFrame(
+        {
+            "ticker": ["TCS.NS"] * 300,
+            "date": pd.date_range("2025-01-01", periods=300, freq="D"),
+            "open": [100.0] * 300,
+            "high": [101.0] * 300,
+            "low": [99.0] * 300,
+            "close": [100.0] * 300,
+            "volume": [1_000_000.0] * 300,
+        }
+    )
+
+    with (
+        patch(
+            "backend.jobs.entry_quality_snapshot.disposable_pg_session"
+        ) as mock_pg,
+        patch(
+            "backend.jobs.entry_quality_snapshot._full_universe_tickers",
+            new_callable=AsyncMock,
+            return_value=["TCS.NS"],
+        ),
+        patch(
+            "backend.jobs.entry_quality_snapshot.query_iceberg_df",
+            new_callable=AsyncMock,
+        ) as mock_query,
+        patch(
+            "backend.jobs.entry_quality_snapshot._append_snapshot_rows"
+        ) as mock_append,
+    ):
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = [("TCS.NS",)]
+        mock_session.execute.return_value = mock_result
+        mock_pg.return_value.__aenter__.return_value = mock_session
+        # First call (main OHLCV batch) succeeds; second call (Nifty
+        # index series) raises — the main OHLCV fetch is NOT wrapped
+        # (it's load-bearing for every row) but the Nifty fetch is.
+        mock_query.side_effect = [
+            ohlcv_df,
+            RuntimeError("Iceberg catalog unavailable"),
+        ]
+
+        # No exception should propagate — the job completes despite
+        # the Nifty fetch raising.
+        result = await _run({})
+
+    assert result["rows_written"] == 1
+    mock_append.assert_called_once()
+    written_rows = mock_append.call_args.args[0]
+    row = written_rows[0]
+    assert row["ticker"] == "TCS.NS"
+    # QM/ESS computation is unaffected by the Nifty-fetch failure.
+    assert row["qm_score"] is not None
+    assert row["ess_score"] is not None
+    # Market-context columns degrade to None, not a crash.
+    assert row["nifty_return_pct"] is None
+    assert row["nifty_roc5_pct"] is None
+    assert row["nifty_below_sma200"] is None
 
 
 def _linear_ohlcv(ticker: str, start: float, slope: float, wobble: float):

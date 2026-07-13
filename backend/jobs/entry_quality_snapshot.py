@@ -62,8 +62,12 @@ from typing import Any
 
 import pandas as pd
 import pyarrow as pa
-from entry_strength_score import compute_ess, compute_nifty_market_context
-from pyiceberg.expressions import And, EqualTo, Or
+from entry_strength_score import (
+    NiftyMarketContext,
+    compute_ess,
+    compute_nifty_market_context,
+)
+from pyiceberg.expressions import And, EqualTo, In, Or
 from qm_score import compute_qm_scores
 from sqlalchemy import text
 
@@ -170,30 +174,60 @@ async def query_iceberg_df(
 
 
 def _delete_predicate(rows: list[dict[str, Any]]):
-    """Build an exact OR-of-Ands predicate for the distinct
-    ``(ticker, trade_date)`` pairs actually present in *rows*.
+    """Build an exact predicate for the distinct ``(ticker,
+    trade_date)`` pairs actually present in *rows*, grouped by
+    ``trade_date`` so the tree depth is bounded by the number of
+    DISTINCT dates in the batch (normally 1, on an EOD run) rather
+    than the number of rows.
 
     Returns ``None`` when *rows* is empty (caller should skip the
-    delete). Each term is an exact two-column conjunction — never
-    a cross-product ``In(tickers) x In(trade_dates)``.
+    delete). For each distinct ``trade_date`` present, builds
+    ``And(In("ticker", tickers_for_that_date),
+    EqualTo("trade_date", d))`` — the ``In(...)`` is scoped ONLY to
+    the tickers actually mapped to that specific date, never to the
+    whole batch — then ``Or``s across the (typically 1, rarely a
+    handful) distinct dates. This is still an exact per-row scoping,
+    not a cross-product: a term for date ``d`` can only ever match
+    a ticker that appears in the batch WITH that date.
+
+    Left-nested ``reduce(Or, ...)`` one term per ROW (the prior
+    version) produced a tree whose depth equalled the row count —
+    safe at ~20-250 rows, but Task 15's full-universe candidate
+    scope (500-1000+ tickers) risked a ``RecursionError`` /
+    expensive per-file predicate evaluation in PyIceberg. Grouping
+    by date keeps the tree shallow while preserving the exact
+    per-ticker-date scoping Task 14 required.
 
     ``trade_date`` is computed independently per ticker
     (``grp["date"].iloc[-1].date()`` — the ticker's own last
     available bar), not a single shared "as of" date for the run.
     A ticker whose OHLCV ingestion lagged behind the rest of the
-    batch will have a different ``trade_date``, so
-    ``And(In(tickers), In(trade_dates))`` would match
-    ``(tickerA, dateB)`` combinations that were never written by
-    any run and aren't part of the current batch — silently
-    deleting valid historical rows with nothing to replace them.
+    batch will have a different ``trade_date``, so a single
+    ``And(In(all tickers), In(all trade_dates))`` across the WHOLE
+    batch would match ``(tickerA, dateB)`` combinations that were
+    never written by any run and aren't part of the current batch —
+    silently deleting valid historical rows with nothing to replace
+    them. This grouped-by-date version avoids that: each date's
+    ``In("ticker", ...)`` is scoped only to tickers mapped to that
+    date, not the whole batch.
     Mirrors ``backend/algo/stream/bars_writer.py::_dedup_predicate``.
     """
-    keys = sorted({(r["ticker"], r["trade_date"]) for r in rows})
-    if not keys:
+    by_date: dict[Any, set[str]] = {}
+    for r in rows:
+        by_date.setdefault(r["trade_date"], set()).add(r["ticker"])
+    if not by_date:
         return None
-    terms = [
-        And(EqualTo("ticker", t), EqualTo("trade_date", d)) for (t, d) in keys
-    ]
+
+    terms = []
+    for d, tickers in sorted(by_date.items()):
+        tickers_sorted = sorted(tickers)
+        ticker_term = (
+            EqualTo("ticker", tickers_sorted[0])
+            if len(tickers_sorted) == 1
+            else In("ticker", tickers_sorted)
+        )
+        terms.append(And(ticker_term, EqualTo("trade_date", d)))
+
     if len(terms) == 1:
         return terms[0]
     return reduce(Or, terms)
@@ -222,6 +256,7 @@ def _append_snapshot_rows(rows: list[dict[str, Any]]) -> None:
                     "entry_quality_snapshot pre-delete skipped (%s): %s",
                     _TABLE,
                     exc,
+                    exc_info=True,
                 )
         arrow_tbl = pa.Table.from_pylist(rows, schema=tbl.schema().as_arrow())
         tbl.append(arrow_tbl)
@@ -271,31 +306,51 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
     if ohlcv_df.empty:
         return {"rows_written": 0}
 
-    nifty_df = await query_iceberg_df(
-        "stocks.ohlcv",
-        "SELECT date, close FROM ohlcv WHERE ticker = '^NSEI' "
-        "AND close IS NOT NULL ORDER BY date DESC LIMIT 300",
-    )
-    _nifty_close = nifty_df.sort_values("date")["close"].astype(float)
-    nifty_ctx = compute_nifty_market_context(_nifty_close)
-
-    # Nifty 6M/3M returns for RS(6M)/RS(3M) below — same series
-    # already fetched above, no new query. Mirrors
-    # insights_routes.py::_watchlist_stocks' verbatim.
+    # Nifty index series drives only auxiliary market-breadth columns
+    # (nifty_return_pct / nifty_roc5_pct / nifty_below_sma200 +
+    # RS(6M)/RS(3M) inputs) — never the core ESS/QM computation for
+    # any row. Mirrored on insights_routes.py's equivalent fetch
+    # (get_watchlist_stocks), a transient Nifty-fetch hiccup here
+    # must degrade to empty market-context fields rather than abort
+    # the ENTIRE EOD run and lose that day's snapshot for the whole
+    # qualifying universe (Important review finding).
+    nifty_ctx: NiftyMarketContext | None = None
     nifty_6m_return: float | None = None
     nifty_3m_return: float | None = None
-    if len(_nifty_close) >= 20:
-        nifty_6m_return = float(
-            (_nifty_close.iloc[-1] - _nifty_close.iloc[0])
-            / _nifty_close.iloc[0]
-            * 100
+    try:
+        nifty_df = await query_iceberg_df(
+            "stocks.ohlcv",
+            "SELECT date, close FROM ohlcv WHERE ticker = '^NSEI' "
+            "AND close IS NOT NULL ORDER BY date DESC LIMIT 300",
         )
-        if len(_nifty_close) >= 64:
-            nifty_3m_return = float(
-                (_nifty_close.iloc[-1] - _nifty_close.iloc[-64])
-                / _nifty_close.iloc[-64]
+        _nifty_close = nifty_df.sort_values("date")["close"].astype(float)
+        nifty_ctx = compute_nifty_market_context(_nifty_close)
+
+        # Nifty 6M/3M returns for RS(6M)/RS(3M) below — same series
+        # already fetched above, no new query. Mirrors
+        # insights_routes.py::_watchlist_stocks' verbatim.
+        if len(_nifty_close) >= 20:
+            nifty_6m_return = float(
+                (_nifty_close.iloc[-1] - _nifty_close.iloc[0])
+                / _nifty_close.iloc[0]
                 * 100
             )
+            if len(_nifty_close) >= 64:
+                nifty_3m_return = float(
+                    (_nifty_close.iloc[-1] - _nifty_close.iloc[-64])
+                    / _nifty_close.iloc[-64]
+                    * 100
+                )
+    except Exception:
+        _logger.error(
+            "entry_quality_snapshot: nifty fetch failed — "
+            "degrading market-context columns to None/empty for "
+            "this run.",
+            exc_info=True,
+        )
+        nifty_ctx = None
+        nifty_6m_return = None
+        nifty_3m_return = None
 
     written_at = datetime.now(timezone.utc).replace(tzinfo=None)
     qm_inputs: dict[str, dict[str, float | None]] = {}
@@ -526,9 +581,19 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "ess_roc5_score": ess.roc5_score,
                 "ess_atr_expansion_score": ess.atr_expansion_score,
-                "nifty_return_pct": nifty_ctx.nifty_return_pct,
-                "nifty_roc5_pct": nifty_ctx.nifty_roc5_pct,
-                "nifty_below_sma200": nifty_ctx.nifty_below_sma200,
+                "nifty_return_pct": (
+                    nifty_ctx.nifty_return_pct
+                    if nifty_ctx is not None
+                    else None
+                ),
+                "nifty_roc5_pct": (
+                    nifty_ctx.nifty_roc5_pct if nifty_ctx is not None else None
+                ),
+                "nifty_below_sma200": (
+                    nifty_ctx.nifty_below_sma200
+                    if nifty_ctx is not None
+                    else None
+                ),
                 "in_allowed_tickers": ticker in allowed,
                 "written_at": written_at,
             }

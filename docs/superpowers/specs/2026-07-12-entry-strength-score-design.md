@@ -277,6 +277,13 @@ purge.
   high-ESS entries do better than low-ESS ones" — is a single-engine DuckDB join,
   no cross-store bridging required. This is the actual deliverable of the
   persistence work, not just a historical log.
+- **Cohort caveat for the validation join:** the persisted `qm_score`/`ess_score`
+  are a settled-EOD, full-universe-cohort snapshot (QM Score's percentile subfactors
+  ranked across the full candidate universe, not the viewer's own watchlist) —
+  distinct from the live page's watchlist-scoped values a user might see at a
+  different moment; an analyst joining `entry_quality_daily` against outcomes should
+  treat the persisted score as the ground truth for this table, not expect it to
+  reproduce what any individual user saw on the page that day.
 
 ## 10. Open items for the implementation plan
 
