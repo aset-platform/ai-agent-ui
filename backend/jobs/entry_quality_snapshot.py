@@ -18,20 +18,37 @@ loads, mirroring the route's per-ticker formulas verbatim so the
 persisted score agrees with what the Watchlist Stocks page showed
 that ticker that day.
 
-**Known limitation (design spec §8 "allowed_tickers ∪ QM Score >= 58"
-universe):** this job's ticker universe is still scoped to
-``allowed_tickers`` only (see ``_allowed_tickers_union`` below) — the
-``qualifying`` union below can only ever equal ``allowed`` today,
-because QM scores are computed from an ``ohlcv_df`` that was already
-fetched scoped to ``allowed``. Discovering ADDITIONAL tickers purely
-by QM Score >= 58 (i.e. tickers no live strategy currently allows)
-requires a broader candidate universe fetched BEFORE this query — no
-existing helper aggregates "all users' watchlist ∪ holdings"
-system-wide, and scanning the full stock+ETF discovery universe
-(``_full_universe`` in ``insights_routes.py``) would materially widen
-this job's OHLCV read volume (CLAUDE.md §4.1 #6/#8). That candidate-
-universe decision is left for a follow-up task rather than guessed at
-here.
+**Full-universe candidate scope (Task 15 follow-up, design spec §8
+"allowed_tickers ∪ QM Score >= 58" universe):** the OHLCV fetch below
+is scoped to ``allowed_tickers UNION the full platform stock+ETF
+universe`` (``insights_routes.py::_full_universe``), not
+``allowed_tickers`` alone. Task 14/early-Task-15 shipped a version
+scoped to ``allowed`` only, which made the ``qualifying`` union a
+structural no-op — QM Score could never discover a ticker beyond what
+was already allowed, since OHLCV (and therefore QM inputs) was never
+fetched for anything else. This is a genuinely larger daily read
+(~500 tickers x 300 bars instead of ~20-250 x 300) — an accepted,
+deliberate cost of restoring the original design intent, not
+something to truncate or work around (CLAUDE.md §4.1 #1/#8 batch-read
++ windowed-query rules are still honored: single ``WHERE ticker IN
+(...)`` + ``ROW_NUMBER() OVER (PARTITION BY ticker) <= 300``, just
+over a wider ticker set).
+
+**QM Score cohort trade-off (deliberate, not a bug):** QM Score's
+percentile-rank sub-factors (Sharpe/RS/MDD) are computed RELATIVE TO
+whichever batch of tickers is scored together in one
+``compute_qm_scores`` call. The Watchlist Stocks PAGE scores within
+the user's watchlist-scoped cohort (small, ~20-100 tickers); this job
+now scores the FULL candidate universe (~500 tickers) in ONE call, so
+a persisted ``qm_score`` for an ``allowed_tickers`` row can differ
+from what the user saw on the page that day. This is intentional: a
+single, large, stable full-universe cohort makes the persisted
+historical dataset comparable day-over-day (the page's cohort shifts
+as the user edits their watchlist; the full universe doesn't), which
+better serves this table's effectiveness-measurement goal (design
+spec §9) than agreement with the page. Every persisted row — including
+``allowed_tickers`` rows — uses the SAME full-universe-cohort score;
+this job does not attempt to replicate the page's smaller cohort.
 """
 
 from __future__ import annotations
@@ -103,6 +120,36 @@ async def _allowed_tickers_union() -> set[str]:
     async with disposable_pg_session() as session:
         result = await session.execute(_ALLOWED_TICKERS_SQL)
         return {row[0] for row in result.fetchall()}
+
+
+async def _full_universe_tickers() -> list[str]:
+    """Platform-wide tradeable stock+ETF universe — mirrors
+    ``insights_routes.py::_full_universe`` verbatim so this job's
+    candidate scope agrees with what the Insights discovery tabs show
+    pro/superuser users.
+
+    ``StockRepository.get_all_registry()`` (reached via
+    ``tools._stock_shared._require_repo``) is a synchronous, PG-backed
+    call. It already handles running-loop offload internally
+    (``stocks/repository.py::_run_pg`` detects a running loop and
+    dispatches to a worker thread with its own NullPool engine), but
+    per CLAUDE.md §5.1's sync-I/O-in-async-routes rule this is still
+    wrapped in ``asyncio.to_thread`` here so it never blocks this
+    job's own ``asyncio.run()`` loop while the PG round-trip is in
+    flight.
+
+    ``_require_repo`` is a process-wide module-level singleton getter
+    with no FastAPI request-scoped dependency-injection state — safe
+    to call from this scheduler-job context exactly as it's called
+    from the Insights route.
+    """
+    from insights_routes import _full_universe
+    from tools._stock_shared import _require_repo
+
+    def _call() -> list[str]:
+        return _full_universe(_require_repo())
+
+    return await asyncio.to_thread(_call)
 
 
 async def query_iceberg_df(
@@ -185,20 +232,23 @@ def _append_snapshot_rows(rows: list[dict[str, Any]]) -> None:
 
 async def _run(payload: dict[str, Any]) -> dict[str, Any]:
     allowed = await _allowed_tickers_union()
+    universe = await _full_universe_tickers()
 
-    # QM Score >= 58 universe: see module docstring "Known
-    # limitation" — this job's OHLCV fetch below is still scoped to
-    # allowed_tickers only, so the union reassignment after the
-    # per-ticker loop can only ever equal `allowed` today. Kept as
-    # `allowed` here (rather than pre-declaring a wider set) since
-    # the qualifying candidate universe is fetched, not computed,
-    # and there is nothing broader to fetch yet.
-    qualifying = allowed
-    if not qualifying:
-        _logger.info("entry_quality_snapshot: no qualifying tickers — skip.")
+    # Candidate universe for the OHLCV fetch + QM Score batch: the
+    # full platform stock+ETF universe UNIONED with allowed_tickers
+    # (see module docstring "Full-universe candidate scope"). Union
+    # in `allowed` defensively — a live strategy's allowed_tickers
+    # whitelist could in principle reference a ticker outside the
+    # discovery registry (e.g. delisted after being allow-listed),
+    # and today's behavior guarantees ESS/QM coverage for every
+    # allowed ticker regardless; dropping that guarantee here would
+    # be a silent regression.
+    candidates = set(universe) | allowed
+    if not candidates:
+        _logger.info("entry_quality_snapshot: no candidate tickers — skip.")
         return {"rows_written": 0}
 
-    ph = ",".join(f"'{t}'" for t in sorted(qualifying))
+    ph = ",".join(f"'{t}'" for t in sorted(candidates))
     ohlcv_df = await query_iceberg_df(
         "stocks.ohlcv",
         "SELECT ticker, date, open, high, low, close, volume FROM ("
@@ -240,8 +290,15 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
             )
 
     written_at = datetime.now(timezone.utc).replace(tzinfo=None)
-    rows: list[dict[str, Any]] = []
     qm_inputs: dict[str, dict[str, float | None]] = {}
+    # Per-ticker ESS inputs, cached from this same loop so the
+    # (much smaller) `qualifying` pass below can call `compute_ess`
+    # without a third OHLCV fetch or re-running indicators — see
+    # module docstring. Indicators (`ind`) are needed for every
+    # candidate ticker anyway (QM's raw inputs depend on them), so
+    # caching just the ESS-relevant slices here is cheap relative to
+    # the indicator computation itself.
+    ess_ctx: dict[str, dict[str, Any]] = {}
     for ticker, grp in ohlcv_df.groupby("ticker"):
         grp = grp.sort_values("date")
         if len(grp) < _MIN_BARS:
@@ -369,33 +426,87 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
             "dist_sma200": dist_sma200,
         }
 
+        ess_ctx[ticker] = {
+            "open_": float(grp["open"].iloc[-1]),
+            "high": float(grp["high"].iloc[-1]),
+            "low": float(grp["low"].iloc[-1]),
+            "close": float(grp["close"].iloc[-1]),
+            "volume_series": grp["volume"].astype(float),
+            "sma50_series": ind["SMA_50"].dropna(),
+            "atr_series": ind["ATR_14"].dropna(),
+            "close_series": grp["close"].astype(float),
+            "sma200": sma200,
+            "dist_sma50_pct": dist_sma50_pct,
+            "trade_date": grp["date"].iloc[-1].date(),
+        }
+
+    # QM Score computed ONCE across the full candidate-universe batch
+    # — see module docstring "QM Score cohort trade-off". Every
+    # persisted row (including allowed_tickers rows) uses this same
+    # full-universe-cohort score; this job does not attempt to
+    # replicate the Watchlist Stocks page's smaller, user-scoped
+    # cohort.
+    qm_results = compute_qm_scores(qm_inputs)
+
+    # Genuine, non-trivial union: `qualifying` can now include
+    # tickers that were never in `allowed` at all, purely because
+    # their full-universe-cohort QM Score cleared the >=58 bar (the
+    # bug this task fixes — Task 14/early-Task-15 could only ever
+    # have `qualifying == allowed` since QM was never computed for
+    # anything outside `allowed`).
+    qualifying = allowed | {
+        t
+        for t, r in qm_results.items()
+        if r.score is not None and r.score >= 58
+    }
+    _logger.debug(
+        "entry_quality_snapshot: qualifying=%d (allowed=%d, "
+        "universe=%d, candidates=%d)",
+        len(qualifying),
+        len(allowed),
+        len(universe),
+        len(candidates),
+    )
+
+    rows: list[dict[str, Any]] = []
+    for ticker in sorted(qualifying):
+        ctx = ess_ctx.get(ticker)
+        if ctx is None:
+            # In `qualifying` but no valid OHLCV/indicators this run
+            # (e.g. fewer than `_MIN_BARS` bars, or indicator calc
+            # failed) — nothing to persist without ESS inputs.
+            continue
+
         ess = compute_ess(
-            open_=float(grp["open"].iloc[-1]),
-            high=float(grp["high"].iloc[-1]),
-            low=float(grp["low"].iloc[-1]),
-            close=float(grp["close"].iloc[-1]),
-            volume_series=grp["volume"].astype(float),
-            sma50_series=ind["SMA_50"].dropna(),
-            atr_series=ind["ATR_14"].dropna(),
-            close_series=grp["close"].astype(float),
-            sma200=sma200,
-            dist_sma50_pct=dist_sma50_pct,
+            open_=ctx["open_"],
+            high=ctx["high"],
+            low=ctx["low"],
+            close=ctx["close"],
+            volume_series=ctx["volume_series"],
+            sma50_series=ctx["sma50_series"],
+            atr_series=ctx["atr_series"],
+            close_series=ctx["close_series"],
+            sma200=ctx["sma200"],
+            dist_sma50_pct=ctx["dist_sma50_pct"],
         )
+        qm = qm_results.get(ticker)
         rows.append(
             {
-                "trade_date": grp["date"].iloc[-1].date(),
+                "trade_date": ctx["trade_date"],
                 "ticker": ticker,
                 "market": detect_market(ticker),
-                # QM Score fields: patched below, after
-                # compute_qm_scores runs once across the full batch
-                # (percentile ranks need the whole cross-stock set,
-                # not a single ticker in isolation).
-                "qm_score": None,
-                "qm_sharpe_pctile": None,
-                "qm_rs_pctile": None,
-                "qm_mdd_pctile": None,
-                "qm_atr_closeness": None,
-                "qm_sma200_closeness": None,
+                "qm_score": qm.score if qm is not None else None,
+                "qm_sharpe_pctile": (
+                    qm.sharpe_pctile if qm is not None else None
+                ),
+                "qm_rs_pctile": qm.rs_pctile if qm is not None else None,
+                "qm_mdd_pctile": qm.mdd_pctile if qm is not None else None,
+                "qm_atr_closeness": (
+                    qm.atr_closeness if qm is not None else None
+                ),
+                "qm_sma200_closeness": (
+                    qm.sma200_closeness if qm is not None else None
+                ),
                 "ess_score": ess.ess_score,
                 "ess_gate_passed": ess.gate_passed,
                 "ess_gate_reason": ess.gate_reason,
@@ -414,33 +525,6 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
                 "written_at": written_at,
             }
         )
-
-    qm_results = compute_qm_scores(qm_inputs)
-    for row in rows:
-        qm = qm_results.get(row["ticker"])
-        if qm is not None:
-            row["qm_score"] = qm.score
-            row["qm_sharpe_pctile"] = qm.sharpe_pctile
-            row["qm_rs_pctile"] = qm.rs_pctile
-            row["qm_mdd_pctile"] = qm.mdd_pctile
-            row["qm_atr_closeness"] = qm.atr_closeness
-            row["qm_sma200_closeness"] = qm.sma200_closeness
-
-    # See module docstring "Known limitation" — today this can only
-    # ever equal `allowed` (qm_results is keyed by the same tickers
-    # `ohlcv_df` was already scoped to), but is written as an
-    # explicit union so a future widened candidate-universe fetch
-    # only needs to change what feeds `qm_inputs`, not this line.
-    qualifying = allowed | {
-        t
-        for t, r in qm_results.items()
-        if r.score is not None and r.score >= 58
-    }
-    _logger.debug(
-        "entry_quality_snapshot: qualifying=%d (allowed=%d)",
-        len(qualifying),
-        len(allowed),
-    )
 
     if rows:
         _append_snapshot_rows(rows)
