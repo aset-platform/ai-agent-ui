@@ -2587,6 +2587,14 @@ function ColumnTooltip({ text }: { text: string }) {
               coords.x - 288,
               window.innerWidth - 296
             )),
+            // Clamp to the space actually available in the direction
+            // this tooltip grows, so long content (e.g. ESS's 6-factor
+            // breakdown) scrolls internally instead of silently
+            // extending past the viewport edge.
+            maxHeight: coords.above
+              ? coords.y - 8
+              : window.innerHeight - coords.y - 8,
+            overflowY: "auto",
             zIndex: 9999,
           }}
           className="w-72 rounded-lg bg-gray-900 dark:bg-gray-700 px-3 py-2.5 text-[11px] text-gray-100 shadow-2xl whitespace-pre-line leading-relaxed pointer-events-none"
