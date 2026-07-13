@@ -2505,6 +2505,206 @@ def _data_gaps_schema() -> Schema:
     )
 
 
+def _entry_quality_daily_schema() -> Schema:
+    """Return the Iceberg schema for ``stocks.entry_quality_daily``.
+
+    Returns:
+        Schema: One row per ``(ticker, trade_date)`` — Quality-
+            Momentum sub-factors, Entry Strength Score (ESS)
+            sub-factors, and Nifty market-breadth context, written
+            once per trading day for the ``allowed_tickers`` ∪
+            QM Score ≥ 58 universe (ASETPLTFRM Entry Strength Score
+            design, 2026-07-12). Sub-factors are stored (not just
+            the two blended scores) so the effectiveness analysis
+            can identify which individual signal is predictive.
+    """
+    return Schema(
+        NestedField(
+            field_id=1,
+            name="trade_date",
+            field_type=DateType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=2,
+            name="ticker",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=3,
+            name="market",
+            field_type=StringType(),
+            required=True,
+        ),
+        NestedField(
+            field_id=4,
+            name="qm_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=5,
+            name="qm_sharpe_pctile",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=6,
+            name="qm_rs_pctile",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=7,
+            name="qm_mdd_pctile",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=8,
+            name="qm_atr_closeness",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=9,
+            name="qm_sma200_closeness",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=10,
+            name="ess_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=11,
+            name="ess_gate_passed",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=12,
+            name="ess_gate_reason",
+            field_type=StringType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=13,
+            name="ess_absorption_volume_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=14,
+            name="ess_sma50_proximity_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=15,
+            name="ess_trend_stability_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=16,
+            name="ess_selling_deceleration_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=17,
+            name="ess_roc5_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=18,
+            name="ess_atr_expansion_score",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=19,
+            name="nifty_return_pct",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=20,
+            name="nifty_roc5_pct",
+            field_type=DoubleType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=21,
+            name="nifty_below_sma200",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=22,
+            name="in_allowed_tickers",
+            field_type=BooleanType(),
+            required=False,
+        ),
+        NestedField(
+            field_id=23,
+            name="written_at",
+            field_type=TimestampType(),
+            required=True,
+        ),
+    )
+
+
+def _entry_quality_daily_partition_spec(
+    schema: Schema,
+) -> PartitionSpec:
+    """Return a partition spec by ``trade_date`` month only.
+
+    ``MonthTransform(trade_date)`` — no ticker bucketing. This
+    table is one batched commit/day for ~250 tickers (~250
+    files/year worst case with zero compaction, 20x under the
+    5,000-file budget in CLAUDE.md §4.3 #22.e), so there is no
+    per-ticker file-multiplication risk of the kind that forced
+    the ``stocks.nse_delivery`` and ``algo.events`` nuke-rebuilds.
+
+    Args:
+        schema: Schema containing a ``trade_date`` field.
+
+    Returns:
+        PartitionSpec: Month partition on ``trade_date``.
+    """
+    trade_date_fid = schema.find_field("trade_date").field_id
+    return PartitionSpec(
+        PartitionField(
+            source_id=trade_date_fid,
+            field_id=1000,
+            transform=MonthTransform(),
+            name="trade_date_month",
+        )
+    )
+
+
+def _entry_quality_daily_sort_order(schema: Schema) -> SortOrder:
+    """Sort ``(ticker, trade_date)`` within each month partition —
+    drives compaction layout + predicate pushdown for per-ticker
+    lookups without a ticker partition."""
+    return SortOrder(
+        SortField(
+            source_id=schema.find_field("ticker").field_id,
+            transform=IdentityTransform(),
+        ),
+        SortField(
+            source_id=schema.find_field("trade_date").field_id,
+            transform=IdentityTransform(),
+        ),
+    )
+
+
 def _create_table(
     catalog: SqlCatalog,
     identifier: str,
@@ -2536,6 +2736,50 @@ def _create_table(
         _logger.info("Created Iceberg table '%s'.", identifier)
     except Exception:
         _logger.info("Table '%s' already exists — skipping.", identifier)
+
+
+def _ensure_table_properties(
+    catalog: SqlCatalog,
+    identifier: str,
+    props: dict[str, str],
+) -> None:
+    """Set Iceberg table properties idempotently.
+
+    Loads ``identifier``, compares against ``props``, and commits a
+    single ``set_properties`` transaction only when a value is
+    missing or differs — so a re-run of ``create_tables()`` does not
+    churn a no-op commit each time. Best-effort: a failure logs a
+    warning and returns (the table stays usable on its defaults).
+    Mirrors ``backend/algo/iceberg_init.py::_ensure_table_properties``
+    — duplicated here (not imported) because that module imports
+    ``_create_table``/``_get_catalog`` from this one, and importing
+    back would be circular.
+    """
+    try:
+        tbl = catalog.load_table(identifier)
+    except Exception:
+        _logger.warning(
+            "Cannot load %s to set properties — skipping.", identifier
+        )
+        return
+    current = dict(tbl.properties)
+    missing = {k: v for k, v in props.items() if current.get(k) != v}
+    if not missing:
+        return
+    try:
+        tbl.transaction().set_properties(**missing).commit_transaction()
+        _logger.info(
+            "Set %d table propert(ies) on %s: %s",
+            len(missing),
+            identifier,
+            ", ".join(sorted(missing)),
+        )
+    except Exception:
+        _logger.warning(
+            "Failed to set properties on %s — continuing.",
+            identifier,
+            exc_info=True,
+        )
 
 
 def create_tables() -> None:
@@ -2819,6 +3063,35 @@ def create_tables() -> None:
     )
 
     _universe_register()
+
+    # Entry Strength Score persistence (ASETPLTFRM Entry Strength
+    # Score, Task 12, 2026-07-12). One row/(ticker, trade_date),
+    # ~1 batched commit/day for the allowed_tickers ∪ QM≥58
+    # universe (~250 tickers) — MonthTransform(trade_date) only,
+    # no ticker bucketing (low-write tier, no per-ticker file-
+    # multiplication risk of the kind that forced the
+    # stocks.nse_delivery / algo.events nuke-rebuilds).
+    # Maintenance enrollment (ALL_TABLES, weekly long-tail tier —
+    # NOT _HOT_ICEBERG_TABLES) is Task 13, not this one.
+    entry_quality_daily_schema = _entry_quality_daily_schema()
+    _create_table(
+        catalog,
+        f"{_NAMESPACE}.entry_quality_daily",
+        entry_quality_daily_schema,
+        _entry_quality_daily_partition_spec(entry_quality_daily_schema),
+        sort_order=_entry_quality_daily_sort_order(entry_quality_daily_schema),
+    )
+    # Bound the metadata.json chain so old versions self-prune on
+    # every commit (Iceberg defaults to keeping them forever).
+    # Idempotent: only commits when a property is missing/changed.
+    _ensure_table_properties(
+        catalog,
+        f"{_NAMESPACE}.entry_quality_daily",
+        {
+            "write.metadata.delete-after-commit.enabled": "true",
+            "write.metadata.previous-versions-max": "20",
+        },
+    )
 
     _logger.info("Stocks Iceberg table initialisation complete.")
 
