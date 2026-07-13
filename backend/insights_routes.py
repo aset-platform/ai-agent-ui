@@ -60,6 +60,7 @@ from insights_models import (
     SectorsResponse,
     TargetRow,
     TargetsResponse,
+    WatchlistMarketContext,
     WatchlistStockRow,
     WatchlistStocksResponse,
 )
@@ -2202,6 +2203,10 @@ def create_insights_router() -> APIRouter:
             from backend.db.duckdb_engine import (
                 query_iceberg_df,
             )
+            from entry_strength_score import (
+                compute_ess,
+                compute_nifty_market_context,
+            )
             from tools._analysis_indicators import (
                 _calculate_technical_indicators,
             )
@@ -2246,22 +2251,27 @@ def create_insights_router() -> APIRouter:
             .date()
         )
 
-        # Fetch Nifty 50 returns once for RS calculations.
+        # Fetch Nifty 50 returns once for RS calculations. Window
+        # widened 135 → 300 to also cover SMA200 + ROC5 for the
+        # Nifty market context (ESS) below — same query, no new
+        # fetch introduced.
         _nifty_6m_return: float | None = None
         _nifty_3m_return: float | None = None
+        _nifty_ctx = None
         try:
             _nifty_df = query_iceberg_df(
                 "stocks.ohlcv",
                 "SELECT date, close FROM ohlcv "
                 "WHERE ticker = '^NSEI' "
                 "  AND close IS NOT NULL "
-                "ORDER BY date DESC LIMIT 135",
+                "ORDER BY date DESC LIMIT 300",
             )
+            _nc = (
+                _nifty_df.sort_values("date")["close"]
+                .astype(float)
+            )
+            _nifty_ctx = compute_nifty_market_context(_nc)
             if len(_nifty_df) >= 20:
-                _nc = (
-                    _nifty_df.sort_values("date")["close"]
-                    .astype(float)
-                )
                 _nifty_6m_return = float(
                     (_nc.iloc[-1] - _nc.iloc[0]) / _nc.iloc[0] * 100
                 )
@@ -2517,6 +2527,49 @@ def create_insights_router() -> APIRouter:
                         (_ltp_close - _sma200) / _sma200 * 100, 4
                     )
 
+                # Distance above SMA50 (ESS gate + proximity input).
+                _dist_sma50_pct: float | None = None
+                _sma_50_val = _safe(last.get("SMA_50"))
+                if (
+                    _sma_50_val is not None
+                    and _sma_50_val > 0
+                    and _ltp_close is not None
+                ):
+                    _dist_sma50_pct = round(
+                        (_ltp_close - _sma_50_val)
+                        / _sma_50_val * 100,
+                        4,
+                    )
+
+                # Entry Strength Score (ESS): pullback-health
+                # scoring, orthogonal to the composite Score above.
+                # Reuses grp/ind/_close_s already fetched/computed
+                # for this ticker — no new Iceberg query.
+                _ess = None
+                _open_v = _safe(grp["open"].iloc[-1])
+                _high_v = _safe(grp["high"].iloc[-1])
+                _low_v = _safe(grp["low"].iloc[-1])
+                if (
+                    _open_v is not None
+                    and _high_v is not None
+                    and _low_v is not None
+                    and _ltp_close is not None
+                ):
+                    _ess = compute_ess(
+                        open_=_open_v,
+                        high=_high_v,
+                        low=_low_v,
+                        close=_ltp_close,
+                        volume_series=grp["volume"].astype(
+                            float
+                        ),
+                        sma50_series=ind["SMA_50"].dropna(),
+                        atr_series=ind["ATR_14"].dropna(),
+                        close_series=_close_s,
+                        sma200=_sma200,
+                        dist_sma50_pct=_dist_sma50_pct,
+                    )
+
                 rows.append(
                     WatchlistStockRow(
                         ticker=str(ticker),
@@ -2540,6 +2593,15 @@ def create_insights_router() -> APIRouter:
                         blended_rs=_blended_rs,
                         mdd_6m=_mdd_6m,
                         dist_sma200=_dist_sma200,
+                        ess_score=(
+                            _ess.ess_score if _ess else None
+                        ),
+                        ess_gate_passed=(
+                            _ess.gate_passed if _ess else None
+                        ),
+                        ess_gate_reason=(
+                            _ess.gate_reason if _ess else None
+                        ),
                     )
                 )
             except Exception as exc:
@@ -2664,7 +2726,19 @@ def create_insights_router() -> APIRouter:
                     sum(v * w for v, w in _avail) / _tw, 4
                 )
 
-        result = WatchlistStocksResponse(stocks=rows)
+        market_context = (
+            WatchlistMarketContext(
+                nifty_return_pct=_nifty_ctx.nifty_return_pct,
+                nifty_roc5_pct=_nifty_ctx.nifty_roc5_pct,
+                nifty_below_sma200=_nifty_ctx.nifty_below_sma200,
+                nifty_roc5_extreme=_nifty_ctx.nifty_roc5_extreme,
+            )
+            if _nifty_ctx is not None
+            else WatchlistMarketContext()
+        )
+        result = WatchlistStocksResponse(
+            stocks=rows, market_context=market_context
+        )
         cache.set(
             ck, result.model_dump_json(), TTL_STABLE
         )
