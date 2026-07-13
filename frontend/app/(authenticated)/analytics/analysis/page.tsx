@@ -2453,6 +2453,88 @@ function ScoreMultiSelect({
   );
 }
 
+const ESS_BUCKETS = [
+  { value: "lt50",    label: "< 50",   caption: "Weak — Reject" },
+  { value: "50to60",  label: "50–60",  caption: "Avoid" },
+  { value: "60to70",  label: "60–70",  caption: "Tradable" },
+  { value: "70to80",  label: "70–80",  caption: "Preferred" },
+  { value: "80to90",  label: "80–90",  caption: "High priority" },
+  { value: "gt90",    label: "> 90",   caption: "Elite" },
+] as const;
+
+type EssBucket = (typeof ESS_BUCKETS)[number]["value"];
+
+function EssMultiSelect({
+  selected,
+  onChange,
+}: {
+  selected: EssBucket[];
+  onChange: (v: EssBucket[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = (v: EssBucket) =>
+    onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v]);
+
+  const label =
+    selected.length === 0
+      ? "All"
+      : selected.length === 1
+        ? ESS_BUCKETS.find((b) => b.value === selected[0])?.label ?? "1 range"
+        : `${selected.length} ranges`;
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        data-testid="watchlist-ess-select"
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition-colors ${
+          selected.length > 0
+            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+            : "border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+        }`}
+      >
+        {label}
+        <svg className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-[80] min-w-full w-max rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-xl py-1">
+          {selected.length > 0 && (
+            <button type="button" onClick={() => onChange([])} className="w-full text-left px-3 py-1.5 text-xs text-indigo-600 dark:text-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-800 font-medium">
+              Clear all
+            </button>
+          )}
+          {ESS_BUCKETS.map((b) => {
+            const checked = selected.includes(b.value);
+            return (
+              <label key={b.value} className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800">
+                <input type="checkbox" checked={checked} onChange={() => toggle(b.value)} className="shrink-0 accent-indigo-600" />
+                <span className="text-xs text-gray-900 dark:text-gray-100 whitespace-nowrap">
+                  <span className="font-medium">{b.label}</span>
+                  <span className="text-gray-500 dark:text-gray-400"> — {b.caption}</span>
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ColumnTooltip({ text }: { text: string }) {
   const triggerRef = useRef<HTMLSpanElement>(null);
   const [coords, setCoords] = useState<{
@@ -2537,13 +2619,14 @@ const RESET_TARGET = {
   mdd6mFilter:      [] as Mdd6mBucket[],
   distSma200Filter: [] as DistSma200Bucket[],
   scoreFilter:      [] as ScoreBucket[],
+  essFilter:        [] as EssBucket[],
   goldenCross:      false,
   sma50AboveLtp:    false,
   sma200AboveLtp:   false,
   search:           "",
 };
 type DistSma200Filter = DistSma200Bucket[];
-type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sharpe_ratio" | "blended_rs" | "rs_3m" | "rs_6m" | "mdd_6m" | "atr_pct" | "dist_sma200" | "score";
+type SortKey = "ticker" | "close" | "rsi_2" | "current_rsi_2" | "sma_200" | "sma_50" | "sharpe_ratio" | "blended_rs" | "rs_3m" | "rs_6m" | "mdd_6m" | "atr_pct" | "dist_sma200" | "score" | "ess_score";
 type SortDir = "asc" | "desc";
 
 const PAGE_SIZE_OPTIONS_WL = [10, 25, 50] as const;
@@ -2589,6 +2672,9 @@ function WatchlistStocksTab() {
   );
   const [scoreFilter, setScoreFilter] = useState<ScoreBucket[]>(
     ["60to70", "70to80", "80to90", "gt90"],
+  );
+  const [essFilter, setEssFilter] = useState<EssBucket[]>(
+    [...RESET_TARGET.essFilter],
   );
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("ticker");
@@ -2781,6 +2867,21 @@ function WatchlistStocksTab() {
         });
       });
     }
+    if (essFilter.length > 0) {
+      stocks = stocks.filter((s) => {
+        const v = s.ess_score;
+        if (v == null) return false;
+        return essFilter.some((bucket) => {
+          if (bucket === "lt50")   return v < 50;
+          if (bucket === "50to60") return v >= 50 && v < 60;
+          if (bucket === "60to70") return v >= 60 && v < 70;
+          if (bucket === "70to80") return v >= 70 && v < 80;
+          if (bucket === "80to90") return v >= 80 && v < 90;
+          if (bucket === "gt90")   return v >= 90;
+          return false;
+        });
+      });
+    }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       stocks = stocks.filter((s) =>
@@ -2801,7 +2902,7 @@ function WatchlistStocksTab() {
       return sortDir === "asc" ? cmp : -cmp;
     });
     return stocks;
-  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, scoreFilter, search, sortKey, sortDir]);
+  }, [data, rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, scoreFilter, essFilter, search, sortKey, sortDir]);
 
   const totalPages = Math.max(
     1,
@@ -2818,7 +2919,7 @@ function WatchlistStocksTab() {
     let cancelled = false;
     queueMicrotask(() => { if (!cancelled) setPage(0); });
     return () => { cancelled = true; };
-  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, scoreFilter, search, pageSize, market]);
+  }, [rsi2Filter, curRsi2Filter, goldenCross, sma50AboveLtp, sma200AboveLtp, atrFilter, sharpeFilter, rs3mFilter, rsFilter, blendedRsFilter, mdd6mFilter, distSma200Filter, scoreFilter, essFilter, search, pageSize, market]);
 
   const resetAllFilters = () => {
     setRsi2Filter(RESET_TARGET.rsi2Filter);
@@ -2834,6 +2935,7 @@ function WatchlistStocksTab() {
     setMdd6mFilter([...RESET_TARGET.mdd6mFilter]);
     setDistSma200Filter([...RESET_TARGET.distSma200Filter]);
     setScoreFilter([...RESET_TARGET.scoreFilter]);
+    setEssFilter([...RESET_TARGET.essFilter]);
     setSearch(RESET_TARGET.search);
   };
 
@@ -2874,8 +2976,23 @@ function WatchlistStocksTab() {
     );
   }
 
+  const marketContext = data?.market_context ?? null;
+
   return (
     <div className="space-y-3">
+      {/* Market-context banners — page-level, not per-row */}
+      {marketContext?.nifty_below_sma200 && (
+        <p className="rounded bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-sm text-amber-900 dark:text-amber-300">
+          Market regime unfavorable for new longs — Nifty is below its
+          SMA200.
+        </p>
+      )}
+      {marketContext?.nifty_roc5_extreme && (
+        <p className="rounded bg-rose-50 dark:bg-rose-900/20 px-3 py-2 text-sm text-rose-900 dark:text-rose-300">
+          Broad market falling fast — Nifty is down{" "}
+          {marketContext.nifty_roc5_pct?.toFixed(1)}% over 5 sessions.
+        </p>
+      )}
       {/* Toolbar */}
       <div className="flex flex-col gap-2">
         {/* Filter strip: row 1 = dropdowns, row 2 = chips + search + actions */}
@@ -3098,6 +3215,19 @@ function WatchlistStocksTab() {
 
             <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 mx-1" />
 
+            {/* ESS — multi-select */}
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs text-gray-500 dark:text-gray-400 font-medium whitespace-nowrap">
+                ESS
+              </label>
+              <EssMultiSelect
+                selected={essFilter}
+                onChange={setEssFilter}
+              />
+            </div>
+
+            <div className="h-4 w-px bg-gray-200 dark:bg-gray-700 mx-1" />
+
             {/* Search */}
             <div className="relative">
               <svg
@@ -3311,6 +3441,35 @@ function WatchlistStocksTab() {
                       "  SMA200 Distance    10%  (ideal 20–30%; peaks at 100, drops to 0 above 90%)\n\n" +
                       "Missing factors are excluded and remaining weights re-normalised.",
                   },
+                  {
+                    key: "ess_score",
+                    label: "ESS",
+                    tooltip:
+                      "Entry Strength Score (ESS) — 0–100, higher = healthier pullback, " +
+                      "today. Independent of Quality Score (QM Score) by design.\n\n" +
+                      "Weighted blend of 6 factors:\n" +
+                      "  Selling Absorption × Rel. Volume   30%\n" +
+                      "    Absorption = 60% Close-Location-Value + 40% Lower-Wick Ratio\n" +
+                      "    (both from today's OHLC), scored jointly against volume vs\n" +
+                      "    its 20-day average — high volume only scores well if the\n" +
+                      "    close also shows absorption.\n" +
+                      "  SMA50 Proximity                    20%  (ideal -2% to -3% " +
+                      "below SMA50)\n" +
+                      "  Trend Stability (SMA50 slope)      15%  (10-day slope; " +
+                      "flattening SMA50 scores low)\n" +
+                      "  Selling Deceleration               15%  (is the daily decline " +
+                      "shrinking day over day)\n" +
+                      "  ROC5 (5-day rate of change)        12%  (ideal ~-4%; -18% " +
+                      "reads as a falling knife)\n" +
+                      "  ATR Expansion                       8%  (today's ATR vs 10 " +
+                      "days ago; expansion = danger)\n\n" +
+                      "Missing factors are excluded and remaining weights " +
+                      "re-normalised.\n\n" +
+                      "Hard gates (flag, don't hide, the row):\n" +
+                      "  Price < SMA200 → rejected\n" +
+                      "  > 10% below SMA50 → rejected\n" +
+                      "A rejected row still shows its ESS number for review.",
+                  },
                 ] as { key: SortKey; label: string; tooltip?: string }[]
               ).map((col) => {
                 const active = sortKey === col.key;
@@ -3345,7 +3504,7 @@ function WatchlistStocksTab() {
             {pageRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={14}
+                  colSpan={15}
                   className="px-4 py-8 text-center text-sm text-gray-400 dark:text-gray-500"
                 >
                   No stocks match the current filter.
@@ -3508,6 +3667,27 @@ function WatchlistStocksTab() {
                       title="Score = 0.30×Sharpe(pct) + 0.30×BlendedRS(pct) + 0.20×MDD(pct) + 0.10×ATR(closeness) + 0.10×SMA200(closeness)"
                     >
                       {fmt(row.score)}
+                    </td>
+                    <td className={`px-4 py-2.5 font-mono text-xs font-semibold ${
+                      row.ess_score == null
+                        ? "text-gray-400"
+                        : row.ess_score >= 70
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : row.ess_score < 50
+                            ? "text-red-500 dark:text-red-400"
+                            : "text-gray-900 dark:text-gray-100"
+                    }`}
+                      title="ESS = 0.30×Absorption×RelVol + 0.20×SMA50 Proximity + 0.15×Trend Stability + 0.15×Selling Deceleration + 0.12×ROC5 + 0.08×ATR Expansion"
+                    >
+                      {row.ess_score != null ? row.ess_score.toFixed(1) : "—"}
+                      {row.ess_gate_passed === false && (
+                        <span
+                          className="ml-1 inline-block rounded bg-amber-100 dark:bg-amber-900/40 px-1 text-[10px] text-amber-800 dark:text-amber-300"
+                          title={`Gated: ${row.ess_gate_reason ?? "unknown"}`}
+                        >
+                          ⚠
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );
