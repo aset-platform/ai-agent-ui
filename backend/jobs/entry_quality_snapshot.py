@@ -28,6 +28,7 @@ from typing import Any
 import pandas as pd
 import pyarrow as pa
 from entry_strength_score import compute_ess, compute_nifty_market_context
+from pyiceberg.expressions import And, In
 from sqlalchemy import text
 
 from backend.algo._iceberg_retry import retry_iceberg_op
@@ -36,6 +37,7 @@ from backend.db.duckdb_engine import (
 )
 from backend.db.duckdb_engine import query_iceberg_df as _query_iceberg_df_sync
 from backend.db.engine import disposable_pg_session
+from backend.market_utils import detect_market
 from backend.tools._analysis_indicators import (
     _calculate_technical_indicators,
 )
@@ -86,12 +88,34 @@ async def query_iceberg_df(
 
 
 def _append_snapshot_rows(rows: list[dict[str, Any]]) -> None:
-    """Batched single-commit Iceberg append (Task 12 schema)."""
+    """NaN-replaceable upsert (Task 12 schema): scoped pre-delete on
+    the incoming batch's ``(ticker, trade_date)`` pairs, then a
+    single batched Iceberg append — mirrors
+    ``daily_features_daily_compute.py``'s upsert pattern so a
+    re-triggered/retried run (same ``trade_date``) never duplicates
+    rows for a ticker.
+    """
     from stocks.create_tables import _get_catalog
+
+    tickers = sorted({r["ticker"] for r in rows})
+    trade_dates = sorted({r["trade_date"] for r in rows})
 
     def _do_append() -> None:
         cat = _get_catalog()
         tbl = cat.load_table(_TABLE)
+        try:
+            tbl.delete(
+                And(
+                    In("ticker", tickers),
+                    In("trade_date", trade_dates),
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _logger.debug(
+                "entry_quality_snapshot pre-delete skipped (%s): %s",
+                _TABLE,
+                exc,
+            )
         arrow_tbl = pa.Table.from_pylist(rows, schema=tbl.schema().as_arrow())
         tbl.append(arrow_tbl)
 
@@ -201,7 +225,7 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
             {
                 "trade_date": grp["date"].iloc[-1].date(),
                 "ticker": ticker,
-                "market": "india",
+                "market": detect_market(ticker),
                 # QM Score fields: Task 15 scope — see module
                 # docstring. Left None here on purpose.
                 "qm_score": None,
