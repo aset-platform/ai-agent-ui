@@ -7,6 +7,7 @@ from entry_strength_score import (
     check_hard_gates,
     close_location_value,
     compute_ess,
+    compute_nifty_market_context,
     lower_wick_ratio,
     relative_volume_ratio,
     roc5_score,
@@ -270,3 +271,25 @@ def test_compute_ess_missing_factor_renormalizes():
     )
     assert result.ess_score is not None
     assert result.trend_stability_score is None
+
+
+def test_nifty_context_below_sma200_and_roc5_extreme():
+    closes = pd.Series([100.0] * 194 + [100.0] * 5 + [93.0])
+    ctx = compute_nifty_market_context(closes)
+    assert ctx.nifty_below_sma200 is True
+    assert ctx.nifty_roc5_extreme is True
+
+
+def test_nifty_context_healthy_market():
+    closes = pd.Series([90.0 + i * 0.1 for i in range(199)] + [110.0])
+    ctx = compute_nifty_market_context(closes)
+    assert ctx.nifty_below_sma200 is False
+    assert ctx.nifty_roc5_extreme is False
+
+
+def test_nifty_context_insufficient_history_returns_none_fields():
+    closes = pd.Series([100.0, 101.0])
+    ctx = compute_nifty_market_context(closes)
+    assert ctx.nifty_below_sma200 is None
+    assert ctx.nifty_roc5_pct is None
+    assert ctx.nifty_roc5_extreme is False

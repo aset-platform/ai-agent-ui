@@ -305,3 +305,40 @@ def compute_ess(
         roc5_raw_pct=roc5_raw,
         atr_expansion_score=parts["atr_expansion_score"],
     )
+
+
+@dataclass
+class NiftyMarketContext:
+    nifty_return_pct: float | None
+    nifty_roc5_pct: float | None
+    nifty_below_sma200: bool | None
+    nifty_roc5_extreme: bool
+
+
+def compute_nifty_market_context(
+    nifty_close_series: pd.Series,
+) -> NiftyMarketContext:
+    n = len(nifty_close_series)
+
+    nifty_return_pct: float | None = None
+    if n >= 2:
+        prev = float(nifty_close_series.iloc[-2])
+        today = float(nifty_close_series.iloc[-1])
+        if prev > 0:
+            nifty_return_pct = round((today - prev) / prev * 100, 4)
+
+    nifty_roc5_pct, _ = roc5_score(nifty_close_series)
+
+    nifty_below_sma200: bool | None = None
+    if n >= 200:
+        sma200 = float(nifty_close_series.iloc[-200:].mean())
+        nifty_below_sma200 = float(nifty_close_series.iloc[-1]) < sma200
+
+    nifty_roc5_extreme = nifty_roc5_pct is not None and nifty_roc5_pct < -6.0
+
+    return NiftyMarketContext(
+        nifty_return_pct=nifty_return_pct,
+        nifty_roc5_pct=nifty_roc5_pct,
+        nifty_below_sma200=nifty_below_sma200,
+        nifty_roc5_extreme=nifty_roc5_extreme,
+    )
