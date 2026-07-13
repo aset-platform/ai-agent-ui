@@ -77,6 +77,73 @@ async def test_snapshot_job_writes_expected_row_count():
     assert written_rows[0]["qm_score"] is not None
 
 
+@pytest.mark.asyncio
+async def test_snapshot_job_degrades_when_full_universe_fetch_fails():
+    """A transient Iceberg-catalog hiccup in ``_full_universe_tickers``
+    must not take down the whole run — the job should fall back to
+    ``candidates = allowed`` and still write rows for the
+    allowed_tickers ticker(s), matching pre-Task-15 behavior."""
+    ohlcv_df = pd.DataFrame(
+        {
+            "ticker": ["TCS.NS"] * 300,
+            "date": pd.date_range("2025-01-01", periods=300, freq="D"),
+            "open": [100.0] * 300,
+            "high": [101.0] * 300,
+            "low": [99.0] * 300,
+            "close": [100.0] * 300,
+            "volume": [1_000_000.0] * 300,
+        }
+    )
+    nifty_df = pd.DataFrame(
+        {
+            "date": pd.date_range("2025-01-01", periods=300, freq="D"),
+            "close": [100.0] * 300,
+        }
+    )
+
+    with (
+        patch(
+            "backend.jobs.entry_quality_snapshot.disposable_pg_session"
+        ) as mock_pg,
+        patch(
+            "backend.jobs.entry_quality_snapshot._full_universe_tickers",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("Iceberg catalog unavailable"),
+        ) as mock_universe,
+        patch(
+            "backend.jobs.entry_quality_snapshot.query_iceberg_df",
+            new_callable=AsyncMock,
+        ) as mock_query,
+        patch(
+            "backend.jobs.entry_quality_snapshot._append_snapshot_rows"
+        ) as mock_append,
+    ):
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = [("TCS.NS",)]
+        mock_session.execute.return_value = mock_result
+        mock_pg.return_value.__aenter__.return_value = mock_session
+        mock_query.side_effect = [ohlcv_df, nifty_df]
+
+        # No exception should propagate — the job completes despite
+        # the full-universe fetch raising.
+        result = await _run({})
+
+    mock_universe.assert_awaited_once()
+    assert result["rows_written"] == 1
+    mock_append.assert_called_once()
+    written_rows = mock_append.call_args.args[0]
+    assert written_rows[0]["ticker"] == "TCS.NS"
+
+    # The OHLCV batch query must only have been scoped to the
+    # allowed_tickers set (no full-universe discovery happened for
+    # this run) — the SQL's IN(...) placeholder list is built from
+    # `candidates`, so confirm only TCS.NS appears there.
+    ohlcv_sql = mock_query.call_args_list[0].args[1]
+    assert "'TCS.NS'" in ohlcv_sql
+
+
 def test_append_snapshot_rows_scopes_delete_on_ticker_and_trade_date():
     """Re-triggering the job for a ``trade_date`` already written
     MUST NOT duplicate rows — the pre-delete predicate scopes on

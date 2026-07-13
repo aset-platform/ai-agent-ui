@@ -232,7 +232,15 @@ def _append_snapshot_rows(rows: list[dict[str, Any]]) -> None:
 
 async def _run(payload: dict[str, Any]) -> dict[str, Any]:
     allowed = await _allowed_tickers_union()
-    universe = await _full_universe_tickers()
+    try:
+        universe = await _full_universe_tickers()
+    except Exception:
+        _logger.error(
+            "entry_quality_snapshot: full-universe fetch failed — "
+            "degrading to allowed_tickers only.",
+            exc_info=True,
+        )
+        universe = []
 
     # Candidate universe for the OHLCV fetch + QM Score batch: the
     # full platform stock+ETF universe UNIONED with allowed_tickers
