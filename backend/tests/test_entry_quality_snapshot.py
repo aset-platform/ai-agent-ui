@@ -66,6 +66,10 @@ async def test_snapshot_job_writes_expected_row_count():
 
     assert result["rows_written"] == 1
     mock_append.assert_called_once()
+    # Task 15: qm_score must be a real computed value now, not the
+    # None placeholder Task 14 shipped.
+    written_rows = mock_append.call_args.args[0]
+    assert written_rows[0]["qm_score"] is not None
 
 
 def test_append_snapshot_rows_scopes_delete_on_ticker_and_trade_date():

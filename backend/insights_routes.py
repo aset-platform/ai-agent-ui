@@ -2627,104 +2627,26 @@ def create_insights_router() -> APIRouter:
         # Composite score:
         #   Sharpe(6M) 30% + Blended RS 30% + MDD(6M) 20%  → percentile rank
         #   ATR%       10% + SMA200 Distance 10%            → closeness score
-        #
-        # Percentile rank: cross-stock rank 0–100 (higher = better).
-        # MDD(6M) is negative; shallower drawdown → higher rank.
-        #
-        # Closeness score: fixed piecewise-linear curve (0–100) where
-        # the ideal range scores 100 and scores decay on both sides.
-        # ATR ideal: 3–4% (best risk-adjusted volatility for mean-rev).
-        # SMA200 ideal: 20–30% above (healthy trend, not overextended).
-        # Outside the defined range the curve is extrapolated linearly
-        # and clamped to [0, 100].
-        _ATR_PTS: list[tuple[float, float]] = [
-            (2, 90), (3, 100), (4, 100), (5, 90),
-            (6, 80), (7, 60), (8, 30), (10, 0),
-        ]
-        _SMA_PTS: list[tuple[float, float]] = [
-            (5, 70), (10, 90), (20, 100), (30, 100),
-            (40, 90), (50, 70), (70, 30), (90, 0),
-        ]
+        # Formula lives in qm_score.compute_qm_scores (Task 15
+        # extraction) — see that module's docstring for the full
+        # rationale + curve shapes; do not re-derive here.
+        from qm_score import compute_qm_scores
 
-        def _pct_rank(
-            vals: list[float], v: float, n: int
-        ) -> float:
-            if n <= 1:
-                return 50.0
-            return sorted(vals).index(v) / (n - 1) * 100
-
-        def _closeness(
-            pts: list[tuple[float, float]], v: float
-        ) -> float:
-            """Piecewise-linear score; extrapolates + clamps to [0,100]."""
-            if v <= pts[0][0]:
-                x0, y0 = pts[0]
-                x1, y1 = pts[1]
-                s = (y1 - y0) / (x1 - x0)
-                return max(0.0, min(100.0, y0 + s * (v - x0)))
-            if v >= pts[-1][0]:
-                x0, y0 = pts[-2]
-                x1, y1 = pts[-1]
-                s = (y1 - y0) / (x1 - x0)
-                return max(0.0, min(100.0, y1 + s * (v - x1)))
-            for i in range(len(pts) - 1):
-                x0, y0 = pts[i]
-                x1, y1 = pts[i + 1]
-                if x0 <= v <= x1:
-                    t = (v - x0) / (x1 - x0)
-                    return max(0.0, min(100.0, y0 + t * (y1 - y0)))
-            return 0.0
-
-        _sharpe_vals = [
-            r.sharpe_ratio for r in rows
-            if r.sharpe_ratio is not None
-        ]
-        _brs_vals = [
-            r.blended_rs for r in rows
-            if r.blended_rs is not None
-        ]
-        _mdd_vals = [
-            r.mdd_6m for r in rows if r.mdd_6m is not None
-        ]
-        _ns = len(_sharpe_vals)
-        _nb = len(_brs_vals)
-        _nm = len(_mdd_vals)
+        _qm_inputs = {
+            row.ticker: {
+                "sharpe_ratio": row.sharpe_ratio,
+                "blended_rs": row.blended_rs,
+                "mdd_6m": row.mdd_6m,
+                "atr_pct": row.atr_pct,
+                "dist_sma200": row.dist_sma200,
+            }
+            for row in rows
+        }
+        _qm_results = compute_qm_scores(_qm_inputs)
         for row in rows:
-            _sp = (
-                _pct_rank(_sharpe_vals, row.sharpe_ratio, _ns)
-                if row.sharpe_ratio is not None and _ns > 0
-                else None
-            )
-            _bp = (
-                _pct_rank(_brs_vals, row.blended_rs, _nb)
-                if row.blended_rs is not None and _nb > 0
-                else None
-            )
-            _mp = (
-                _pct_rank(_mdd_vals, row.mdd_6m, _nm)
-                if row.mdd_6m is not None and _nm > 0
-                else None
-            )
-            _ap = (
-                _closeness(_ATR_PTS, row.atr_pct)
-                if row.atr_pct is not None
-                else None
-            )
-            _wp = (
-                _closeness(_SMA_PTS, row.dist_sma200)
-                if row.dist_sma200 is not None
-                else None
-            )
-            _parts = [
-                (_sp, 0.30), (_bp, 0.30), (_mp, 0.20),
-                (_ap, 0.10), (_wp, 0.10),
-            ]
-            _avail = [(v, w) for v, w in _parts if v is not None]
-            if _avail:
-                _tw = sum(w for _, w in _avail)
-                row.score = round(
-                    sum(v * w for v, w in _avail) / _tw, 4
-                )
+            _qm = _qm_results.get(row.ticker)
+            if _qm is not None:
+                row.score = _qm.score
 
         market_context = (
             WatchlistMarketContext(

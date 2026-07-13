@@ -7,21 +7,38 @@ Standalone (not a pipeline step) scheduled job — one batched Iceberg
 commit per run. Wired via ``@register_job("entry_quality_snapshot")``
 in ``backend/jobs/executor.py``.
 
-Scope note (Task 14, ASETPLTFRM Entry Strength Score plan): the
-``qm_score``/``qm_*_pctile`` fields and the "QM Score >= 58" half of
-the universe union (this job currently only covers
-``allowed_tickers``) are intentionally left as ``None``/placeholder
-in THIS task. Task 15 retrofits real values via
-``compute_qm_scores(ohlcv_df) -> dict[str, QmResult]``, factored out
-of ``insights_routes.py``'s post-loop QM Score block, into both this
-job and the watchlist route. Shipping ESS persistence standalone
-first is a deliberate, valid intermediate state.
+Scope note (Task 15, ASETPLTFRM Entry Strength Score plan): this job
+now computes real ``qm_score``/``qm_*_pctile`` values via
+``qm_score.compute_qm_scores`` (factored out of
+``insights_routes.py``'s post-loop QM Score block, Task 11) instead of
+the ``None`` placeholders Task 14 shipped. The five raw QM inputs
+(Sharpe(6M), Blended RS, MDD(6M), ATR%, Dist-SMA200) are re-derived
+per ticker here from the same OHLCV + indicators this job already
+loads, mirroring the route's per-ticker formulas verbatim so the
+persisted score agrees with what the Watchlist Stocks page showed
+that ticker that day.
+
+**Known limitation (design spec §8 "allowed_tickers ∪ QM Score >= 58"
+universe):** this job's ticker universe is still scoped to
+``allowed_tickers`` only (see ``_allowed_tickers_union`` below) — the
+``qualifying`` union below can only ever equal ``allowed`` today,
+because QM scores are computed from an ``ohlcv_df`` that was already
+fetched scoped to ``allowed``. Discovering ADDITIONAL tickers purely
+by QM Score >= 58 (i.e. tickers no live strategy currently allows)
+requires a broader candidate universe fetched BEFORE this query — no
+existing helper aggregates "all users' watchlist ∪ holdings"
+system-wide, and scanning the full stock+ETF discovery universe
+(``_full_universe`` in ``insights_routes.py``) would materially widen
+this job's OHLCV read volume (CLAUDE.md §4.1 #6/#8). That candidate-
+universe decision is left for a follow-up task rather than guessed at
+here.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from datetime import datetime, timezone
 from functools import reduce
 from typing import Any
@@ -30,6 +47,7 @@ import pandas as pd
 import pyarrow as pa
 from entry_strength_score import compute_ess, compute_nifty_market_context
 from pyiceberg.expressions import And, EqualTo, Or
+from qm_score import compute_qm_scores
 from sqlalchemy import text
 
 from backend.algo._iceberg_retry import retry_iceberg_op
@@ -53,6 +71,22 @@ _TABLE = "stocks.entry_quality_daily"
 # input the user actually saw that day, not an approximation.
 _TRAILING_BARS = 300
 _MIN_BARS = 6
+
+
+def _safe(val: Any) -> float | None:
+    """Convert to float or return ``None`` for NaN/inf — mirrors
+    ``insights_routes.py::_safe`` verbatim so the QM raw inputs
+    computed below (from ``last``/indicator Series values) round the
+    same way the route's version does.
+    """
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        return None if math.isnan(f) else round(f, 4)
+    except (ValueError, TypeError):
+        return None
+
 
 _ALLOWED_TICKERS_SQL = text("""
     SELECT DISTINCT jsonb_array_elements_text(lc.allowed_tickers) AS ticker
@@ -152,8 +186,13 @@ def _append_snapshot_rows(rows: list[dict[str, Any]]) -> None:
 async def _run(payload: dict[str, Any]) -> dict[str, Any]:
     allowed = await _allowed_tickers_union()
 
-    # QM Score >= 58 universe: Task 15's exclusive scope (see module
-    # docstring) — this job only covers allowed_tickers for now.
+    # QM Score >= 58 universe: see module docstring "Known
+    # limitation" — this job's OHLCV fetch below is still scoped to
+    # allowed_tickers only, so the union reassignment after the
+    # per-ticker loop can only ever equal `allowed` today. Kept as
+    # `allowed` here (rather than pre-declaring a wider set) since
+    # the qualifying candidate universe is fetched, not computed,
+    # and there is nothing broader to fetch yet.
     qualifying = allowed
     if not qualifying:
         _logger.info("entry_quality_snapshot: no qualifying tickers — skip.")
@@ -179,12 +218,30 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
         "SELECT date, close FROM ohlcv WHERE ticker = '^NSEI' "
         "AND close IS NOT NULL ORDER BY date DESC LIMIT 300",
     )
-    nifty_ctx = compute_nifty_market_context(
-        nifty_df.sort_values("date")["close"].astype(float)
-    )
+    _nifty_close = nifty_df.sort_values("date")["close"].astype(float)
+    nifty_ctx = compute_nifty_market_context(_nifty_close)
+
+    # Nifty 6M/3M returns for RS(6M)/RS(3M) below — same series
+    # already fetched above, no new query. Mirrors
+    # insights_routes.py::_watchlist_stocks' verbatim.
+    nifty_6m_return: float | None = None
+    nifty_3m_return: float | None = None
+    if len(_nifty_close) >= 20:
+        nifty_6m_return = float(
+            (_nifty_close.iloc[-1] - _nifty_close.iloc[0])
+            / _nifty_close.iloc[0]
+            * 100
+        )
+        if len(_nifty_close) >= 64:
+            nifty_3m_return = float(
+                (_nifty_close.iloc[-1] - _nifty_close.iloc[-64])
+                / _nifty_close.iloc[-64]
+                * 100
+            )
 
     written_at = datetime.now(timezone.utc).replace(tzinfo=None)
     rows: list[dict[str, Any]] = []
+    qm_inputs: dict[str, dict[str, float | None]] = {}
     for ticker, grp in ohlcv_df.groupby("ticker"):
         grp = grp.sort_values("date")
         if len(grp) < _MIN_BARS:
@@ -235,6 +292,83 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
             else None
         )
 
+        # QM Score raw inputs — Sharpe(6M), RS(6M)/RS(3M) vs. Nifty,
+        # Blended RS, MDD(6M), ATR%, Dist-SMA200. Formulas copied
+        # verbatim from insights_routes.py::_watchlist_stocks' per-
+        # ticker block (Task 11) so this job's QM Score agrees with
+        # what the route showed the user that day (see module
+        # docstring).
+        _close_s = grp["close"].astype(float)
+        sharpe: float | None = None
+        stock_6m_return: float | None = None
+        stock_3m_return: float | None = None
+        try:
+            _rets = _close_s.pct_change().dropna()
+            _rets6 = _rets.iloc[-126:]
+            if len(_rets6) >= 20:
+                _std = float(_rets6.std())
+                if _std > 0:
+                    sharpe = round(float(_rets6.mean()) / _std * (252**0.5), 4)
+            _c6 = _close_s.iloc[-127:]
+            if len(_c6) >= 2:
+                stock_6m_return = float(
+                    (_c6.iloc[-1] - _c6.iloc[0]) / _c6.iloc[0] * 100
+                )
+            _c3 = _close_s.iloc[-64:]
+            if len(_c3) >= 2:
+                stock_3m_return = float(
+                    (_c3.iloc[-1] - _c3.iloc[0]) / _c3.iloc[0] * 100
+                )
+        except Exception:  # noqa: BLE001
+            pass
+
+        rs_6m: float | None = None
+        if stock_6m_return is not None and nifty_6m_return is not None:
+            rs_6m = round(stock_6m_return - nifty_6m_return, 4)
+
+        rs_3m: float | None = None
+        if stock_3m_return is not None and nifty_3m_return is not None:
+            rs_3m = round(stock_3m_return - nifty_3m_return, 4)
+
+        blended_rs: float | None = None
+        if rs_3m is not None and rs_6m is not None:
+            blended_rs = round(0.6 * rs_3m + 0.4 * rs_6m, 4)
+
+        mdd_6m: float | None = None
+        try:
+            _c6m = _close_s.iloc[-126:]
+            if len(_c6m) >= 2:
+                _peak = _c6m.cummax()
+                _dd = (_c6m - _peak) / _peak * 100
+                mdd_6m = round(float(_dd.min()), 4)
+        except Exception:  # noqa: BLE001
+            pass
+
+        _atr14 = _safe(last.get("ATR_14"))
+        _close_val = _safe(last.get("Close"))
+        atr_pct: float | None = None
+        if _atr14 is not None and _close_val is not None and _close_val > 0:
+            atr_pct = round(_atr14 / _close_val * 100, 4)
+
+        _sma200_safe = _safe(last.get("SMA_200"))
+        dist_sma200: float | None = None
+        if (
+            _close_val is not None
+            and _sma200_safe is not None
+            and _sma200_safe > 0
+        ):
+            dist_sma200 = round(
+                (_close_val - _sma200_safe) / _sma200_safe * 100, 4
+            )
+
+        qm_inputs[ticker] = {
+            "sharpe_ratio": sharpe,
+            "blended_rs": blended_rs,
+            "mdd_6m": mdd_6m,
+            "atr_pct": atr_pct,
+            "dist_sma200": dist_sma200,
+        }
+
         ess = compute_ess(
             open_=float(grp["open"].iloc[-1]),
             high=float(grp["high"].iloc[-1]),
@@ -252,8 +386,10 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
                 "trade_date": grp["date"].iloc[-1].date(),
                 "ticker": ticker,
                 "market": detect_market(ticker),
-                # QM Score fields: Task 15 scope — see module
-                # docstring. Left None here on purpose.
+                # QM Score fields: patched below, after
+                # compute_qm_scores runs once across the full batch
+                # (percentile ranks need the whole cross-stock set,
+                # not a single ticker in isolation).
                 "qm_score": None,
                 "qm_sharpe_pctile": None,
                 "qm_rs_pctile": None,
@@ -278,6 +414,33 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
                 "written_at": written_at,
             }
         )
+
+    qm_results = compute_qm_scores(qm_inputs)
+    for row in rows:
+        qm = qm_results.get(row["ticker"])
+        if qm is not None:
+            row["qm_score"] = qm.score
+            row["qm_sharpe_pctile"] = qm.sharpe_pctile
+            row["qm_rs_pctile"] = qm.rs_pctile
+            row["qm_mdd_pctile"] = qm.mdd_pctile
+            row["qm_atr_closeness"] = qm.atr_closeness
+            row["qm_sma200_closeness"] = qm.sma200_closeness
+
+    # See module docstring "Known limitation" — today this can only
+    # ever equal `allowed` (qm_results is keyed by the same tickers
+    # `ohlcv_df` was already scoped to), but is written as an
+    # explicit union so a future widened candidate-universe fetch
+    # only needs to change what feeds `qm_inputs`, not this line.
+    qualifying = allowed | {
+        t
+        for t, r in qm_results.items()
+        if r.score is not None and r.score >= 58
+    }
+    _logger.debug(
+        "entry_quality_snapshot: qualifying=%d (allowed=%d)",
+        len(qualifying),
+        len(allowed),
+    )
 
     if rows:
         _append_snapshot_rows(rows)
