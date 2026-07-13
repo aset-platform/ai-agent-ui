@@ -394,10 +394,21 @@ export interface WatchlistStockRow {
   mdd_6m: number | null;
   dist_sma200: number | null;
   score: number | null;
+  ess_score: number | null;
+  ess_gate_passed: boolean | null;
+  ess_gate_reason: string | null;
+}
+
+export interface WatchlistMarketContext {
+  nifty_return_pct: number | null;
+  nifty_roc5_pct: number | null;
+  nifty_below_sma200: boolean | null;
+  nifty_roc5_extreme: boolean;
 }
 
 export interface WatchlistStocksResponse {
   stocks: WatchlistStockRow[];
+  market_context: WatchlistMarketContext | null;
 }
 
 export interface TargetRow {

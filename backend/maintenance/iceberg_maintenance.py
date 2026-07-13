@@ -106,6 +106,11 @@ ALL_TABLES = [
     # snapshot count + manifest count bounded.
     "algo.events",
     "algo.intraday_bars",
+    # Entry Strength Score daily snapshot (2026-07). Low-write
+    # (~1 commit/day, allowed_tickers ∪ QM>=58 universe only) —
+    # weekly long-tail maintenance is sufficient, does NOT need
+    # _HOT_ICEBERG_TABLES.
+    "stocks.entry_quality_daily",
 ]
 
 # Dead tables safe to drop (migrated to PG or unused)
@@ -141,6 +146,7 @@ DATE_COLUMNS: dict[str, str] = {
     # the generic MAX_RETENTION_YEARS purge. Symmetric with
     # ``algo.intraday_bars`` which is also kept out for the
     # same reason.
+    "stocks.entry_quality_daily": "trade_date",
 }
 
 MAX_RETENTION_YEARS = 11

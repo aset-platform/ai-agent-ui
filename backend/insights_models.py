@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-
 # ---------------------------------------------------------------
 # Screener
 # ---------------------------------------------------------------
@@ -339,7 +338,9 @@ class ScreenQLRequest(BaseModel):
     """ScreenQL query request."""
 
     query: str = Field(
-        ..., min_length=1, max_length=2000,
+        ...,
+        min_length=1,
+        max_length=2000,
     )
     page: int = Field(1, ge=1)
     page_size: int = Field(25, ge=1, le=100)
@@ -496,11 +497,22 @@ class WatchlistStockRow(BaseModel):
     mdd_6m: float | None = None
     dist_sma200: float | None = None
     score: float | None = None
+    ess_score: float | None = None
+    ess_gate_passed: bool | None = None
+    ess_gate_reason: str | None = None
+
+
+class WatchlistMarketContext(BaseModel):
+    """Market context for watchlist stocks response."""
+
+    nifty_return_pct: float | None = None
+    nifty_roc5_pct: float | None = None
+    nifty_below_sma200: bool | None = None
+    nifty_roc5_extreme: bool = False
 
 
 class WatchlistStocksResponse(BaseModel):
     """Response for the Watchlist Stocks tab."""
 
-    stocks: list[WatchlistStockRow] = Field(
-        default_factory=list
-    )
+    stocks: list[WatchlistStockRow] = Field(default_factory=list)
+    market_context: WatchlistMarketContext | None = None

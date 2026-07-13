@@ -1,0 +1,295 @@
+from __future__ import annotations
+
+import pandas as pd
+from entry_strength_score import (
+    absorption_volume_score,
+    atr_expansion_score,
+    check_hard_gates,
+    close_location_value,
+    compute_ess,
+    compute_nifty_market_context,
+    lower_wick_ratio,
+    relative_volume_ratio,
+    roc5_score,
+    selling_absorption_score,
+    selling_deceleration_score,
+    sma50_proximity_score,
+    trend_stability_score,
+)
+
+
+def _series(vals: list[float]) -> pd.Series:
+    return pd.Series(vals)
+
+
+def test_clv_close_at_high_is_one():
+    assert close_location_value(100, 120, 100, 120) == 1.0
+
+
+def test_clv_close_at_low_is_zero():
+    assert close_location_value(120, 120, 100, 100) == 0.0
+
+
+def test_clv_no_range_defaults_half():
+    assert close_location_value(100, 100, 100, 100) == 0.5
+
+
+def test_lower_wick_ratio_strong_reversal():
+    # Open 120, Low 112, Close 119 — buyers absorbed selling.
+    ratio = lower_wick_ratio(120, 120, 112, 119)
+    assert round(ratio, 3) == round((119 - 112) / (120 - 112), 3)
+
+
+def test_lower_wick_ratio_marubozu_close_at_low():
+    # Open 120, Low 112, Close 113 — still closing near the low.
+    ratio = lower_wick_ratio(120, 120, 112, 113)
+    assert round(ratio, 3) == round((113 - 112) / (120 - 112), 3)
+
+
+def test_selling_absorption_blends_60_40():
+    clv = close_location_value(120, 120, 112, 119)
+    wick = lower_wick_ratio(120, 120, 112, 119)
+    expected = round((0.6 * clv + 0.4 * wick) * 100, 4)
+    assert selling_absorption_score(120, 120, 112, 119) == expected
+
+
+def test_selling_absorption_marubozu_scores_low():
+    strong = selling_absorption_score(120, 120, 112, 119)
+    weak = selling_absorption_score(120, 120, 112, 113)
+    assert weak < strong
+
+
+def test_relative_volume_ratio_basic():
+    # Last value is "today"; window average excludes it.
+    vols = pd.Series([100.0] * 20 + [150.0])
+    assert relative_volume_ratio(vols, window=20) == 1.5
+
+
+def test_relative_volume_ratio_insufficient_history_returns_none():
+    vols = pd.Series([100.0, 110.0])
+    assert relative_volume_ratio(vols, window=20) is None
+
+
+def test_absorption_volume_strong_and_elevated_scores_best():
+    score = absorption_volume_score(absorption_score=85, rel_volume=2.0)
+    assert score == 95
+
+
+def test_absorption_volume_weak_and_elevated_scores_worst():
+    score = absorption_volume_score(absorption_score=20, rel_volume=2.0)
+    assert score == 25
+
+
+def test_absorption_volume_none_rel_volume_returns_none():
+    assert (
+        absorption_volume_score(absorption_score=85, rel_volume=None) is None
+    )
+
+
+def test_sma50_proximity_peaks_near_ideal_range():
+    assert sma50_proximity_score(-3.0) == 100
+    assert sma50_proximity_score(-2.0) == 95
+
+
+def test_sma50_proximity_drops_at_extension():
+    assert sma50_proximity_score(-10.0) == 40
+
+
+def test_sma50_proximity_none_when_missing():
+    assert sma50_proximity_score(None) is None
+
+
+def test_sma50_proximity_extrapolates_below_lowest_point():
+    # Beyond -10.0, the piecewise function continues the downward slope
+    # from the (-10.0, 40) → (-7.0, 70) segment. Verify extrapolation
+    # works (result < value at -10.0) rather than flat/clamped early.
+    result = sma50_proximity_score(-15.0)
+    assert result < sma50_proximity_score(-10.0)
+    assert 0.0 <= result <= 100.0
+
+
+def test_sma50_proximity_extrapolates_above_highest_point_and_clamps():
+    # Above 0.0 (price far above SMA50), linear extrapolation from
+    # (-2.0, 95) → (0.0, 60) segment goes deeply negative. Clamp to 0
+    # verifies the boundary condition (not just within-range behavior).
+    assert sma50_proximity_score(50.0) == 0.0
+
+
+def test_hard_gate_rejects_price_below_sma200():
+    passed, reason = check_hard_gates(close=90, sma200=100, dist_sma50_pct=-1)
+    assert passed is False
+    assert reason == "price_below_sma200"
+
+
+def test_hard_gate_rejects_extended_below_sma50():
+    passed, reason = check_hard_gates(close=100, sma200=90, dist_sma50_pct=-12)
+    assert passed is False
+    assert reason == "sma50_extended_beyond_10pct"
+
+
+def test_hard_gate_passes_healthy_pullback():
+    passed, reason = check_hard_gates(close=100, sma200=90, dist_sma50_pct=-3)
+    assert passed is True
+    assert reason is None
+
+
+def test_hard_gate_missing_data_defaults_pass():
+    # Can't evaluate a gate without data — don't reject on missing inputs.
+    passed, reason = check_hard_gates(
+        close=100, sma200=None, dist_sma50_pct=None
+    )
+    assert passed is True
+    assert reason is None
+
+
+def test_trend_stability_rising_sma50_scores_high():
+    sma50 = pd.Series([100.0 + i * 0.10 for i in range(11)])
+    score = trend_stability_score(sma50, lookback=10)
+    assert score > 70
+
+
+def test_trend_stability_flat_sma50_scores_mid():
+    sma50 = pd.Series([100.0] * 11)
+    assert trend_stability_score(sma50, lookback=10) == 50
+
+
+def test_trend_stability_declining_sma50_scores_low():
+    sma50 = pd.Series([100.0 - i * 0.4 for i in range(11)])
+    score = trend_stability_score(sma50, lookback=10)
+    assert score < 30
+
+
+def test_trend_stability_insufficient_history_returns_none():
+    sma50 = pd.Series([100.0, 101.0])
+    assert trend_stability_score(sma50, lookback=10) is None
+
+
+def test_selling_deceleration_improving_scores_high():
+    # Daily closes implying returns roughly -4%,-3%,-1%,-0.3%
+    closes = pd.Series([104.5, 100.32, 97.31, 96.34, 96.05])
+    score = selling_deceleration_score(closes)
+    assert score > 70
+
+
+def test_selling_deceleration_accelerating_scores_low():
+    # Returns roughly -1%,-1%,-4%,-4%
+    closes = pd.Series([100.0, 99.0, 98.01, 94.09, 90.33])
+    score = selling_deceleration_score(closes)
+    assert score < 30
+
+
+def test_selling_deceleration_insufficient_history_returns_none():
+    closes = pd.Series([100.0, 99.0, 98.0])
+    assert selling_deceleration_score(closes) is None
+
+
+def test_roc5_healthy_dip_scores_high():
+    closes = pd.Series([100.0] * 5 + [96.0])  # -4%
+    raw, score = roc5_score(closes)
+    assert raw == -4.0
+    assert score == 100
+
+
+def test_roc5_falling_knife_scores_low():
+    closes = pd.Series([100.0] * 5 + [82.0])  # -18%
+    raw, score = roc5_score(closes)
+    assert raw == -18.0
+    assert score == 10
+
+
+def test_roc5_insufficient_history_returns_none():
+    closes = pd.Series([100.0, 99.0])
+    assert roc5_score(closes) == (None, None)
+
+
+def test_atr_expansion_stable_scores_high():
+    atr = pd.Series([2.0] * 10 + [1.9])  # ratio 0.95, within flat plateau
+    assert atr_expansion_score(atr, lookback=10) == 90
+
+
+def test_atr_expansion_exploding_scores_low():
+    atr = pd.Series([2.0] * 10 + [4.0])  # ratio 2.0
+    assert atr_expansion_score(atr, lookback=10) == 10
+
+
+def test_atr_expansion_insufficient_history_returns_none():
+    atr = pd.Series([2.0, 2.1])
+    assert atr_expansion_score(atr, lookback=10) is None
+
+
+def test_compute_ess_gated_row_still_has_score_and_reason():
+    result = compute_ess(
+        open_=100,
+        high=100,
+        low=80,
+        close=82,  # >10% below SMA50 fixture
+        volume_series=_series([1_000_000.0] * 21),
+        sma50_series=_series([100.0] * 11),
+        atr_series=_series([2.0] * 11),
+        close_series=_series([100.0] * 6),
+        sma200=70,
+        dist_sma50_pct=-18.0,
+    )
+    assert result.gate_passed is False
+    assert result.gate_reason == "sma50_extended_beyond_10pct"
+    # still computed for review, per spec §3
+    assert result.ess_score is not None
+
+
+def test_compute_ess_healthy_pullback_scores_high():
+    result = compute_ess(
+        open_=120,
+        high=120,
+        low=112,
+        close=119,
+        volume_series=_series([1_000_000.0] * 20 + [1_800_000.0]),
+        sma50_series=_series([100.0 + i * 0.05 for i in range(11)]),
+        atr_series=_series([2.0] * 10 + [2.1]),
+        close_series=_series([104.0, 100.0, 97.5, 96.5, 96.2, 96.0]),
+        sma200=90,
+        dist_sma50_pct=-3.0,
+    )
+    assert result.gate_passed is True
+    assert result.ess_score is not None
+    assert result.ess_score > 60
+
+
+def test_compute_ess_missing_factor_renormalizes():
+    # Too little history for trend_stability/selling_deceleration/roc5/
+    # atr_expansion — only absorption+volume and sma50_proximity available.
+    result = compute_ess(
+        open_=120,
+        high=120,
+        low=112,
+        close=119,
+        volume_series=_series([1_000_000.0] * 20 + [1_800_000.0]),
+        sma50_series=_series([100.0]),
+        atr_series=_series([2.0]),
+        close_series=_series([100.0]),
+        sma200=90,
+        dist_sma50_pct=-3.0,
+    )
+    assert result.ess_score is not None
+    assert result.trend_stability_score is None
+
+
+def test_nifty_context_below_sma200_and_roc5_extreme():
+    closes = pd.Series([100.0] * 194 + [100.0] * 5 + [93.0])
+    ctx = compute_nifty_market_context(closes)
+    assert ctx.nifty_below_sma200 is True
+    assert ctx.nifty_roc5_extreme is True
+
+
+def test_nifty_context_healthy_market():
+    closes = pd.Series([90.0 + i * 0.1 for i in range(199)] + [110.0])
+    ctx = compute_nifty_market_context(closes)
+    assert ctx.nifty_below_sma200 is False
+    assert ctx.nifty_roc5_extreme is False
+
+
+def test_nifty_context_insufficient_history_returns_none_fields():
+    closes = pd.Series([100.0, 101.0])
+    ctx = compute_nifty_market_context(closes)
+    assert ctx.nifty_below_sma200 is None
+    assert ctx.nifty_roc5_pct is None
+    assert ctx.nifty_roc5_extreme is False
