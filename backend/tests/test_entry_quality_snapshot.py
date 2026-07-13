@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -126,6 +126,92 @@ def test_append_snapshot_rows_scopes_delete_on_ticker_and_trade_date():
     assert "ticker" in seen_refs, f"got {seen_refs}"
     assert "trade_date" in seen_refs, f"got {seen_refs}"
     mock_tbl.append.assert_called_once()
+
+
+def test_delete_predicate_is_exact_not_cross_product():
+    """Regression test for the ticker/trade_date cross-product data
+    -loss bug: ``trade_date`` is computed independently per ticker
+    (``grp["date"].iloc[-1].date()``), so a batch can legitimately
+    contain two tickers with two DIFFERENT trade_dates (e.g. one
+    ticker's OHLCV ingestion lagged). The old
+    ``And(In(tickers), In(trade_dates))`` predicate would match
+    ALL 4 (ticker, trade_date) combinations — including
+    (TCS.NS, 2026-07-11) and (INFY.NS, 2026-07-12), neither of
+    which is actually in the batch — silently deleting valid
+    historical rows. The fixed predicate must match only the 2
+    pairs actually written."""
+    from backend.jobs.entry_quality_snapshot import _delete_predicate
+
+    d1 = date(2026, 7, 12)
+    d2 = date(2026, 7, 11)  # INFY.NS lagged a day behind TCS.NS
+    rows = [
+        {"trade_date": d1, "ticker": "TCS.NS", "market": "india"},
+        {"trade_date": d2, "ticker": "INFY.NS", "market": "india"},
+    ]
+
+    pred = _delete_predicate(rows)
+
+    def _matches(p, ticker: str, trade_date: date) -> bool:
+        """Evaluate the predicate tree against a single
+        (ticker, trade_date) row-shaped dict, mirroring how
+        PyIceberg's row-filter evaluation walks And/Or/EqualTo."""
+        from pyiceberg.expressions import And, EqualTo, Or
+
+        if isinstance(p, And):
+            return _matches(p.left, ticker, trade_date) and _matches(
+                p.right, ticker, trade_date
+            )
+        if isinstance(p, Or):
+            return _matches(p.left, ticker, trade_date) or _matches(
+                p.right, ticker, trade_date
+            )
+        if isinstance(p, EqualTo):
+            name = p.term.name
+            if name == "ticker":
+                return ticker == p.literal.value
+            if name == "trade_date":
+                # DateLiteral.value is epoch-day int, not a
+                # date — round-trip through date.fromordinal.
+                epoch_days = p.literal.value
+                lit_date = date(1970, 1, 1) + timedelta(days=epoch_days)
+                return trade_date == lit_date
+            raise AssertionError(f"unexpected column {name}")
+        raise AssertionError(f"unexpected node {p!r}")
+
+    # The 2 pairs actually in the batch MUST match.
+    assert _matches(pred, "TCS.NS", d1)
+    assert _matches(pred, "INFY.NS", d2)
+
+    # The cross-product combinations that were NEVER written by
+    # any run and are NOT part of this batch MUST NOT match — this
+    # is the exact case the old In()xIn() predicate got wrong.
+    assert not _matches(pred, "TCS.NS", d2)
+    assert not _matches(pred, "INFY.NS", d1)
+
+
+def test_delete_predicate_none_for_empty_rows():
+    """Zero rows must short-circuit to ``None`` (no-op delete) —
+    the caller (``_run``) already guards ``if rows:`` before
+    calling ``_append_snapshot_rows``, but ``_delete_predicate``
+    itself must not crash or build a vacuous predicate."""
+    from backend.jobs.entry_quality_snapshot import _delete_predicate
+
+    assert _delete_predicate([]) is None
+
+
+def test_delete_predicate_single_pair_no_or_wrapper():
+    """A single (ticker, trade_date) pair must not be wrapped in an
+    ``Or`` node — just the bare ``And(EqualTo, EqualTo)``."""
+    from pyiceberg.expressions import And, Or
+
+    from backend.jobs.entry_quality_snapshot import _delete_predicate
+
+    rows = [
+        {"trade_date": date(2026, 7, 12), "ticker": "TCS.NS"},
+    ]
+    pred = _delete_predicate(rows)
+    assert isinstance(pred, And)
+    assert not isinstance(pred, Or)
 
 
 @pytest.mark.asyncio

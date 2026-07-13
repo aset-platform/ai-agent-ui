@@ -23,12 +23,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from functools import reduce
 from typing import Any
 
 import pandas as pd
 import pyarrow as pa
 from entry_strength_score import compute_ess, compute_nifty_market_context
-from pyiceberg.expressions import And, In
+from pyiceberg.expressions import And, EqualTo, Or
 from sqlalchemy import text
 
 from backend.algo._iceberg_retry import retry_iceberg_op
@@ -87,35 +88,60 @@ async def query_iceberg_df(
     )
 
 
+def _delete_predicate(rows: list[dict[str, Any]]):
+    """Build an exact OR-of-Ands predicate for the distinct
+    ``(ticker, trade_date)`` pairs actually present in *rows*.
+
+    Returns ``None`` when *rows* is empty (caller should skip the
+    delete). Each term is an exact two-column conjunction — never
+    a cross-product ``In(tickers) x In(trade_dates)``.
+
+    ``trade_date`` is computed independently per ticker
+    (``grp["date"].iloc[-1].date()`` — the ticker's own last
+    available bar), not a single shared "as of" date for the run.
+    A ticker whose OHLCV ingestion lagged behind the rest of the
+    batch will have a different ``trade_date``, so
+    ``And(In(tickers), In(trade_dates))`` would match
+    ``(tickerA, dateB)`` combinations that were never written by
+    any run and aren't part of the current batch — silently
+    deleting valid historical rows with nothing to replace them.
+    Mirrors ``backend/algo/stream/bars_writer.py::_dedup_predicate``.
+    """
+    keys = sorted({(r["ticker"], r["trade_date"]) for r in rows})
+    if not keys:
+        return None
+    terms = [
+        And(EqualTo("ticker", t), EqualTo("trade_date", d)) for (t, d) in keys
+    ]
+    if len(terms) == 1:
+        return terms[0]
+    return reduce(Or, terms)
+
+
 def _append_snapshot_rows(rows: list[dict[str, Any]]) -> None:
     """NaN-replaceable upsert (Task 12 schema): scoped pre-delete on
-    the incoming batch's ``(ticker, trade_date)`` pairs, then a
-    single batched Iceberg append — mirrors
+    the incoming batch's exact ``(ticker, trade_date)`` pairs, then
+    a single batched Iceberg append — mirrors
     ``daily_features_daily_compute.py``'s upsert pattern so a
     re-triggered/retried run (same ``trade_date``) never duplicates
     rows for a ticker.
     """
     from stocks.create_tables import _get_catalog
 
-    tickers = sorted({r["ticker"] for r in rows})
-    trade_dates = sorted({r["trade_date"] for r in rows})
+    pred = _delete_predicate(rows)
 
     def _do_append() -> None:
         cat = _get_catalog()
         tbl = cat.load_table(_TABLE)
-        try:
-            tbl.delete(
-                And(
-                    In("ticker", tickers),
-                    In("trade_date", trade_dates),
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001
-            _logger.debug(
-                "entry_quality_snapshot pre-delete skipped (%s): %s",
-                _TABLE,
-                exc,
-            )
+        if pred is not None:
+            try:
+                tbl.delete(pred)
+            except Exception as exc:  # noqa: BLE001
+                _logger.debug(
+                    "entry_quality_snapshot pre-delete skipped (%s): %s",
+                    _TABLE,
+                    exc,
+                )
         arrow_tbl = pa.Table.from_pylist(rows, schema=tbl.schema().as_arrow())
         tbl.append(arrow_tbl)
 
