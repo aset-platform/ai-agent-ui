@@ -56,6 +56,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from datetime import date as _date_t
 from datetime import datetime, timezone
 from functools import reduce
 from typing import Any
@@ -489,6 +490,21 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
             "dist_sma200": dist_sma200,
         }
 
+        # Iceberg's `date` column can come back from DuckDB as either
+        # a pandas Timestamp/datetime (has `.date()`) or a native
+        # `datetime.date` (does not) — mirrors the same ambiguity
+        # guard `insights_routes.py::_watchlist_stocks` applies to
+        # this exact column.
+        _last_date = grp["date"].iloc[-1]
+        if isinstance(_last_date, _date_t) and not hasattr(
+            _last_date, "date"
+        ):
+            trade_date = _last_date
+        elif hasattr(_last_date, "date"):
+            trade_date = _last_date.date()
+        else:
+            trade_date = pd.Timestamp(_last_date).date()
+
         ess_ctx[ticker] = {
             "open_": float(grp["open"].iloc[-1]),
             "high": float(grp["high"].iloc[-1]),
@@ -500,7 +516,7 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
             "close_series": grp["close"].astype(float),
             "sma200": sma200,
             "dist_sma50_pct": dist_sma50_pct,
-            "trade_date": grp["date"].iloc[-1].date(),
+            "trade_date": trade_date,
         }
 
     # QM Score computed ONCE across the full candidate-universe batch
