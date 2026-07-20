@@ -14,6 +14,13 @@ function price(v: string | null | undefined): string {
   return `₹${n.toFixed(2)}`;
 }
 
+function totalPnl(rows: { pnl_inr: string }[]): number {
+  return rows.reduce((sum, r) => {
+    const n = Number(r.pnl_inr);
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
+}
+
 function rsi2Badge(v: string | null | undefined): {
   text: string;
   cls: string;
@@ -104,6 +111,20 @@ export function OpenPositionsWidget() {
               );
             })}
           </ul>
+          {/* Total */}
+          <div className="mt-1 flex items-center justify-between border-t border-slate-100 dark:border-slate-800 pt-1 text-xs font-medium">
+            <span className="text-slate-500">Total P&amp;L</span>
+            <span
+              className={`tabular-nums ${
+                totalPnl(rows ?? []) >= 0
+                  ? "text-emerald-600"
+                  : "text-rose-600"
+              }`}
+              data-testid="open-positions-total-pnl"
+            >
+              {price(String(totalPnl(rows ?? [])))}
+            </span>
+          </div>
         </div>
       )}
 
