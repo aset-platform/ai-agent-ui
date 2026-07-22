@@ -3966,9 +3966,15 @@ class LiveRuntime:
                     # Dual-bar confirmation: yesterday was oversold
                     # (closed_entry says BUY). Also require today's
                     # running bar to confirm (today's main-eval signal
-                    # == BUY). If today's bar no longer says BUY the
-                    # stock has already recovered intraday — suppress to
-                    # avoid chasing a gap-up or upper-circuit opener.
+                    # == BUY). If today's bar no longer says BUY, SOME
+                    # leg of the strategy's own AND-condition now fails
+                    # on today's running bar — not necessarily RSI2
+                    # recovering. E.g. distance_from_sma50 can flip
+                    # negative if price keeps falling through the
+                    # trend filter, which is a distinct case from RSI2
+                    # rebounding above threshold. Suppress either way
+                    # to avoid entries the strategy's own gate doesn't
+                    # confirm intraday.
                     if signal is not None and signal.side == "BUY":
                         _logger.info(
                             "daily entry on CLOSED bar (pre-gate) — "
@@ -3978,9 +3984,10 @@ class LiveRuntime:
                         signal = closed_entry
                     else:
                         _logger.info(
-                            "daily closed-bar BUY suppressed — "
-                            "today's running bar does not confirm "
-                            "(stock recovered intraday, ticker=%s)",
+                            "daily closed-bar BUY suppressed by "
+                            "entry timing gate — today's running bar "
+                            "no longer confirms the full entry "
+                            "condition (ticker=%s)",
                             bar.ticker,
                         )
                         self._events.append(
@@ -3995,7 +4002,10 @@ class LiveRuntime:
                                         {"dry_run": True}
                                         if self._dry_run else {}
                                     ),
-                                    "reason": "today_bar_not_confirmed",
+                                    "reason": (
+                                        "daily_entry_timing_gate_"
+                                        "unconfirmed"
+                                    ),
                                     "ticker": bar.ticker,
                                     "side": "BUY",
                                 },
