@@ -364,3 +364,39 @@ async def test_buy_before_0930_deferred():
         "regardless of the OR-trigger"
     )
     kite.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_closed_only_buy_before_floor_deferred():
+    """Fix-loop round 2 — CRITICAL regression guard. Yesterday's
+    closed bar was oversold (RSI2<=5 -> BUY) but today's forming bar
+    is NOT a BUY (bounced), same shape as
+    test_yesterday_oversold_but_bounced_still_enters -- except wall
+    clock is 09:16 IST, INSIDE the 09:00-09:29 observation window
+    that must place zero orders.
+
+    Before the round-2 fix, the 09:30 floor check ran BEFORE the
+    OR-trigger resolved `signal`, and only ever looked at the
+    forming-bar signal (`forming_is_buy`). Since forming_is_buy was
+    False here, the floor check was skipped entirely -- then
+    `signal = closed_entry` overwrote `signal` with a BUY and NO
+    wall-clock check ever ran again, so this scenario placed a live
+    order at 09:16 IST. The floor must gate a resolved BUY from
+    EITHER leg, applied once, after the OR-trigger resolves."""
+    runtime, kite = _make_runtime()
+    _seed_bars(runtime)
+
+    n = await _feed_bar(
+        runtime,
+        wall_clock="09:16",
+        rsi2_forming=42.0,
+        rsi2_closed=4.0,
+    )
+
+    assert n == 0, (
+        "a BUY resolved via the CLOSED-bar leg before 09:30 IST "
+        "must still be deferred by the BUY floor -- the floor must "
+        "gate BOTH legs of the OR-trigger, not just the forming-bar "
+        "leg"
+    )
+    kite.place_order.assert_not_called()

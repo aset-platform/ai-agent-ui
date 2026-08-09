@@ -9,10 +9,15 @@ Covers:
      append, no minute-bar pollution of the daily series).
   3. high/low/close/volume invariants: high broadens up, low
      broadens down, close advances to latest, volume accumulates.
-  4. Eval gate: a minute-bar arriving before MIN_EVAL_TIME_IST
-     returns 0 (no signal eval) but STILL updates today's bar.
-  5. Eval gate: after MIN_EVAL_TIME_IST, eval fires normally
-     (verified by reaching the evaluator call site).
+  4. OR-trigger entry timing (Task 1 / ASETPLTFRM-383 redesign,
+     2026-08-09): a BUY visible ONLY on today's still-forming
+     candle now enters immediately (no more deferral to a later
+     eval-time cutoff) -- the bar is updated regardless either way.
+  5. Eval always runs for both today's bar AND (when flat) the
+     last closed bar -- no eval-time gate holds either back
+     anymore; only the 09:30 BUY floor (_MIN_BUY_TIME_IST) can
+     still defer a resolved BUY, and it applies uniformly to
+     whichever leg of the OR-trigger produced it.
   6. Universe drift: ticker not in caps.allowed_tickers lazy-
      preloads on first bar via asyncio.to_thread.
   7. Day rollover: a bar from a NEW date appends a new running

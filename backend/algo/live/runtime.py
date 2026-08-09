@@ -3925,25 +3925,6 @@ class LiveRuntime:
         ):
             now_ist = datetime.now(IST).time()
 
-            # Gate A: no BUY before _MIN_BUY_TIME_IST (default 09:30).
-            # Pre-open auction prices are erratic; first 15 min of the
-            # regular session is volatile price discovery.
-            # SELL / GTT exits are never blocked here.
-            if (
-                signal is not None
-                and signal.side == "BUY"
-                and now_ist < _MIN_BUY_TIME_IST
-            ):
-                _logger.info(
-                    "daily BUY deferred — before %s IST "
-                    "(ticker=%s now=%s IST)",
-                    _MIN_BUY_TIME_IST.strftime("%H:%M"),
-                    bar.ticker,
-                    now_ist.strftime("%H:%M:%S"),
-                )
-                return 0
-
-            # Gate A (09:30 BUY floor) already applied above.
             # OR-trigger, all day: enter if EITHER today's forming-bar
             # signal is BUY OR yesterday's CLOSED bar was a BUY. Catches
             # a brief intraday dip the moment it prints <=5, and still
@@ -3969,6 +3950,27 @@ class LiveRuntime:
                 signal = closed_entry
             # else: forming_is_buy -> `signal` already BUY, flows
             # through; neither -> signal is hold/None, handled below.
+
+            # Gate A: no BUY before _MIN_BUY_TIME_IST (default 09:30),
+            # regardless of WHICH leg of the OR-trigger resolved it —
+            # applied here, AFTER both legs are resolved, so the
+            # closed-bar leg can't bypass the floor the forming-bar
+            # leg is held to. Pre-open auction prices are erratic;
+            # first 15 min of the regular session is volatile price
+            # discovery. SELL / GTT exits are never blocked here.
+            if (
+                signal is not None
+                and signal.side == "BUY"
+                and now_ist < _MIN_BUY_TIME_IST
+            ):
+                _logger.info(
+                    "daily BUY deferred — before %s IST "
+                    "(ticker=%s now=%s IST)",
+                    _MIN_BUY_TIME_IST.strftime("%H:%M"),
+                    bar.ticker,
+                    now_ist.strftime("%H:%M:%S"),
+                )
+                return 0
 
         if signal is None:
             _logger.info(
