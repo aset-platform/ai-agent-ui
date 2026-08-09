@@ -129,28 +129,24 @@ class TestValidateToken:
 class TestClose:
     """Unit tests for _close helper."""
 
-    def test_close_connected(self):
+    async def test_close_connected(self):
         """Closes WS when state is CONNECTED."""
         from starlette.websockets import WebSocketState
 
         ws = AsyncMock()
         ws.client_state = WebSocketState.CONNECTED
-        asyncio.get_event_loop().run_until_complete(
-            _close(ws, 4001, "test"),
-        )
+        await _close(ws, 4001, "test")
         ws.close.assert_awaited_once_with(
             code=4001, reason="test",
         )
 
-    def test_close_disconnected_noop(self):
+    async def test_close_disconnected_noop(self):
         """Does not close if already disconnected."""
         from starlette.websockets import WebSocketState
 
         ws = AsyncMock()
         ws.client_state = WebSocketState.DISCONNECTED
-        asyncio.get_event_loop().run_until_complete(
-            _close(ws, 4001, "test"),
-        )
+        await _close(ws, 4001, "test")
         ws.close.assert_not_awaited()
 
 

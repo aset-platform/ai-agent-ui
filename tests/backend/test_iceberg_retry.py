@@ -166,7 +166,20 @@ class TestDirtyTableRefresh:
         mock_table = MagicMock()
         mock_table.scan.return_value.to_pandas.return_value = MagicMock()
 
-        with patch.object(repo, "_load_table", return_value=mock_table):
+        # _scan_ticker tries a DuckDB fast path first
+        # (backend.db.duckdb_engine.query_iceberg_df, lazily
+        # imported) that bypasses _load_table entirely — force it
+        # to fail so the PyIceberg refresh-on-dirty path under
+        # test is actually reached.
+        with (
+            patch(
+                "backend.db.duckdb_engine.query_iceberg_df",
+                side_effect=Exception("duckdb unavailable"),
+            ),
+            patch.object(
+                repo, "_load_table", return_value=mock_table,
+            ),
+        ):
             repo._scan_ticker("stocks.ohlcv", "AAPL")
 
         mock_table.refresh.assert_called_once()
@@ -190,7 +203,19 @@ class TestDirtyTableRefresh:
         mock_table = MagicMock()
         mock_table.scan.return_value.to_pandas.return_value = MagicMock()
 
-        with patch.object(repo, "_load_table", return_value=mock_table):
+        # _table_to_df tries a DuckDB fast path first — force it to
+        # fail so the PyIceberg refresh-on-dirty path under test is
+        # actually reached (see test_scan_ticker_refreshes_dirty_
+        # table above for the same gotcha).
+        with (
+            patch(
+                "backend.db.duckdb_engine.query_iceberg_df",
+                side_effect=Exception("duckdb unavailable"),
+            ),
+            patch.object(
+                repo, "_load_table", return_value=mock_table,
+            ),
+        ):
             repo._table_to_df("stocks.registry")
 
         mock_table.refresh.assert_called_once()

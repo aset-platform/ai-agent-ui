@@ -513,12 +513,14 @@ class TestRecommendationToolFormatting:
 class TestQuotaGate:
     """Verify monthly quota enforcement."""
 
-    def test_max_runs_is_five(self):
+    def test_max_runs_is_one_per_scope(self):
+        """Policy is 1 run per (user, scope, IST month), not a
+        flat 5/month — the quota is scope-aware."""
         from jobs.recommendation_engine import (
-            _MAX_RUNS_PER_MONTH,
+            _MAX_RUNS_PER_SCOPE_PER_MONTH,
         )
 
-        assert _MAX_RUNS_PER_MONTH == 5
+        assert _MAX_RUNS_PER_SCOPE_PER_MONTH == 1
 
     def test_quota_function_exists(self):
         from jobs.recommendation_engine import (

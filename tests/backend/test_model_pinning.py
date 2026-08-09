@@ -60,14 +60,14 @@ class TestPinSetAfterInvoke:
     """After a successful invoke, _pinned_model is set."""
 
     @patch("llm_fallback.FallbackLLM._try_model")
-    @patch("llm_fallback.FallbackLLM._estimate_tokens")
-    @patch("llm_fallback.FallbackLLM._compress_messages")
     def test_pin_set_after_first_invoke(
         self,
-        mock_compress: MagicMock,
-        mock_estimate: MagicMock,
         mock_try: MagicMock,
     ) -> None:
+        """Compression/token-estimation are injected dependencies
+        (self._compressor.compress / self._budget.estimate_tokens),
+        not FallbackLLM methods — configure the mocks _make_fallback
+        already wires up rather than patching removed methods."""
         llm = _make_fallback(["model-a", "model-b"])
         # Fake the lookup and tiers so invoke can find
         # a model to try.
@@ -76,10 +76,10 @@ class TestPinSetAfterInvoke:
             "model-b": ("model-b", MagicMock(), MagicMock()),
         }
         llm._pool_groups = []
-        mock_compress.return_value = [
+        llm._compressor.compress.return_value = [
             {"role": "user", "content": "hi"},
         ]
-        mock_estimate.return_value = 100
+        llm._budget.estimate_tokens.return_value = 100
         mock_try.return_value = MagicMock(content="ok")
 
         llm.invoke([{"role": "user", "content": "hi"}])
@@ -90,12 +90,8 @@ class TestPinnedModelReused:
     """With _pinned_model set, invoke uses that model."""
 
     @patch("llm_fallback.FallbackLLM._try_model")
-    @patch("llm_fallback.FallbackLLM._estimate_tokens")
-    @patch("llm_fallback.FallbackLLM._compress_messages")
     def test_pinned_model_reused_on_second_invoke(
         self,
-        mock_compress: MagicMock,
-        mock_estimate: MagicMock,
         mock_try: MagicMock,
     ) -> None:
         llm = _make_fallback(["model-a", "model-b"])
@@ -106,10 +102,10 @@ class TestPinnedModelReused:
         llm._pool_groups = []
         llm._pinned_model = "model-a"
 
-        mock_compress.return_value = [
+        llm._compressor.compress.return_value = [
             {"role": "user", "content": "hi"},
         ]
-        mock_estimate.return_value = 100
+        llm._budget.estimate_tokens.return_value = 100
         mock_try.return_value = MagicMock(content="ok")
 
         llm.invoke([{"role": "user", "content": "hi"}])
@@ -124,12 +120,8 @@ class TestPinClearedOnBudgetExhaust:
     """If pinned model fails, pin is cleared."""
 
     @patch("llm_fallback.FallbackLLM._try_model")
-    @patch("llm_fallback.FallbackLLM._estimate_tokens")
-    @patch("llm_fallback.FallbackLLM._compress_messages")
     def test_pin_cleared_on_budget_exhaust(
         self,
-        mock_compress: MagicMock,
-        mock_estimate: MagicMock,
         mock_try: MagicMock,
     ) -> None:
         llm = _make_fallback(["model-a", "model-b"])
@@ -140,13 +132,17 @@ class TestPinClearedOnBudgetExhaust:
         llm._pool_groups = []
         llm._pinned_model = "model-a"
 
-        mock_compress.return_value = [
+        llm._compressor.compress.return_value = [
             {"role": "user", "content": "hi"},
         ]
-        mock_estimate.return_value = 100
-        # First call (pinned) returns None = budget fail;
-        # second call (fallback) succeeds.
+        llm._budget.estimate_tokens.return_value = 100
+        # 1st call: pinned model-a (via the dedicated pin branch)
+        # fails -> pin cleared. The cascade below does NOT skip
+        # the just-unpinned model, so the 2nd call retries model-a
+        # (also fails) before the 3rd call reaches model-b, which
+        # succeeds and becomes the new pin.
         mock_try.side_effect = [
+            None,
             None,
             MagicMock(content="ok"),
         ]
