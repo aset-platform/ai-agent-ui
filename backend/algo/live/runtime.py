@@ -4056,6 +4056,61 @@ class LiveRuntime:
                     )
                     return 0
 
+                # Shadow entry_strength_snapshot (Release 2
+                # calibration) — non-gating, best-effort. Only
+                # reached for a resolved, non-knife-vetoed BUY (the
+                # veto's own early-return above already sent us out
+                # on a knife), and always runs before order
+                # submission. Never blocks / alters the order path:
+                # any failure here is caught, logged, and the BUY
+                # continues to _submit_order unchanged.
+                _os, _tot = self._universe_oversold_breadth()
+                _trigger = (
+                    "both"
+                    if (forming_is_buy and closed_is_buy)
+                    else "intraday_forming" if forming_is_buy
+                    else "yesterday_close"
+                )
+                try:
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="entry_strength_snapshot",
+                            payload={
+                                **(
+                                    {"dry_run": True}
+                                    if self._dry_run
+                                    else {}
+                                ),
+                                "ticker": bar.ticker,
+                                "trigger": _trigger,
+                                "rsi2_forming": (
+                                    features or {}
+                                ).get("rsi_2"),
+                                "dist_sma50": (features or {}).get(
+                                    "distance_from_sma50"
+                                ),
+                                "dist_sma200": (features or {}).get(
+                                    "distance_from_sma200"
+                                ),
+                                "ret_3d_pct": _knife["ret_3d_pct"],
+                                "gap_pct": _knife["gap_pct"],
+                                "breadth_oversold": _os,
+                                "breadth_total": _tot,
+                            },
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "entry_strength_snapshot emit failed "
+                        "ticker=%s",
+                        bar.ticker,
+                        exc_info=True,
+                    )  # never block the order path
+
         # Gate S: no SIGNAL-based SELL (rebalance / AST sell/exit)
         # before _MIN_SELL_TIME_IST (default 09:30). Sits OUTSIDE
         # the daily_realtime/is_flat block above — a discretionary
