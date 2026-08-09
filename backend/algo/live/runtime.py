@@ -160,6 +160,27 @@ _MIN_SELL_TIME_IST = _parse_ist_time(
     env_name="ALGO_MIN_SELL_TIME_IST",
 )
 
+
+def _env_float(name: str, default: float) -> float:
+    """Parse a float env var, falling back to ``default`` on any
+    parse failure (unset, empty, non-numeric) so a malformed
+    override doesn't crash the runtime constructor."""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Falling-knife veto — hard NO-ENTRY when a name is in free-fall.
+# Prior-3-trading-day return <= _KNIFE_3D_PCT OR entry-day gap-down
+# (today's open vs yesterday's close) <= _KNIFE_GAP_PCT vetoes a
+# fresh BUY regardless of which OR-trigger leg resolved it. Applied
+# in _on_bar_close AFTER the _MIN_BUY_TIME_IST floor, BEFORE the
+# order is submitted. Env-overridable for tuning from shadow data.
+# Overrides: ALGO_ENTRY_FALLING_KNIFE_3D_PCT, _GAP_PCT.
+_KNIFE_3D_PCT = _env_float("ALGO_ENTRY_FALLING_KNIFE_3D_PCT", -10.0)
+_KNIFE_GAP_PCT = _env_float("ALGO_ENTRY_FALLING_KNIFE_GAP_PCT", -4.0)
+
 # PR3 — live-mode events are buffered and flushed on this cadence
 # instead of one Iceberg commit per signal. The terminal flush on
 # session stop drains whatever remains. Env-overridable for tuning.
@@ -3983,6 +4004,47 @@ class LiveRuntime:
                 )
                 return 0
 
+            # Falling-knife veto — hard NO-ENTRY on a resolved BUY
+            # (either OR-trigger leg) when the name is in free-fall:
+            # prior-3-day return <= _KNIFE_3D_PCT OR entry-day
+            # gap-down <= _KNIFE_GAP_PCT. Runs AFTER the BUY floor
+            # (Gate A) so a deferred-BUY tick never spends the
+            # veto's history read; BEFORE the order is submitted.
+            # Computed once here and reused by later gates via
+            # `_knife` — same rationale as `forming_is_buy` /
+            # `closed_is_buy` above.
+            if signal is not None and signal.side == "BUY":
+                _veto, _knife = self._in_free_fall(history, history[-1])
+                if _veto:
+                    _logger.info(
+                        "falling-knife veto — ticker=%s ret_3d=%s "
+                        "gap=%s",
+                        bar.ticker,
+                        _knife["ret_3d_pct"],
+                        _knife["gap_pct"],
+                    )
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="signal_rejected",
+                            payload={
+                                **(
+                                    {"dry_run": True}
+                                    if self._dry_run
+                                    else {}
+                                ),
+                                "reason": "falling_knife_veto",
+                                "ticker": bar.ticker,
+                                "side": "BUY",
+                                **_knife,
+                            },
+                        )
+                    )
+                    return 0
+
         # Gate S: no SIGNAL-based SELL (rebalance / AST sell/exit)
         # before _MIN_SELL_TIME_IST (default 09:30). Sits OUTSIDE
         # the daily_realtime/is_flat block above — a discretionary
@@ -5469,6 +5531,60 @@ class LiveRuntime:
                 bar_date=closed_date,
             )
         return sig
+
+    def _in_free_fall(
+        self, history: list, bar: Any,
+    ) -> tuple[bool, dict]:
+        """True if the name is in free-fall (a "falling knife") and
+        a fresh BUY should be hard-vetoed.
+
+        Uses the last THREE CLOSED daily bars (``history[:-1]``,
+        mirroring ``_eval_entry_on_closed_bar``) for the 3-day
+        return, and the gap between today's forming daily candle's
+        open and yesterday's close for the gap check. ``bar`` must
+        be TODAY's forming daily candle (i.e. ``history[-1]``) —
+        NOT the raw per-tick WS ``Bar`` passed into
+        ``_on_bar_close``, whose ``.open`` only equals the day's
+        true opening print on the very first tick of the session.
+
+        Missing/short history -> no veto: both metrics independently
+        default to ``None`` and a ``None`` metric can never satisfy
+        either threshold below.
+        """
+        metrics: dict[str, float | None] = {
+            "ret_3d_pct": None,
+            "gap_pct": None,
+        }
+        if not history:
+            return False, metrics
+        bar_date = getattr(bar, "date", None)
+        closed = (
+            history[:-1]
+            if (bar_date is not None and history[-1].date == bar_date)
+            else history
+        )
+        if len(closed) >= 4:
+            c_now = float(closed[-1].close)
+            c_4 = float(closed[-4].close)
+            if c_4 > 0:
+                metrics["ret_3d_pct"] = (c_now / c_4 - 1.0) * 100.0
+        if closed:
+            c_prev = float(closed[-1].close)
+            if c_prev > 0:
+                metrics["gap_pct"] = (
+                    float(bar.open) / c_prev - 1.0
+                ) * 100.0
+        veto = (
+            (
+                metrics["ret_3d_pct"] is not None
+                and metrics["ret_3d_pct"] <= _KNIFE_3D_PCT
+            )
+            or (
+                metrics["gap_pct"] is not None
+                and metrics["gap_pct"] <= _KNIFE_GAP_PCT
+            )
+        )
+        return veto, metrics
 
     def _evict_stale_closed_entry_cache(self, *, as_of: date) -> None:
         """Drop _closed_entry_cache entries older than
