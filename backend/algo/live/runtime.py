@@ -4062,16 +4062,18 @@ class LiveRuntime:
                 # veto's own early-return above already sent us out
                 # on a knife), and always runs before order
                 # submission. Never blocks / alters the order path:
-                # any failure here is caught, logged, and the BUY
-                # continues to _submit_order unchanged.
-                _os, _tot = self._universe_oversold_breadth()
-                _trigger = (
-                    "both"
-                    if (forming_is_buy and closed_is_buy)
-                    else "intraday_forming" if forming_is_buy
-                    else "yesterday_close"
-                )
+                # the ENTIRE computation (breadth read + trigger +
+                # event build/append) is inside this one try/except
+                # — a failure anywhere in it is caught, logged, and
+                # the BUY continues to _submit_order unchanged.
                 try:
+                    _os, _tot = self._universe_oversold_breadth()
+                    _trigger = (
+                        "both"
+                        if (forming_is_buy and closed_is_buy)
+                        else "intraday_forming" if forming_is_buy
+                        else "yesterday_close"
+                    )
                     self._events.append(
                         event_row(
                             session_id=self._session_id,

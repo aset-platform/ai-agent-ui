@@ -473,3 +473,37 @@ async def test_snapshot_emit_failure_does_not_block_order():
     )
     kite.place_order.assert_called_once()
     assert _snapshot_events(runtime) == []
+
+
+@pytest.mark.asyncio
+async def test_snapshot_breadth_read_failure_does_not_block_order():
+    """Fix-loop round 1 — the try/except must cover the BREADTH
+    READ and TRIGGER computation too, not just the event append.
+    Forcing ``_universe_oversold_breadth`` itself to raise (before
+    ``event_row``/``self._events.append`` are ever reached) must
+    still let the BUY submit and must still leave no
+    entry_strength_snapshot event behind."""
+    runtime, kite = _make_runtime()
+    _seed_bars(runtime, [100, 99, 98, 98])  # shallow dip, no veto
+
+    def _flaky_breadth(*args, **kwargs):
+        raise RuntimeError("boom — simulated breadth-read failure")
+
+    runtime._universe_oversold_breadth = _flaky_breadth
+
+    n = await _feed_bar(
+        runtime,
+        wall_clock="10:30",
+        rsi2_forming=3.0,
+        rsi2_closed=60.0,
+        today_open=Decimal("98"),
+    )
+
+    assert n == 1, (
+        "the BUY must still submit even though the snapshot's own "
+        "breadth read raised — the try/except boundary must cover "
+        "the breadth read and trigger computation, not only the "
+        "event_row/append call"
+    )
+    kite.place_order.assert_called_once()
+    assert _snapshot_events(runtime) == []
