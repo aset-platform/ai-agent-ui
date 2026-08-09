@@ -144,6 +144,68 @@ async def test_snapshot_job_degrades_when_full_universe_fetch_fails():
     assert "'TCS.NS'" in ohlcv_sql
 
 
+@pytest.mark.asyncio
+async def test_snapshot_job_handles_date_column_as_native_date_objects():
+    """Regression test: DuckDB can return a DATE-typed Iceberg column
+    as native ``datetime.date`` objects rather than pandas
+    ``Timestamp``/``datetime`` — reproducing the production failure
+    ``'datetime.date' object has no attribute 'date'`` raised from
+    ``grp["date"].iloc[-1].date()`` when building ``ess_ctx``.
+    ``insights_routes.py`` (the module this job mirrors) already
+    guards this ambiguity (``isinstance(_d, _date_t)`` / ``hasattr``
+    / ``pd.Timestamp`` fallback); this job's ``trade_date`` derivation
+    must apply the same guard."""
+    dates = [date(2025, 1, 1) + timedelta(days=i) for i in range(300)]
+    ohlcv_df = pd.DataFrame(
+        {
+            "ticker": ["TCS.NS"] * 300,
+            "date": pd.Series(dates, dtype=object),
+            "open": [100.0] * 300,
+            "high": [101.0] * 300,
+            "low": [99.0] * 300,
+            "close": [100.0] * 300,
+            "volume": [1_000_000.0] * 300,
+        }
+    )
+    nifty_df = pd.DataFrame(
+        {
+            "date": pd.Series(dates, dtype=object),
+            "close": [100.0] * 300,
+        }
+    )
+
+    with (
+        patch(
+            "backend.jobs.entry_quality_snapshot.disposable_pg_session"
+        ) as mock_pg,
+        patch(
+            "backend.jobs.entry_quality_snapshot._full_universe_tickers",
+            new_callable=AsyncMock,
+            return_value=["TCS.NS"],
+        ),
+        patch(
+            "backend.jobs.entry_quality_snapshot.query_iceberg_df",
+            new_callable=AsyncMock,
+        ) as mock_query,
+        patch(
+            "backend.jobs.entry_quality_snapshot._append_snapshot_rows"
+        ) as mock_append,
+    ):
+        mock_session = MagicMock()
+        mock_session.execute = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = [("TCS.NS",)]
+        mock_session.execute.return_value = mock_result
+        mock_pg.return_value.__aenter__.return_value = mock_session
+        mock_query.side_effect = [ohlcv_df, nifty_df]
+
+        result = await _run({})
+
+    assert result["rows_written"] == 1
+    written_rows = mock_append.call_args.args[0]
+    assert written_rows[0]["trade_date"] == dates[-1]
+
+
 def test_append_snapshot_rows_scopes_delete_on_ticker_and_trade_date():
     """Re-triggering the job for a ``trade_date`` already written
     MUST NOT duplicate rows — the pre-delete predicate scopes on

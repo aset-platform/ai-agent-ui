@@ -1,21 +1,33 @@
-"""Capital-shrink guardrail — prevent surprise sell-off on restart.
+"""set_target_weight is BUY-only — it never trims an open position.
 
 On 2026-06-25 a live runtime started with ₹20k while its real
 positions had been built under ~₹100k. ``set_target_weight`` sizes
 the target off ``self._initial``, so with the smaller capital every
-held position became "overweight" and the strategy issued SELLs that
-trimmed real shares.
+held position looked "overweight" and the strategy issued SELLs that
+trimmed real shares. The original fix (Task 4.0b) only suppressed
+this for the capital-shrink case specifically.
 
-This suite locks the two-part guardrail in ``LiveRuntime``:
+On 2026-07-17 the SAME class of bug recurred for a different reason:
+a live WABAG position won (price rose), which made the floor-divided
+target_qty fall below the held qty on ordinary price appreciation —
+not a capital shrink at all — and the runtime sold a real share for
+no better reason than crossing a rounding boundary while still
+favourable. That prompted generalising the fix: ``set_target_weight``
+now NEVER trims (diff<0), full stop, regardless of why the computed
+target fell below the held qty. All position reductions must come
+from an explicit exit / stop_loss / time_stop / regime_exit signal.
+
+This suite locks:
 
   1. ``_detect_capital_below_deployed`` — at start, when configured
      capital < deployed cost-basis, set ``_capital_below_deployed``
-     and emit a HIGH-severity ``capital_below_deployed`` event.
-  2. ``_action_to_signal`` ``set_target_weight`` branch — while the
-     flag is set, SUPPRESS rebalance-DOWN trims (diff<0) and emit a
-     ``rebalance_down_suppressed_capital_shrink`` event, UNLESS env
-     ``ALGO_ALLOW_REBALANCE_DOWN_ON_SHRINK`` is truthy. BUYs are
-     still allowed. Protective exits never touch this branch.
+     and emit a HIGH-severity ``capital_below_deployed`` event. This
+     remains a pure diagnostic now — it no longer gates anything in
+     ``_action_to_signal``.
+  2. ``_action_to_signal`` ``set_target_weight`` branch — a trim
+     (diff<0) is ALWAYS suppressed (no signal), independent of the
+     capital-shrink flag. BUYs (diff>0) are still allowed. Protective
+     exits never touch this branch.
 
 Kite + all I/O deps are mocked; no SDK calls leak out.
 """
@@ -183,16 +195,17 @@ def test_flag_defaults_false_in_init():
     assert runtime._capital_below_deployed is False
 
 
-# --- Part 2: suppression in set_target_weight ----------------------
+# --- Part 2: set_target_weight never trims --------------------------
 
 
 def test_flagged_trim_down_is_suppressed():
     """#3: flagged + a target-weight resolving to a SELL (diff<0) →
-    no signal + ``rebalance_down_suppressed_capital_shrink`` event."""
+    no signal (unconditional now — not a capital-shrink-specific
+    event)."""
     runtime = _make_runtime(initial_capital_inr=Decimal("20000"))
     runtime._capital_below_deployed = True
     # equity ≈20k, weight 0.5 → target ₹10k @ ₹100 = 100 sh; hold
-    # 200 sh → diff = -100 (trim-down SELL).
+    # 200 sh → diff = -100 (would-be trim-down SELL).
     _set_open_positions(
         runtime,
         {"GRANULES.NS": _FakePosition(200, Decimal("100"))},
@@ -206,17 +219,6 @@ def test_flagged_trim_down_is_suppressed():
     )
 
     assert sig is None
-    types = [e["type"] for e in runtime._events]
-    assert "rebalance_down_suppressed_capital_shrink" in types
-    row = next(
-        e
-        for e in runtime._events
-        if e["type"] == "rebalance_down_suppressed_capital_shrink"
-    )
-    payload = json.loads(row["payload_json"])
-    assert payload["ticker"] == "GRANULES.NS"
-    assert payload["current_qty"] == 200
-    assert payload["target_qty"] == 100
 
 
 def test_flagged_buy_up_is_allowed():
@@ -239,38 +241,11 @@ def test_flagged_buy_up_is_allowed():
     assert sig is not None
     assert sig.side == "BUY"
     assert sig.qty == 90
-    types = [e["type"] for e in runtime._events]
-    assert "rebalance_down_suppressed_capital_shrink" not in types
 
 
-def test_env_override_allows_trim_down(monkeypatch):
-    """#5: flagged + ALGO_ALLOW_REBALANCE_DOWN_ON_SHRINK=1 → the trim
-    SELL is produced (user genuinely wants to reduce capital)."""
-    monkeypatch.setenv("ALGO_ALLOW_REBALANCE_DOWN_ON_SHRINK", "1")
-    runtime = _make_runtime(initial_capital_inr=Decimal("20000"))
-    runtime._capital_below_deployed = True
-    _set_open_positions(
-        runtime,
-        {"GRANULES.NS": _FakePosition(200, Decimal("100"))},
-    )
-
-    sig = runtime._action_to_signal(
-        _TW_ACTION,
-        ticker="GRANULES.NS",
-        bar_date_ns=_BAR_NS,
-        last_price=Decimal("100"),
-    )
-
-    assert sig is not None
-    assert sig.side == "SELL"
-    assert sig.qty == 100
-    types = [e["type"] for e in runtime._events]
-    assert "rebalance_down_suppressed_capital_shrink" not in types
-
-
-def test_unflagged_trim_down_is_allowed():
-    """Sanity: when NOT flagged, a trim-down SELL is produced as
-    before (no behaviour change off the unhappy path)."""
+def test_unflagged_trim_down_is_also_suppressed():
+    """set_target_weight never trims, flag or no flag — the
+    capital-shrink flag is a pure diagnostic now, not a gate."""
     runtime = _make_runtime(initial_capital_inr=Decimal("20000"))
     assert runtime._capital_below_deployed is False
     _set_open_positions(
@@ -285,9 +260,28 @@ def test_unflagged_trim_down_is_allowed():
         last_price=Decimal("100"),
     )
 
-    assert sig is not None
-    assert sig.side == "SELL"
-    assert sig.qty == 100
+    assert sig is None
+
+
+def test_trim_down_suppressed_on_price_appreciation_alone():
+    """Regression for the 2026-07-17 WABAG incident: no capital-shrink
+    flag at all, just an ordinary winning price move shrinking the
+    floor-divided target below the held qty. Must still be a no-op."""
+    runtime = _make_runtime(initial_capital_inr=Decimal("40000"))
+    assert runtime._capital_below_deployed is False
+    _set_open_positions(
+        runtime,
+        {"WABAG.NS": _FakePosition(2, Decimal("1996.90"))},
+    )
+
+    sig = runtime._action_to_signal(
+        {"type": "set_target_weight", "weight": 0.1},
+        ticker="WABAG.NS",
+        bar_date_ns=_BAR_NS,
+        last_price=Decimal("2000.40"),
+    )
+
+    assert sig is None
 
 
 # --- Part 3: SAFETY — protective exits never blocked ---------------

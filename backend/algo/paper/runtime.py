@@ -1442,19 +1442,20 @@ class PaperRuntime:
                     qty=int(diff),
                     emitted_at_ns=bar_date_ns,
                 )
-            if diff < 0:
-                return Signal(
-                    strategy_id=self._strategy.id,
-                    user_id=self._user_id,
-                    ticker=ticker,
-                    side="SELL",
-                    qty=int(-diff),
-                    emitted_at_ns=bar_date_ns,
-                )
-            # diff==0: either flat+target=0 (can't afford) or holding
-            # already at target. Only the flat+target=0 case is the live
-            # parity drop to surface (matches _maybe_emit_qty_zero_rejection
-            # guard: weight>0, equity>0, target_qty==0).
+            # set_target_weight is BUY-only once a position is open —
+            # never trims (diff<0). Mirrors LiveRuntime's
+            # _action_to_signal: recomputing target_qty from the
+            # CURRENT price every eval tick means a plain winning move
+            # can push the floor-divided target below the held qty,
+            # which is not a real overweight condition. Reductions
+            # come only from an explicit exit / stop_loss / time_stop
+            # / regime_exit signal.
+            #
+            # diff<=0: either flat+target=0 (can't afford), holding
+            # already at target, or a would-be trim (now suppressed).
+            # Only the flat+target=0 case is the live parity drop to
+            # surface (matches _maybe_emit_qty_zero_rejection guard:
+            # weight>0, equity>0, target_qty==0).
             if current_qty == 0 and target_qty == 0:
                 bar_date_obj = datetime.fromtimestamp(
                     bar_date_ns / 1_000_000_000,

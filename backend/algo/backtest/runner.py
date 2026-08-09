@@ -1819,14 +1819,15 @@ def _action_to_intent(
                 intent_emitted_at=bar_date,
                 intent_emitted_ts_ns=bar_open_ts_ns,
             )
-        if diff < 0:
-            return OrderIntent(
-                ticker=ticker,
-                side="SELL",
-                qty=int(-diff),
-                intent_emitted_at=bar_date,
-                intent_emitted_ts_ns=bar_open_ts_ns,
-            )
+        # set_target_weight is BUY-only once a position is open —
+        # never trims (diff<0). Mirrors LiveRuntime/PaperRuntime's
+        # _action_to_signal: recomputing target_qty from the CURRENT
+        # price every bar means a plain winning move can push the
+        # floor-divided target below the held qty, which is not a
+        # real overweight condition — it's an artifact of dividing a
+        # near-fixed target notional by a rising price. Reductions
+        # come only from an explicit exit / stop_loss / time_stop /
+        # regime_exit intent.
         return None
     # `hold` is an explicit no-op.
     return None

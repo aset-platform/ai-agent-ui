@@ -34,6 +34,13 @@ function fmt(
   return String(n);
 }
 
+function totalPnl(rows: { pnl_inr: string }[]): number {
+  return rows.reduce((sum, r) => {
+    const n = Number(r.pnl_inr);
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
+}
+
 /**
  * PositionsTab — intraday MIS positions table with strategy join.
  *
@@ -136,6 +143,24 @@ export function PositionsTab() {
           </tr>
         ))}
       </tbody>
+      <tfoot>
+        <tr className="border-t border-slate-200 dark:border-slate-700 font-medium">
+          <td className="px-2 py-2 text-right" colSpan={4}>
+            Total P&amp;L
+          </td>
+          <td
+            className={`px-2 py-2 text-right tabular-nums ${
+              totalPnl(rows) >= 0
+                ? "text-emerald-600"
+                : "text-rose-600"
+            }`}
+            data-testid="positions-total-pnl"
+          >
+            {fmt(String(totalPnl(rows)), "inr")}
+          </td>
+          <td colSpan={5} />
+        </tr>
+      </tfoot>
     </table>
   );
 }

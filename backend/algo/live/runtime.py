@@ -425,13 +425,13 @@ class LiveRuntime:
         # exempt. See _submit_order's churn guard.
         self._last_submit_ts: dict[tuple[str, str], float] = {}
 
-        # Task 4.0b — capital-shrink guardrail. Set True in run() when
-        # the configured start capital is below the cost-basis of
-        # already-deployed positions (e.g. runtime restarted with ₹20k
-        # while real positions were built under ₹100k). While set, the
-        # ``set_target_weight`` branch SUPPRESSES rebalance-DOWN trims
-        # (which would liquidate real shares) — BUYs and protective
-        # exits are unaffected. See _detect_capital_below_deployed.
+        # Diagnostic flag — set True in run() when the configured
+        # start capital is below the cost-basis of already-deployed
+        # positions (e.g. runtime restarted with ₹20k while real
+        # positions were built under ₹100k). ``set_target_weight``
+        # never trims regardless of this flag (see _action_to_signal)
+        # — it's surfaced purely as an under-capitalisation signal.
+        # See _detect_capital_below_deployed.
         self._capital_below_deployed: bool = False
 
         # ASETPLTFRM-376 — hydrate PositionTracker from any pre-
@@ -3202,9 +3202,10 @@ class LiveRuntime:
         self._load_trailing_state_from_redis()
         await self._ensure_gtts_for_hydrated_positions()
         await self._cleanup_stale_protection()
-        # Task 4.0b — once positions are hydrated, detect a start where
-        # the configured capital is below the already-deployed cost so
-        # the set_target_weight branch can suppress liquidating trims.
+        # Once positions are hydrated, flag a start where the
+        # configured capital is below the already-deployed cost
+        # (under-capitalisation diagnostic — see
+        # _detect_capital_below_deployed).
         self._detect_capital_below_deployed()
         if self._ticker_locked:
             _logger.info(
@@ -3965,9 +3966,15 @@ class LiveRuntime:
                     # Dual-bar confirmation: yesterday was oversold
                     # (closed_entry says BUY). Also require today's
                     # running bar to confirm (today's main-eval signal
-                    # == BUY). If today's bar no longer says BUY the
-                    # stock has already recovered intraday — suppress to
-                    # avoid chasing a gap-up or upper-circuit opener.
+                    # == BUY). If today's bar no longer says BUY, SOME
+                    # leg of the strategy's own AND-condition now fails
+                    # on today's running bar — not necessarily RSI2
+                    # recovering. E.g. distance_from_sma50 can flip
+                    # negative if price keeps falling through the
+                    # trend filter, which is a distinct case from RSI2
+                    # rebounding above threshold. Suppress either way
+                    # to avoid entries the strategy's own gate doesn't
+                    # confirm intraday.
                     if signal is not None and signal.side == "BUY":
                         _logger.info(
                             "daily entry on CLOSED bar (pre-gate) — "
@@ -3977,9 +3984,10 @@ class LiveRuntime:
                         signal = closed_entry
                     else:
                         _logger.info(
-                            "daily closed-bar BUY suppressed — "
-                            "today's running bar does not confirm "
-                            "(stock recovered intraday, ticker=%s)",
+                            "daily closed-bar BUY suppressed by "
+                            "entry timing gate — today's running bar "
+                            "no longer confirms the full entry "
+                            "condition (ticker=%s)",
                             bar.ticker,
                         )
                         self._events.append(
@@ -3994,7 +4002,10 @@ class LiveRuntime:
                                         {"dry_run": True}
                                         if self._dry_run else {}
                                     ),
-                                    "reason": "today_bar_not_confirmed",
+                                    "reason": (
+                                        "daily_entry_timing_gate_"
+                                        "unconfirmed"
+                                    ),
                                     "ticker": bar.ticker,
                                     "side": "BUY",
                                 },
@@ -5557,16 +5568,14 @@ class LiveRuntime:
     def _detect_capital_below_deployed(self) -> None:
         """Flag a start where capital < already-deployed cost-basis.
 
-        Task 4.0b real-money guardrail. ``set_target_weight`` sizes
-        the target off ``self._initial``; if the runtime is (re)started
-        with capital well below the cost of positions that were built
-        under a larger account, every held position looks "overweight"
-        and the strategy would issue SELLs that trim REAL shares — a
-        surprise sell-off. Called once in ``run()`` after positions are
-        hydrated; sets ``self._capital_below_deployed`` and emits a
-        HIGH-severity ``capital_below_deployed`` event + WARNING when
-        tripped. The suppression itself lives in the
-        ``set_target_weight`` branch of ``_action_to_signal``.
+        Diagnostic only — ``set_target_weight`` no longer ever trims
+        (see ``_action_to_signal``'s ``set_target_weight`` branch), so
+        this can't produce a surprise sell-off any more. Still worth
+        flagging: it means the account is running under-capitalised
+        relative to positions built under a larger balance. Called
+        once in ``run()`` after positions are hydrated; sets
+        ``self._capital_below_deployed`` and emits a HIGH-severity
+        ``capital_below_deployed`` event + WARNING when tripped.
         """
         deployed_cost = sum(
             pos.qty * float(pos.avg_price)
@@ -5580,9 +5589,7 @@ class LiveRuntime:
         ratio = initial / deployed_cost if deployed_cost else 0.0
         _logger.warning(
             "LiveRuntime: start capital ₹%.2f is BELOW already-"
-            "deployed cost ₹%.2f (ratio=%.3f) — suppressing "
-            "rebalance-DOWN trims to avoid a surprise sell-off; set "
-            "ALGO_ALLOW_REBALANCE_DOWN_ON_SHRINK=1 to override",
+            "deployed cost ₹%.2f (ratio=%.3f)",
             initial,
             deployed_cost,
             ratio,
@@ -5710,55 +5717,21 @@ class LiveRuntime:
                     emitted_at_ns=bar_date_ns,
                     reason=t,
                 )
-            if diff < 0:
-                # Task 4.0b — capital-shrink guardrail. A trim-down
-                # SELL while started below already-deployed cost would
-                # liquidate REAL shares (the 2026-06-25 incident).
-                # Suppress it and surface why, UNLESS the operator
-                # opted in to genuinely reduce capital. Protective
-                # exits never reach here (separate reasons).
-                if (
-                    self._capital_below_deployed
-                    and not _env_truthy(
-                        "ALGO_ALLOW_REBALANCE_DOWN_ON_SHRINK"
-                    )
-                ):
-                    _logger.warning(
-                        "set_target_weight trim SUPPRESSED for %s "
-                        "(capital below deployed): target=%d "
-                        "current=%d — would sell %d real shares",
-                        ticker,
-                        target_qty,
-                        current_qty,
-                        -diff,
-                    )
-                    self._events.append(
-                        event_row(
-                            session_id=self._session_id,
-                            user_id=self._user_id,
-                            strategy_id=self._strategy.id,
-                            mode="live",
-                            type_=(
-                                "rebalance_down_suppressed_"
-                                "capital_shrink"
-                            ),
-                            payload={
-                                "severity": "high",
-                                "ticker": ticker,
-                                "target_qty": target_qty,
-                                "current_qty": current_qty,
-                            },
-                        )
-                    )
-                    return None
-                return Signal(
-                    strategy_id=self._strategy.id,
-                    user_id=self._user_id,
-                    ticker=ticker,
-                    side="SELL",
-                    qty=int(-diff),
-                    emitted_at_ns=bar_date_ns,
-                    reason=t,
-                )
+            # set_target_weight is BUY-only once a position is open —
+            # it can size a fresh entry or add to an underweight
+            # position, but it never trims (diff<0). Recomputing
+            # target_qty from the CURRENT price every eval tick means
+            # a simple winning move can push a floor-divided target
+            # below the held qty (target_value/price falls as price
+            # rises) — that is not a real overweight condition, it is
+            # unrelated to profit-taking. Every reduction MUST come
+            # from an explicit `exit` / stop_loss / time_stop /
+            # regime_exit signal instead. Confirmed 2026-07-17 (WABAG
+            # trim): a 2-share RSI(2) position got sold down to 1
+            # purely because price crossed a ₹2,000 rounding boundary
+            # while still favourable and the AST's oversold condition
+            # was still true. Subsumes the old Task 4.0b capital-
+            # shrink-only guardrail — trims are unconditionally
+            # suppressed now, not just when capital < deployed cost.
             return None
         return None
