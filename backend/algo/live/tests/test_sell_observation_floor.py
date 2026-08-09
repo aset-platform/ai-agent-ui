@@ -290,6 +290,31 @@ async def test_signal_sell_before_0930_deferred():
 
 
 @pytest.mark.asyncio
+async def test_replay_signal_sell_before_0930_not_gated():
+    """Same signal + same pre-floor wall clock (09:20 IST), but
+    ``self._is_replay = True`` (mode=dryrun + source=replay
+    rehearsal). Gate S must mirror Gate A's ``not self._is_replay``
+    exemption — replay wall-clock is meaningless (see
+    ``_on_bar_close``'s ``daily_realtime`` computation) — so the
+    SELL must proceed unaffected, not be silently dropped."""
+    runtime, kite = _make_runtime()
+    runtime._is_replay = True
+    _seed_open_position(runtime, qty=5, avg_price=Decimal("480"))
+    _seed_bars(runtime)
+
+    n = await _feed_sell_bar(runtime, wall_clock="09:20")
+
+    assert n == 1, (
+        "a replay-mode signal SELL before 09:30 IST must NOT be "
+        "gated — replay wall-clock is meaningless, mirroring Gate "
+        "A's not self._is_replay exemption"
+    )
+    kite.place_order.assert_called_once()
+    kwargs = kite.place_order.call_args.kwargs
+    assert kwargs["transaction_type"] == "SELL"
+
+
+@pytest.mark.asyncio
 async def test_signal_sell_at_0930_fires():
     """Same signal, wall clock exactly 09:30 IST. The floor check is
     strict (``now_ist < _MIN_SELL_TIME_IST``), so 09:30:00 itself is

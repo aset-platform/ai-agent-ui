@@ -4121,7 +4121,15 @@ class LiveRuntime:
         # time-stop, STOP_HIT, GTT-triggered, MIS square-off) are
         # handled earlier in this method and already returned before
         # reaching here — this floor can never gate them.
-        if signal is not None and signal.side == "SELL":
+        # not self._is_replay mirrors Gate A's daily_realtime guard —
+        # replay wall-clock is meaningless, so a replay/dry-run
+        # rehearsal must not have its SELLs silently dropped by the
+        # real datetime.now(IST) below.
+        if (
+            signal is not None
+            and signal.side == "SELL"
+            and not self._is_replay
+        ):
             sell_now_ist = datetime.now(IST).time()
             if sell_now_ist < _MIN_SELL_TIME_IST:
                 _logger.info(
