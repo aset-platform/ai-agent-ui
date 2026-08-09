@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
@@ -63,6 +64,52 @@ _CONNECT_TIMEOUT_S = 15.0
 _MAX_FAST_REBUILD_ATTEMPTS = 2
 _STALENESS_CHECK_INTERVAL_S = 60.0
 _STALE_TICK_THRESHOLD_S = 90.0
+
+# ASETPLTFRM-470 — reactor-thread liveness diagnostic (module-level,
+# NOT per-instance). Twisted's ``reactor`` is a per-PROCESS
+# singleton shared across every user's KiteWsMultiplexer; kiteconnect
+# only spawns its background thread once per process
+# (``KiteTicker.connect(threaded=True)`` guards thread creation with
+# ``if not reactor.running``), so a rebuilt KiteTicker's own
+# ``.connect()`` call never gets a NEW thread — it just re-registers
+# against whichever reactor thread (if any) is already running. If
+# that original thread has died, no amount of in-process rebuilding
+# can recover it (Twisted reactors are documented as not restartable
+# once stopped — a second ``reactor.run()`` raises
+# ``ReactorNotRestartable``), matching the 2026-07-05/06 incident
+# where only a full backend process restart fixed it.
+#
+# Decision (2026-08-09, live-trading risk review): detect + alert
+# ONLY — no automated process restart. A dead reactor is a
+# process-wide failure affecting every user's live WS simultaneously;
+# an automated restart trigger is a new, higher-blast-radius failure
+# mode of its own (wrong-trigger risk during a live position) for
+# real-money trading, so this stays a human decision. This tracker
+# exists purely so the escalation alert can tell "reactor thread
+# confirmed dead — restart is the only fix" apart from "still
+# retrying, reactor thread alive" — it never changes control flow.
+_reactor_thread: threading.Thread | None = None
+
+
+def _capture_reactor_thread(kt: Any) -> None:
+    """Idempotently record the Twisted reactor's background thread
+    the first time kiteconnect spawns it in this process. No-op on
+    every later rebuild (rebuilt tickers never get their own
+    thread — see module docstring above)."""
+    global _reactor_thread
+    if _reactor_thread is not None:
+        return
+    thread = getattr(kt, "websocket_thread", None)
+    if isinstance(thread, threading.Thread):
+        _reactor_thread = thread
+
+
+def _reactor_thread_alive() -> bool | None:
+    """``True``/``False`` once the thread has been captured; ``None``
+    if we've never seen a connect() spawn it yet (can't judge)."""
+    if _reactor_thread is None:
+        return None
+    return _reactor_thread.is_alive()
 
 
 class KiteWsMultiplexer:
@@ -400,6 +447,12 @@ class KiteWsMultiplexer:
             "last_tick_at": self.last_tick_at,
             "tick_count_today": self.tick_count_today,
             "wedge_escalated": self._wedge_escalated,
+            # ASETPLTFRM-470 diagnostic — True/False once captured,
+            # None if no connect() has spawned the reactor thread yet
+            # in this process. See module docstring near
+            # _reactor_thread for why this is process-wide, not
+            # per-instance, and why it never triggers auto-restart.
+            "reactor_thread_alive": _reactor_thread_alive(),
         }
 
     def reset_tick_count(self) -> None:
@@ -433,6 +486,7 @@ class KiteWsMultiplexer:
 
     def _arm_connect_timeout(self) -> None:
         """Start (or restart) the connect-timeout watchdog task."""
+        _capture_reactor_thread(self._kt)
         if self._connect_timeout_task is not None:
             self._connect_timeout_task.cancel()
         self._connect_timeout_task = asyncio.ensure_future(
@@ -445,15 +499,17 @@ class KiteWsMultiplexer:
         await asyncio.sleep(_CONNECT_TIMEOUT_S)
         if self._connected or self._closed or self._auth_failed:
             return
+        reactor_alive = _reactor_thread_alive()
         _logger.error(
             "KiteWsMultiplexer: connect() wedged (no callback "
-            "within %.0fs) user=%s attempt=%d",
+            "within %.0fs) user=%s attempt=%d reactor_thread_alive=%s",
             _CONNECT_TIMEOUT_S, self._user_id,
-            self._rebuild_attempts + 1,
+            self._rebuild_attempts + 1, reactor_alive,
         )
         self._emit_ws_event("ws_connect_timeout", {
             "timeout_s": _CONNECT_TIMEOUT_S,
             "attempt": self._rebuild_attempts + 1,
+            "reactor_thread_alive": reactor_alive,
         })
         await self._handle_wedge()
 
@@ -542,15 +598,31 @@ class KiteWsMultiplexer:
             return
         if not self._wedge_escalated:
             self._wedge_escalated = True
+            reactor_alive = _reactor_thread_alive()
+            # Diagnostic only (ASETPLTFRM-470, 2026-08-09 decision) —
+            # reactor_alive=False is a near-certain signal that no
+            # further in-process rebuild/reconnect attempt can ever
+            # succeed (the shared Twisted reactor thread is gone and
+            # cannot be restarted); reactor_alive=True/None means the
+            # existing backoff reconnect loop below might still
+            # recover on its own. Either way we keep retrying — this
+            # never triggers an automated restart, only sharpens what
+            # the alert tells a human to do next.
             _logger.error(
                 "KiteWsMultiplexer: wedge ESCALATED after %d fast "
-                "rebuild attempts user=%s — falling back to "
-                "backoff reconnect loop, manual restart may be "
-                "required",
-                self._rebuild_attempts, self._user_id,
+                "rebuild attempts user=%s reactor_thread_alive=%s — "
+                "falling back to backoff reconnect loop%s",
+                self._rebuild_attempts, self._user_id, reactor_alive,
+                (
+                    " (reactor thread confirmed DEAD — backend "
+                    "restart is the only fix)"
+                    if reactor_alive is False else
+                    ", manual restart may be required"
+                ),
             )
             self._emit_ws_event("ws_wedge_escalated", {
                 "attempts": self._rebuild_attempts,
+                "reactor_thread_alive": reactor_alive,
             })
         self._disconnect_kt()
         self._trigger_reconnect()

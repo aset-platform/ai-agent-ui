@@ -41,6 +41,7 @@ def test_health_snapshot_initial():
         "last_tick_at": None,
         "tick_count_today": 0,
         "wedge_escalated": False,
+        "reactor_thread_alive": None,
     }
 
 
