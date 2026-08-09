@@ -605,17 +605,27 @@ class TestRegistry:
 class TestCompare:
     """GET /v1/dashboard/compare."""
 
+    @patch("tools._analysis_shared.compute_indicators")
     @patch("dashboard_routes.get_cache")
-    @patch("dashboard_routes._get_stock_repo")
+    @patch("dashboard_routes._duckdb_read")
     def test_happy_path(
         self,
-        mock_repo_fn,
+        mock_duckdb_read,
         mock_cache_fn,
+        mock_compute_indicators,
         client,
     ):
-        """Two tickers with normalized series."""
-        repo = MagicMock()
+        """Two tickers with normalized series.
 
+        get_compare reads OHLCV/analysis_summary/company_info via
+        the module-level ``_duckdb_read`` Iceberg helper (not
+        StockRepository batch methods, which the route stopped
+        calling in a later refactor), and computes RSI/MACD
+        on-the-fly via ``tools._analysis_shared.compute_indicators``
+        per symbol. This test passed locally by accident (real
+        AAPL/MSFT data happens to exist in local dev Iceberg) but
+        failed in CI's empty Iceberg — ASETPLTFRM-360 follow-up.
+        """
         dates = [
             "2024-01-01",
             "2024-01-02",
@@ -643,17 +653,13 @@ class TestCompare:
             )
         ohlcv_df = pd.DataFrame(rows)
 
-        repo.get_ohlcv_batch.return_value = ohlcv_df
-        repo.get_analysis_summary_batch.return_value = pd.DataFrame(
-            columns=["ticker"]
-        )
-        repo.get_company_info_batch.return_value = pd.DataFrame(
-            columns=["ticker"]
-        )
-        repo.get_technical_indicators_batch.return_value = pd.DataFrame(
-            columns=["ticker"]
-        )
-        mock_repo_fn.return_value = repo
+        def _duckdb_side_effect(table, sql):
+            if table == "stocks.ohlcv":
+                return ohlcv_df
+            return pd.DataFrame(columns=["ticker"])
+
+        mock_duckdb_read.side_effect = _duckdb_side_effect
+        mock_compute_indicators.return_value = pd.DataFrame()
 
         cache = MagicMock()
         cache.get.return_value = None
