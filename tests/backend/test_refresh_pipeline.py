@@ -11,6 +11,44 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
+import pytest
+
+# Force-import at collection time, BEFORE any test's @patch context
+# exists. run_full_refresh's "Company info" step does a LAZY
+# `from tools.stock_data_tool import get_stock_info` — if that's
+# this module's first-ever import in the whole pytest session (it
+# is, when this file runs before test_stock_tools.py) AND it fires
+# while a test here has tools._stock_shared._require_repo patched,
+# stock_data_tool's own `from tools._stock_shared import
+# _require_repo` (a module-level, eager import) permanently binds
+# to that mock — Python only executes a module's top-level code
+# once, so later un-patching tools._stock_shared._require_repo
+# doesn't fix stock_data_tool's already-captured reference. That
+# broke every unrelated test_stock_tools.py::TestGetStockInfo test
+# that ran afterward in the same session — found 2026-08-09.
+import tools.stock_data_tool  # noqa: F401,E402
+
+
+@pytest.fixture(autouse=True)
+def _clean_regressor_caches():
+    """_load_regressors_from_iceberg caches its (vix_df, idx_df)
+    result in module-level _MARKET_CACHE/_MACRO_CACHE, keyed only
+    by scope ("us"/"india") — NOT by ticker or test. A test that
+    mocks the DuckDB bulk-read call and calls this function writes
+    its synthetic data straight into that shared cache; without
+    clearing it afterward, a LATER test elsewhere in the same
+    pytest session (e.g. test_stock_tools.py's Prophet-training
+    tests) reads back stale synthetic dates that don't overlap
+    its own data, producing NaN after the merge — found 2026-08-09
+    when test_load_regressors_includes_macro started mocking this
+    path. Clear before AND after every test in this file."""
+    from tools._forecast_shared import _MACRO_CACHE, _MARKET_CACHE
+
+    _MARKET_CACHE.clear()
+    _MACRO_CACHE.clear()
+    yield
+    _MARKET_CACHE.clear()
+    _MACRO_CACHE.clear()
 
 
 def _make_ohlcv_df(
@@ -121,16 +159,24 @@ def test_refresh_market_indices_empty_history(
 # ── _load_regressors_from_iceberg ──────────────────────
 
 
+@patch("backend.db.duckdb_engine.query_iceberg_df")
 @patch("tools._forecast_shared._require_repo")
-def test_load_regressors_reads_ohlcv(mock_require):
-    """Regressors should be loaded from get_ohlcv,
-    not get_market_index_series."""
+def test_load_regressors_reads_ohlcv(mock_require, mock_duckdb):
+    """Regressors should be loaded from the bulk DuckDB query,
+    not get_market_index_series.
+
+    Same call site as test_load_regressors_includes_macro — the
+    batch-load path bypasses repo.get_ohlcv entirely.
+    """
     repo = MagicMock()
-    vix = _make_iceberg_ohlcv(50, "^VIX")
-    gspc = _make_iceberg_ohlcv(50, "^GSPC")
-    repo.get_ohlcv.side_effect = lambda t, **kw: (vix if t == "^VIX" else gspc)
     repo.get_sentiment_series.return_value = pd.DataFrame()
     mock_require.return_value = repo
+
+    vix = _make_iceberg_ohlcv(50, "^VIX")
+    gspc = _make_iceberg_ohlcv(50, "^GSPC")
+    mock_duckdb.return_value = pd.concat(
+        [vix, gspc], ignore_index=True,
+    )[["ticker", "date", "close"]]
 
     prophet_df = pd.DataFrame(
         {
@@ -281,27 +327,38 @@ def test_refresh_market_indices_includes_macro(
     assert "DX-Y.NYB" in called_tickers
 
 
+@patch("backend.db.duckdb_engine.query_iceberg_df")
 @patch("tools._forecast_shared._require_repo")
-def test_load_regressors_includes_macro(mock_require):
+def test_load_regressors_includes_macro(
+    mock_require, mock_duckdb,
+):
     """Regressors should include macro columns when
-    macro data exists in OHLCV."""
+    macro data exists in OHLCV.
+
+    _load_regressors_from_iceberg batch-loads VIX + index + all
+    macro symbols in ONE DuckDB query (backend.db.duckdb_engine.
+    query_iceberg_df, ~86% faster than 6 individual repo.get_ohlcv
+    reads per the docstring) — repo.get_ohlcv is never called on
+    this path, so mocking it alone silently let real (environment-
+    dependent) Iceberg macro data through instead.
+    """
     repo = MagicMock()
-
-    def _get_ohlcv(ticker, **kw):
-        if ticker in (
-            "^VIX",
-            "^GSPC",
-            "^TNX",
-            "^IRX",
-            "CL=F",
-            "DX-Y.NYB",
-        ):
-            return _make_iceberg_ohlcv(50, ticker)
-        return pd.DataFrame()
-
-    repo.get_ohlcv.side_effect = _get_ohlcv
     repo.get_sentiment_series.return_value = pd.DataFrame()
     mock_require.return_value = repo
+
+    bulk = pd.concat(
+        [
+            _make_iceberg_ohlcv(50, sym)
+            for sym in (
+                "^VIX", "^GSPC", "^TNX",
+                "^IRX", "CL=F", "DX-Y.NYB",
+            )
+        ],
+        ignore_index=True,
+    )
+    mock_duckdb.return_value = bulk[
+        ["ticker", "date", "close"]
+    ]
 
     prophet_df = pd.DataFrame(
         {

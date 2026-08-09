@@ -35,6 +35,18 @@ def _make_fallback(
             token_budget=budget,
             compressor=compressor,
         )
+    # The constructor only populates _groq_tiers (used by the
+    # "Legacy flat sequential" cascade loop in invoke()) when a real
+    # GROQ_API_KEY env var is present — otherwise it stays empty and
+    # invoke() falls straight through to the Anthropic step, raising
+    # "All free-tier models exhausted" even though _try_model is
+    # fully mocked. Populate it deterministically here so these
+    # tests don't depend on whether the runtime environment happens
+    # to have a Groq key set (present in local dev, absent in CI).
+    llm._groq_tiers = [
+        (name, MagicMock(), MagicMock())
+        for name in (groq_models or [])
+    ]
     return llm
 
 
