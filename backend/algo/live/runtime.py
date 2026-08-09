@@ -5327,11 +5327,22 @@ class LiveRuntime:
         else:
             newly_computed = True
             ind_map = compute_indicators(closed)
-            # Idempotent lazy cache loads (already warmed for today,
-            # which covers the prior day, but keep them explicit).
-            self._ensure_factor_cache(bar.ticker, closed_date)
-            self._ensure_regime_cache(closed_date)
-            self._ensure_daily_overlay_cache(bar.ticker, closed_date)
+            # Deliberately NOT calling _ensure_factor_cache /
+            # _ensure_regime_cache / _ensure_daily_overlay_cache
+            # here (unlike the pre-Task-1 version of this method).
+            # This method's only caller (_on_bar_close) already
+            # ran them for `bar.ticker` via the asyncio.to_thread
+            # -offloaded _per_bar_sync_reads earlier in the SAME
+            # bar-close, for a 365-day lookback window from TODAY
+            # that already covers closed_date (one day back) — so
+            # they're always already warmed by the time we get
+            # here. Task 1's OR-trigger made this method run on
+            # EVERY bar-close (previously it only ran rarely, pre-
+            # 14:20-gate), so calling these SYNCHRONOUSLY on the
+            # event-loop thread here would reintroduce the exact
+            # per-bar blocking-I/O-on-the-loop-thread risk Task 7.1
+            # (test_per_bar_offload.py) eliminated for the main
+            # per-bar path.
             features = assemble_per_bar_features(
                 bar_feats=ind_map.get(
                     closed_date,

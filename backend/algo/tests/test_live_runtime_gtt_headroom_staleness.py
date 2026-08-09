@@ -141,7 +141,7 @@ class TestGttHeadroomPicksUpMidRunEdits:
         update self._caps itself, not just the local current_caps
         used for the allow-list gate -- this is what feeds the sync
         GTT call sites above."""
-        from datetime import time as _time, timezone, datetime as _dt
+        from datetime import timezone, datetime as _dt
         from types import SimpleNamespace
 
         runtime = _make_runtime(gtt_limit_headroom_pct=0.01)
@@ -166,10 +166,7 @@ class TestGttHeadroomPicksUpMidRunEdits:
         # The caps-refresh code sits on the signal path (past the
         # entry-cutoff/per-ticker-cap gates), so eval must return a
         # real BUY, not hold, to reach it.
-        with patch(
-            "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-            _time(0, 0),
-        ), patch.object(
+        with patch.object(
             runtime._evaluator, "eval_node",
             return_value={"type": "buy", "qty": {"shares": 1}},
         ), patch.object(
