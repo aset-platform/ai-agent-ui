@@ -596,17 +596,40 @@ async def _reconcile_terminal_with_in_flight(
 
     factory = get_session_factory()
     async with factory() as session:
+        # Pass 1 (unlocked) — identify WHICH run holds this
+        # kite_order_id. Cheap scan across the 5 most-recent live
+        # runs; kite_order_id assignment never changes once set, so
+        # staleness here only risks missing a just-created run (rare
+        # and self-heals on the next postback retry / fill-sync).
         runs = (await session.execute(text("""
-            SELECT id, strategy_id, live_orders_in_flight
+            SELECT id
             FROM algo.runs
             WHERE user_id = :uid AND mode = 'live'
               AND live_orders_in_flight IS NOT NULL
               AND jsonb_array_length(live_orders_in_flight) > 0
-            ORDER BY started_at DESC LIMIT 5
-        """), {"uid": user_id})).mappings().all()
+              AND live_orders_in_flight @> :probe
+            ORDER BY started_at DESC LIMIT 1
+        """), {
+            "uid": user_id,
+            "probe": json.dumps([{"kite_order_id": kite_order_id}]),
+        })).mappings().all()
 
         for run in runs:
-            in_flight = run["live_orders_in_flight"]
+            # Pass 2 — re-fetch the SAME row under FOR UPDATE so this
+            # mutate+write is serialized against a concurrent
+            # LiveRuntime._submit_order → update_in_flight call on
+            # the same run (both now merge/mutate-in-place rather
+            # than blind-overwrite from a stale snapshot — found
+            # 2026-08-05: a same-run order submitted 4s after this
+            # postback clobbered the fill status it set here before
+            # this fix, via a blind overwrite from stale memory).
+            locked = (await session.execute(text("""
+                SELECT id, strategy_id, live_orders_in_flight
+                FROM algo.runs
+                WHERE id = :rid
+                FOR UPDATE
+            """), {"rid": run["id"]})).mappings().one()
+            in_flight = locked["live_orders_in_flight"]
             if isinstance(in_flight, str):
                 in_flight = json.loads(in_flight)
             found = False
@@ -626,8 +649,8 @@ async def _reconcile_terminal_with_in_flight(
                     entry["cancelled_at"] = now_iso
                     entry["cancel_reason"] = status_message
                 matched_entry = entry
-                matched_run_id = run["id"]
-                matched_strategy_id = run["strategy_id"]
+                matched_run_id = locked["id"]
+                matched_strategy_id = locked["strategy_id"]
                 found = True
                 break
             if found:
@@ -637,7 +660,7 @@ async def _reconcile_terminal_with_in_flight(
                     WHERE id = :rid
                 """).bindparams(bindparam("payload", type_=JSONB))
                 await session.execute(stmt, {
-                    "payload": in_flight, "rid": run["id"],
+                    "payload": in_flight, "rid": locked["id"],
                 })
                 await session.commit()
                 break

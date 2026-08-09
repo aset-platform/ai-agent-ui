@@ -340,16 +340,76 @@ class CapsRepo:
             await session.commit()
         return result.rowcount
 
+    _TERMINAL_IN_FLIGHT_STATUSES = {"filled", "rejected", "cancelled"}
+
     async def update_in_flight(
         self,
         user_id: UUID,
         run_id: UUID,
         in_flight: list[dict],
     ) -> None:
-        """Overwrite ``algo.runs.live_orders_in_flight`` for a run."""
-        now = datetime.now(UTC)
+        """Merge ``in_flight`` into ``algo.runs.live_orders_in_flight``
+        by ``kite_order_id`` — never a blind overwrite.
+
+        The caller's ``in_flight`` is LiveRuntime's in-memory snapshot,
+        which never learns of a postback-driven status flip except via
+        the periodic fill-sync poll. A blind overwrite from that stale
+        snapshot can race the Kite postback webhook's own
+        read-modify-write of this same column and silently revert a
+        just-confirmed fill back to "submitted" (found 2026-08-05:
+        SFL.NS retried a SELL forever after its fill was clobbered by
+        an ARVIND.NS order submitted 4s later on the same run — Kite
+        correctly rejected every retry, but the position tracker never
+        saw the close). Row-locked read-merge-write: an existing PG
+        entry already in a terminal status (filled/rejected/cancelled)
+        is never downgraded by an incoming non-terminal entry for the
+        same kite_order_id.
+        """
         factory = get_session_factory()
         async with factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT live_orders_in_flight FROM algo.runs "
+                        "WHERE id = :rid AND user_id = :uid FOR UPDATE"
+                    ),
+                    {"rid": run_id, "uid": user_id},
+                )
+            ).one_or_none()
+            raw = row[0] if row is not None else None
+            if isinstance(raw, str):
+                current = json.loads(raw)
+            elif isinstance(raw, list):
+                current = raw
+            else:
+                current = []
+
+            merged = list(current)
+            index_by_id = {
+                e.get("kite_order_id"): i
+                for i, e in enumerate(merged)
+                if e.get("kite_order_id")
+            }
+            for incoming in in_flight:
+                kid = incoming.get("kite_order_id")
+                if kid is None:
+                    merged.append(incoming)
+                    continue
+                idx = index_by_id.get(kid)
+                if idx is None:
+                    index_by_id[kid] = len(merged)
+                    merged.append(incoming)
+                    continue
+                existing = merged[idx]
+                if (
+                    existing.get("status")
+                    in self._TERMINAL_IN_FLIGHT_STATUSES
+                    and incoming.get("status")
+                    not in self._TERMINAL_IN_FLIGHT_STATUSES
+                ):
+                    continue  # never downgrade a confirmed terminal fill
+                merged[idx] = incoming
+
             await session.execute(
                 text(
                     "UPDATE algo.runs "
@@ -359,7 +419,7 @@ class CapsRepo:
                     "  AND user_id = :uid"
                 ),
                 {
-                    "payload": json.dumps(in_flight, default=str),
+                    "payload": json.dumps(merged, default=str),
                     "rid": run_id,
                     "uid": user_id,
                 },
