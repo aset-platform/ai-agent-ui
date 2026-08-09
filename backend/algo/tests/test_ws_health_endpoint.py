@@ -82,6 +82,7 @@ def test_no_mux_returns_disconnected(app):
         "tick_age_seconds": None,
         "tick_count_today": 0,
         "wedge_escalated": False,
+        "reactor_thread_alive": None,
     }
 
 

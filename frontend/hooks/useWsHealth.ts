@@ -21,6 +21,9 @@ export interface WsHealth {
   tick_age_seconds: number | null;
   tick_count_today: number;
   wedge_escalated: boolean;
+  // ASETPLTFRM-470 diagnostic only — null if no connect() has
+  // spawned the reactor thread yet this process.
+  reactor_thread_alive: boolean | null;
 }
 
 export const WS_HEALTH_KEY = `${API_URL}/algo/live/ws-health`;

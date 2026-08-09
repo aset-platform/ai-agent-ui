@@ -185,6 +185,10 @@ class WsHealth(BaseModel):
     tick_age_seconds: int | None = None
     tick_count_today: int = 0
     wedge_escalated: bool = False
+    # ASETPLTFRM-470 diagnostic only — see ws_multiplexer.py module
+    # docstring. None = no connect() has spawned the reactor thread
+    # yet this process; never drives auto-restart behavior.
+    reactor_thread_alive: bool | None = None
 
 
 # ---------------------------------------------------------------
@@ -1707,6 +1711,7 @@ def create_live_router() -> APIRouter:
             tick_age_seconds=age,
             tick_count_today=int(snap.get("tick_count_today", 0)),
             wedge_escalated=bool(snap.get("wedge_escalated", False)),
+            reactor_thread_alive=snap.get("reactor_thread_alive"),
         )
 
     # ----------------------------------------------------------
