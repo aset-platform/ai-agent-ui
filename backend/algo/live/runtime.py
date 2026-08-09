@@ -431,6 +431,10 @@ class LiveRuntime:
         # signal is fixed for the day, so this avoids re-running
         # compute_indicators on every intraday tick-bar while flat.
         self._closed_entry_cache: dict[tuple[str, date], dict | None] = {}
+        # Most-recent computed RSI2 per ticker (.NS-keyed), refreshed
+        # each _on_bar_close eval — powers the shadow breadth
+        # snapshot (Task 5).
+        self._last_rsi2: dict[str, float] = {}
         self._session_id = uuid4()
         self._events: list[dict[str, Any]] = []
         self._in_flight: list[dict[str, Any]] = []
@@ -3926,6 +3930,13 @@ class LiveRuntime:
             (features or {}).get("nifty_30d_return_pct"),
         )
 
+        _rsi2_val = (features or {}).get("rsi_2")
+        if _rsi2_val is not None:
+            try:
+                self._last_rsi2[bar.ticker] = float(_rsi2_val)
+            except (TypeError, ValueError):
+                pass
+
         signal = self._action_to_signal(
             action,
             ticker=bar.ticker,
@@ -5716,6 +5727,16 @@ class LiveRuntime:
                 },
             )
         )
+
+    def _universe_oversold_breadth(
+        self, threshold: float = 5.0,
+    ) -> tuple[int, int]:
+        """(count of tracked tickers with RSI2<=threshold, total
+        tracked). Pure count over ``self._last_rsi2`` — powers the
+        shadow breadth snapshot (Task 5)."""
+        vals = list(self._last_rsi2.values())
+        n_oversold = sum(1 for v in vals if v <= threshold)
+        return n_oversold, len(vals)
 
     def _action_to_signal(
         self,
