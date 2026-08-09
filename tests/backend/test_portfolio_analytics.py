@@ -188,22 +188,70 @@ def _forecast_df(ticker):
     ])
 
 
+def _forecasts_table_df(tickers=("AAPL", "MSFT"), horizon_months=9):
+    """Combined multi-ticker stocks.forecasts shape (adds ticker +
+    horizon_months on top of _forecast_df's per-ticker columns) —
+    matches what _duckdb_read("stocks.forecasts", ...) really
+    returns, not the StockRepository.get_latest_forecast_series(
+    ticker, horizon) signature these tests used to mock."""
+    frames = []
+    for t in tickers:
+        df = _forecast_df(t).copy()
+        df["ticker"] = t
+        df["horizon_months"] = horizon_months
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True)
+
+
+def _current_price_ohlcv_df(prices):
+    """Minimal stocks.ohlcv shape for the forecast route's
+    "current price" lookup — one row per ticker, last close used
+    as-is. ``prices`` is {ticker: close}."""
+    return pd.DataFrame(
+        [
+            {"ticker": t, "date": "2024-02-03", "close": c}
+            for t, c in prices.items()
+        ]
+    )
+
+
+def _duckdb_side_effect(ohlcv_df=None, forecasts_df=None):
+    """Build a side_effect fn for dashboard_routes._duckdb_read,
+    keyed by table name. _build_portfolio_performance /
+    _build_portfolio_forecast read stocks.ohlcv and/or
+    stocks.forecasts directly via DuckDB now, NOT via
+    StockRepository.get_ohlcv_batch/get_ohlcv/
+    get_latest_forecast_series — those mocks silently stopped
+    intercepting anything after that refactor, letting real
+    (environment-dependent) Iceberg data leak into these tests."""
+    def _fn(table, sql):
+        if table == "stocks.ohlcv" and ohlcv_df is not None:
+            return ohlcv_df
+        if table == "stocks.forecasts" and forecasts_df is not None:
+            return forecasts_df
+        return pd.DataFrame()
+    return _fn
+
+
 # ---------------------------------------------------------------
 # Performance tests
 # ---------------------------------------------------------------
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_performance_happy_path(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """Two tickers, different trade dates."""
     repo = MagicMock()
     repo.get_portfolio_transactions.return_value = (
         _txn_df()
     )
-    repo.get_ohlcv_batch.return_value = _ohlcv_df()
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_ohlcv_df(),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
@@ -226,17 +274,20 @@ def test_performance_happy_path(
 
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_performance_invested_value_timeline(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """Invested increases when 2nd ticker starts."""
     repo = MagicMock()
     repo.get_portfolio_transactions.return_value = (
         _txn_df()
     )
-    repo.get_ohlcv_batch.return_value = _ohlcv_df()
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_ohlcv_df(),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
@@ -285,19 +336,20 @@ def test_performance_no_holdings(
 
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_performance_no_ohlcv(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """Ticker with no OHLCV → skipped."""
     repo = MagicMock()
     repo.get_portfolio_transactions.return_value = (
         _txn_df()
     )
-    repo.get_ohlcv_batch.return_value = (
-        pd.DataFrame()
-    )
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=pd.DataFrame(),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
@@ -312,9 +364,10 @@ def test_performance_no_ohlcv(
 
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_performance_trade_date_filtering(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """MSFT bought on 2024-02-01 should NOT count
     for dates before that."""
@@ -322,8 +375,10 @@ def test_performance_trade_date_filtering(
     repo.get_portfolio_transactions.return_value = (
         _txn_df()
     )
-    repo.get_ohlcv_batch.return_value = _ohlcv_df()
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_ohlcv_df(),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
@@ -350,17 +405,20 @@ def test_performance_trade_date_filtering(
 
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_performance_period_filter(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """1M period returns only recent data."""
     repo = MagicMock()
     repo.get_portfolio_transactions.return_value = (
         _txn_df()
     )
-    repo.get_ohlcv_batch.return_value = _ohlcv_df()
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_ohlcv_df(),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
@@ -377,17 +435,20 @@ def test_performance_period_filter(
 
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_performance_metrics_values(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """Verify metrics are computed correctly."""
     repo = MagicMock()
     repo.get_portfolio_transactions.return_value = (
         _txn_df()
     )
-    repo.get_ohlcv_batch.return_value = _ohlcv_df()
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_ohlcv_df(),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
@@ -412,38 +473,23 @@ def test_performance_metrics_values(
 # ---------------------------------------------------------------
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_forecast_happy_path(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """Weighted aggregation of two tickers."""
     repo = MagicMock()
     repo.get_portfolio_holdings.return_value = (
         _holdings_df()
     )
-
-    # OHLCV for current prices
-    ohlcv_aapl = pd.DataFrame([
-        {"close": 158.0},
-    ])
-    ohlcv_msft = pd.DataFrame([
-        {"close": 315.0},
-    ])
-
-    def mock_get_ohlcv(ticker):
-        if ticker == "AAPL":
-            return ohlcv_aapl
-        return ohlcv_msft
-
-    repo.get_ohlcv.side_effect = mock_get_ohlcv
-
-    def mock_forecast(ticker, horizon):
-        return _forecast_df(ticker)
-
-    repo.get_latest_forecast_series.side_effect = (
-        mock_forecast
-    )
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_current_price_ohlcv_df(
+            {"AAPL": 158.0, "MSFT": 315.0},
+        ),
+        forecasts_df=_forecasts_table_df(),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
@@ -466,41 +512,53 @@ def test_forecast_happy_path(
 
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_forecast_always_fetches_9m(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
-    """Backend always calls get_latest_forecast_series
-    with horizon=9 regardless of query param."""
+    """The route hardcodes fc_all[fc_all["horizon_months"] == 9]
+    regardless of the query's horizon param — only 9-month runs
+    are persisted/used. Mix in a bogus 3-month row with an
+    obviously-wrong predicted_price and confirm it never surfaces,
+    even when the query explicitly asks for horizon=3."""
     repo = MagicMock()
     repo.get_portfolio_holdings.return_value = (
         _holdings_df()
     )
-    ohlcv = pd.DataFrame([{"close": 158.0}])
-    repo.get_ohlcv.return_value = ohlcv
-    repo.get_latest_forecast_series.return_value = (
-        _forecast_df("AAPL")
-    )
     mock_repo_fn.return_value = repo
+
+    forecasts_9m = _forecasts_table_df(
+        tickers=("AAPL",), horizon_months=9,
+    )
+    forecasts_3m_bogus = _forecast_df("AAPL").copy()
+    forecasts_3m_bogus["predicted_price"] = 999999.0
+    forecasts_3m_bogus["ticker"] = "AAPL"
+    forecasts_3m_bogus["horizon_months"] = 3
+    forecasts_df = pd.concat(
+        [forecasts_9m, forecasts_3m_bogus], ignore_index=True,
+    )
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_current_price_ohlcv_df(
+            {"AAPL": 158.0, "MSFT": 315.0},
+        ),
+        forecasts_df=forecasts_df,
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
     mock_cache_fn.return_value = cache
 
-    # Request horizon=3 but backend should call
-    # with 9 internally
+    # Request horizon=3 but the response must still reflect only
+    # the 9-month forecast data (predicted == 10 * 160, never the
+    # bogus 3-month row's 999999.0).
     r = client.get(
         "/v1/dashboard/portfolio/forecast"
         "?horizon=3&currency=USD",
     )
     assert r.status_code == 200
-    # Verify all calls used horizon=9
-    for call in (
-        repo.get_latest_forecast_series.call_args_list
-    ):
-        assert call[0][1] == 9, (
-            f"Expected horizon=9, got {call[0][1]}"
-        )
+    body = r.json()
+    assert body["data"][0]["predicted"] == 1600.0
 
 
 @patch("dashboard_routes.get_cache")
@@ -531,27 +589,24 @@ def test_forecast_no_holdings(
 
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_forecast_missing_ticker_skipped(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """Ticker with no forecast data is skipped."""
     repo = MagicMock()
     repo.get_portfolio_holdings.return_value = (
         _holdings_df()
     )
-    ohlcv = pd.DataFrame([{"close": 158.0}])
-    repo.get_ohlcv.return_value = ohlcv
-
-    def mock_forecast(ticker, horizon):
-        if ticker == "MSFT":
-            return pd.DataFrame()
-        return _forecast_df(ticker)
-
-    repo.get_latest_forecast_series.side_effect = (
-        mock_forecast
-    )
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_current_price_ohlcv_df(
+            {"AAPL": 158.0, "MSFT": 315.0},
+        ),
+        # MSFT has no forecast rows at all.
+        forecasts_df=_forecasts_table_df(tickers=("AAPL",)),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
@@ -608,17 +663,20 @@ class TestSafeFloat:
 
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_cashflow_adjusted_return(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """Daily return strips new capital injection."""
     repo = MagicMock()
     repo.get_portfolio_transactions.return_value = (
         _txn_df()
     )
-    repo.get_ohlcv_batch.return_value = _ohlcv_df()
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_ohlcv_df(),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None
@@ -649,17 +707,20 @@ def test_cashflow_adjusted_return(
 
 
 @patch("dashboard_routes.get_cache")
+@patch("dashboard_routes._duckdb_read")
 @patch("dashboard_routes._get_stock_repo")
 def test_invested_basis_total_return(
-    mock_repo_fn, mock_cache_fn, client,
+    mock_repo_fn, mock_duckdb, mock_cache_fn, client,
 ):
     """total_return uses (last_v - last_iv) / last_iv."""
     repo = MagicMock()
     repo.get_portfolio_transactions.return_value = (
         _txn_df()
     )
-    repo.get_ohlcv_batch.return_value = _ohlcv_df()
     mock_repo_fn.return_value = repo
+    mock_duckdb.side_effect = _duckdb_side_effect(
+        ohlcv_df=_ohlcv_df(),
+    )
 
     cache = MagicMock()
     cache.get.return_value = None

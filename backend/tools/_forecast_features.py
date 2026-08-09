@@ -20,6 +20,7 @@ _days_to_expiry         — days until NSE monthly expiry (last Thursday)
 _days_to_nearest_earnings — distance to nearest earnings date
 """
 
+import ast
 import logging
 import math
 from calendar import monthrange
@@ -96,6 +97,48 @@ def _safe_growth(
         return 0.0
 
 
+def _nearest_level(
+    raw: object,
+    *,
+    want_max: bool,
+) -> float | None:
+    """Extract a single reference price from a support/resistance
+    levels value.
+
+    ``analysis_row["support_levels"]`` / ``["resistance_levels"]``
+    are the top-3 nearest levels from ``_analyse_price_movement``,
+    persisted to Iceberg as a STRINGIFIED list (``str(list)``, not a
+    scalar and not a native array column — see jobs/executor.py's
+    analysis_summary writer). Also accepts an already-parsed
+    list/tuple (e.g. from a test fixture or a future schema change)
+    for robustness. Returns ``None`` on anything empty/unparseable.
+
+    ``support_levels`` is sorted ascending (nearest support below
+    price = the LARGEST of the three) and ``resistance_levels``
+    descending (nearest resistance above price = the SMALLEST) —
+    ``want_max=True`` for support, ``False`` for resistance picks
+    the correct one regardless of which order the caller's value
+    happens to be in.
+    """
+    if raw is None:
+        return None
+    values = raw
+    if isinstance(values, str):
+        try:
+            values = ast.literal_eval(values)
+        except (ValueError, SyntaxError):
+            return None
+    if not isinstance(values, (list, tuple)) or not values:
+        return None
+    try:
+        nums = [float(v) for v in values if v is not None]
+    except (TypeError, ValueError):
+        return None
+    if not nums:
+        return None
+    return max(nums) if want_max else min(nums)
+
+
 def _last_thursday_of_month(dt: date) -> date:
     """Return the last Thursday of *dt*'s calendar month."""
     _, last_day_num = monthrange(dt.year, dt.month)
@@ -162,9 +205,11 @@ def compute_tier1_features(
     ----------
     analysis_row:
         Row from ``analysis_summary`` with keys:
-        ``annualized_volatility``, ``bull_phase_pct``,
-        ``bear_phase_pct``, ``support_level``,
-        ``resistance_level``.
+        ``annualized_volatility_pct``, ``bull_phase_pct``,
+        ``bear_phase_pct``, ``support_levels``,
+        ``resistance_levels`` — the latter two are the top-3
+        nearest levels, persisted as a stringified list (see
+        ``_nearest_level``), not a single scalar.
     piotroski_row:
         Row from ``piotroski_scores`` with key ``f_score``.
     quarterly_rows:
@@ -210,17 +255,16 @@ def compute_tier1_features(
                     float(bull) - float(bear)
                 ) / 100.0
 
-            sup = analysis_row.get("support_levels")
-            res = analysis_row.get("resistance_levels")
-            if (
-                sup is not None
-                and res is not None
-                and not math.isnan(float(sup))
-                and not math.isnan(float(res))
-            ):
-                span = float(res) - float(sup)
+            sup = _nearest_level(
+                analysis_row.get("support_levels"), want_max=True,
+            )
+            res = _nearest_level(
+                analysis_row.get("resistance_levels"), want_max=False,
+            )
+            if sup is not None and res is not None:
+                span = res - sup
                 if span > 0.0:
-                    raw = (current_price - float(sup)) / span
+                    raw = (current_price - sup) / span
                     out["sr_position"] = float(
                         max(0.0, min(1.0, raw))
                     )

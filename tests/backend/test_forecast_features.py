@@ -83,13 +83,34 @@ class TestSafeGrowth:
 class TestComputeTier1:
     """compute_tier1_features extracts features from Iceberg rows."""
 
-    def _analysis(self, **kwargs):
+    def _analysis(
+        self,
+        *,
+        support_level: float = 90.0,
+        resistance_level: float = 110.0,
+        as_string: bool = False,
+        **kwargs,
+    ):
+        """Build an analysis_summary row with the REAL Iceberg
+        column names/shape (jobs/executor.py's writer + _analyse_
+        price_movement) — annualized_volatility_pct (scalar), and
+        support_levels/resistance_levels as a top-3 list. The real
+        writer persists those two as a stringified list
+        (``str(list)``), not a native array or scalar; ``as_string``
+        exercises that exact on-disk shape via _nearest_level's
+        ast.literal_eval path.
+        """
+        sup: object = [support_level]
+        res: object = [resistance_level]
+        if as_string:
+            sup = str(sup)
+            res = str(res)
         base = {
-            "annualized_volatility": 20.0,
+            "annualized_volatility_pct": 20.0,
             "bull_phase_pct": 60.0,
             "bear_phase_pct": 30.0,
-            "support_level": 90.0,
-            "resistance_level": 110.0,
+            "support_levels": sup,
+            "resistance_levels": res,
         }
         base.update(kwargs)
         return base
@@ -105,6 +126,20 @@ class TestComputeTier1:
         assert abs(feats["volatility_regime"] - 0.2) < 1e-9
         assert abs(feats["trend_strength"] - 0.3) < 1e-9
         # sr_position: (100 - 90) / (110 - 90) = 0.5
+        assert abs(feats["sr_position"] - 0.5) < 1e-9
+
+    def test_analysis_summary_features_stringified_levels(self):
+        """Real Iceberg on-disk shape: support_levels/
+        resistance_levels are a str(list), not a native list —
+        the analysis_summary writer in jobs/executor.py persists
+        them that way. Same expected result as the plain-list case."""
+        row = self._analysis(as_string=True)
+        feats = compute_tier1_features(
+            analysis_row=row,
+            piotroski_row=None,
+            quarterly_rows=[],
+            current_price=100.0,
+        )
         assert abs(feats["sr_position"] - 0.5) < 1e-9
 
     def test_piotroski_feature(self):

@@ -116,18 +116,26 @@ class TestWatchlist:
         assert data["tickers"] == []
 
     @patch("dashboard_routes.get_cache")
-    @patch("dashboard_routes._get_stock_repo")
+    @patch("dashboard_routes._duckdb_read")
     @patch(
         "dashboard_routes._helpers._get_repo",
     )
     def test_with_data(
         self,
         mock_user_repo,
-        mock_stock_repo,
+        mock_duckdb_read,
         mock_cache,
         client,
     ):
-        """One ticker returns price + change."""
+        """One ticker returns price + change.
+
+        get_watchlist reads both OHLCV and company_info via the
+        module-level ``_duckdb_read`` Iceberg helper (not
+        StockRepository batch methods, which the route stopped
+        calling in a later refactor — ASETPLTFRM-360). Route dead
+        code still assigns ``stock_repo = _get_stock_repo()`` but
+        never uses it here, so that's NOT the call site to mock.
+        """
         mock_user_repo.return_value.get_user_tickers = AsyncMock(
             return_value=["AAPL"]
         )
@@ -166,9 +174,14 @@ class TestWatchlist:
             ]
         )
 
-        repo = mock_stock_repo.return_value
-        repo.get_ohlcv_batch.return_value = ohlcv_df
-        repo.get_company_info_batch.return_value = info_df
+        def _duckdb_side_effect(table, sql):
+            if table == "stocks.ohlcv":
+                return ohlcv_df
+            if table == "stocks.company_info":
+                return info_df
+            return pd.DataFrame()
+
+        mock_duckdb_read.side_effect = _duckdb_side_effect
 
         resp = client.get(
             "/v1/dashboard/watchlist",
@@ -505,15 +518,24 @@ class TestLLMUsage:
 class TestRegistry:
     """GET /v1/dashboard/registry."""
 
+    @patch("backend.db.duckdb_engine.query_iceberg_df")
     @patch("dashboard_routes.get_cache")
     @patch("dashboard_routes._get_stock_repo")
     def test_happy_path(
         self,
         mock_repo_fn,
         mock_cache_fn,
+        mock_query_iceberg_df,
         client,
     ):
-        """Registry with company info."""
+        """Registry with company info.
+
+        get_registry still uses StockRepository.get_all_registry(),
+        but the company-info batch lookup was refactored to a direct
+        ``query_iceberg_df`` call (imported locally inside the route,
+        so patched at its SOURCE module per CLAUDE.md #16) rather
+        than ``repo.get_company_info_batch`` — ASETPLTFRM-360.
+        """
         repo = MagicMock()
         repo.get_all_registry.return_value = {
             "AAPL": {"last_fetch_date": "2026-03-19"},
@@ -535,8 +557,8 @@ class TestRegistry:
                 },
             ]
         )
-        repo.get_company_info_batch.return_value = info_df
         mock_repo_fn.return_value = repo
+        mock_query_iceberg_df.return_value = info_df
 
         cache = MagicMock()
         cache.get.return_value = None
@@ -583,17 +605,27 @@ class TestRegistry:
 class TestCompare:
     """GET /v1/dashboard/compare."""
 
+    @patch("tools._analysis_shared.compute_indicators")
     @patch("dashboard_routes.get_cache")
-    @patch("dashboard_routes._get_stock_repo")
+    @patch("dashboard_routes._duckdb_read")
     def test_happy_path(
         self,
-        mock_repo_fn,
+        mock_duckdb_read,
         mock_cache_fn,
+        mock_compute_indicators,
         client,
     ):
-        """Two tickers with normalized series."""
-        repo = MagicMock()
+        """Two tickers with normalized series.
 
+        get_compare reads OHLCV/analysis_summary/company_info via
+        the module-level ``_duckdb_read`` Iceberg helper (not
+        StockRepository batch methods, which the route stopped
+        calling in a later refactor), and computes RSI/MACD
+        on-the-fly via ``tools._analysis_shared.compute_indicators``
+        per symbol. This test passed locally by accident (real
+        AAPL/MSFT data happens to exist in local dev Iceberg) but
+        failed in CI's empty Iceberg — ASETPLTFRM-360 follow-up.
+        """
         dates = [
             "2024-01-01",
             "2024-01-02",
@@ -621,17 +653,13 @@ class TestCompare:
             )
         ohlcv_df = pd.DataFrame(rows)
 
-        repo.get_ohlcv_batch.return_value = ohlcv_df
-        repo.get_analysis_summary_batch.return_value = pd.DataFrame(
-            columns=["ticker"]
-        )
-        repo.get_company_info_batch.return_value = pd.DataFrame(
-            columns=["ticker"]
-        )
-        repo.get_technical_indicators_batch.return_value = pd.DataFrame(
-            columns=["ticker"]
-        )
-        mock_repo_fn.return_value = repo
+        def _duckdb_side_effect(table, sql):
+            if table == "stocks.ohlcv":
+                return ohlcv_df
+            return pd.DataFrame(columns=["ticker"])
+
+        mock_duckdb_read.side_effect = _duckdb_side_effect
+        mock_compute_indicators.return_value = pd.DataFrame()
 
         cache = MagicMock()
         cache.get.return_value = None
@@ -806,34 +834,61 @@ class TestChartOHLCV:
 class TestChartIndicators:
     """GET /v1/dashboard/chart/indicators."""
 
+    @patch("tools._analysis_movement._analyse_price_movement")
+    @patch(
+        "tools._analysis_indicators._calculate_technical_indicators",
+    )
     @patch("dashboard_routes.get_cache")
     @patch("dashboard_routes._get_stock_repo")
     def test_happy_path(
         self,
         mock_repo_fn,
         mock_cache_fn,
+        mock_calc_indicators,
+        mock_movement,
         client,
     ):
-        """Returns indicator points."""
+        """Returns indicator points.
+
+        The route reads raw OHLCV via ``stock_repo.get_ohlcv`` then
+        computes indicators via ``_calculate_technical_indicators`` —
+        it never calls a ``get_technical_indicators`` repo method
+        (stale from an earlier route shape) — ASETPLTFRM-360.
+        """
         repo = MagicMock()
-        df = pd.DataFrame(
+        repo.get_ohlcv.return_value = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "open": [147.0],
+                "high": [149.0],
+                "low": [146.0],
+                "close": [148.0],
+                "volume": [1_000_000],
+            }
+        )
+        mock_repo_fn.return_value = repo
+
+        mock_calc_indicators.return_value = pd.DataFrame(
             [
                 {
-                    "date": "2024-01-01",
-                    "sma_50": 148.0,
-                    "sma_200": 145.0,
-                    "ema_20": 150.0,
-                    "rsi_14": 55.0,
-                    "macd": 1.5,
-                    "macd_signal": 1.2,
-                    "macd_hist": 0.3,
-                    "bb_upper": 160.0,
-                    "bb_lower": 140.0,
+                    "Close": 148.0,
+                    "SMA_50": 148.0,
+                    "SMA_200": 145.0,
+                    "EMA_20": 150.0,
+                    "RSI_14": 55.0,
+                    "MACD": 1.5,
+                    "MACD_Signal": 1.2,
+                    "MACD_Hist": 0.3,
+                    "BB_Upper": 160.0,
+                    "BB_Lower": 140.0,
                 },
-            ]
+            ],
+            index=pd.DatetimeIndex(["2024-01-01"]),
         )
-        repo.get_technical_indicators.return_value = df
-        mock_repo_fn.return_value = repo
+        mock_movement.return_value = {
+            "support_levels": [],
+            "resistance_levels": [],
+        }
 
         cache = MagicMock()
         cache.get.return_value = None
@@ -857,9 +912,9 @@ class TestChartIndicators:
         mock_cache_fn,
         client,
     ):
-        """No indicators → empty response."""
+        """No OHLCV → empty response."""
         repo = MagicMock()
-        repo.get_technical_indicators.return_value = pd.DataFrame()
+        repo.get_ohlcv.return_value = pd.DataFrame()
         mock_repo_fn.return_value = repo
 
         cache = MagicMock()
@@ -873,19 +928,46 @@ class TestChartIndicators:
         assert resp.status_code == 200
         assert resp.json()["data"] == []
 
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes._get_stock_repo")
     @patch(
         "tools._analysis_movement._analyse_price_movement",
     )
-    @patch("tools._analysis_shared.compute_indicators")
+    @patch(
+        "tools._analysis_indicators._calculate_technical_indicators",
+    )
     @patch("dashboard_routes.get_cache")
     def test_returns_sr_levels(
         self,
         mock_cache_fn,
         mock_compute,
         mock_movement,
+        mock_repo_fn,
+        mock_is_market_open,
         client,
     ):
-        """S/R levels appear in response when OHLCV exists."""
+        """S/R levels appear in response when OHLCV exists.
+
+        ``_calculate_technical_indicators`` / ``_analyse_price_
+        movement`` (source modules) are the real call sites — the
+        route stopped calling ``tools._analysis_shared.
+        compute_indicators`` in an earlier refactor, so that patch
+        target silently never intercepted anything — ASETPLTFRM-360.
+        ``is_market_open`` is forced False so the live-Kite-quote
+        splice path (only for .NS tickers during market hours) never
+        fires a real network call in CI.
+        """
+        mock_is_market_open.return_value = False
+        mock_repo_fn.return_value.get_ohlcv.return_value = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "open": [2490.0],
+                "high": [2520.0],
+                "low": [2480.0],
+                "close": [2500.0],
+                "volume": [1_000_000],
+            }
+        )
         mock_compute.return_value = pd.DataFrame(
             [
                 {
@@ -933,17 +1015,34 @@ class TestChartIndicators:
             2580.0,
         ]
 
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes._get_stock_repo")
     @patch("tools._analysis_movement._analyse_price_movement")
-    @patch("tools._analysis_shared.compute_indicators")
+    @patch(
+        "tools._analysis_indicators._calculate_technical_indicators",
+    )
     @patch("dashboard_routes.get_cache")
     def test_rsi_2_in_response(
         self,
         mock_cache_fn,
         mock_compute,
         mock_movement,
+        mock_repo_fn,
+        mock_is_market_open,
         client,
     ):
         """rsi_2 is surfaced per IndicatorPoint."""
+        mock_is_market_open.return_value = False
+        mock_repo_fn.return_value.get_ohlcv.return_value = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "open": [2490.0],
+                "high": [2520.0],
+                "low": [2480.0],
+                "close": [2500.0],
+                "volume": [1_000_000],
+            }
+        )
         mock_compute.return_value = pd.DataFrame(
             [
                 {
@@ -980,17 +1079,34 @@ class TestChartIndicators:
         # Sanity: rsi_14 still flows through untouched.
         assert body["data"][0]["rsi_14"] == 55.0
 
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes._get_stock_repo")
     @patch("tools._analysis_movement._analyse_price_movement")
-    @patch("tools._analysis_shared.compute_indicators")
+    @patch(
+        "tools._analysis_indicators._calculate_technical_indicators",
+    )
     @patch("dashboard_routes.get_cache")
     def test_short_window_smas_in_response(
         self,
         mock_cache_fn,
         mock_compute,
         mock_movement,
+        mock_repo_fn,
+        mock_is_market_open,
         client,
     ):
         """sma_5/sma_10/sma_20 are surfaced per IndicatorPoint."""
+        mock_is_market_open.return_value = False
+        mock_repo_fn.return_value.get_ohlcv.return_value = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "open": [2490.0],
+                "high": [2520.0],
+                "low": [2480.0],
+                "close": [2500.0],
+                "volume": [1_000_000],
+            }
+        )
         mock_compute.return_value = pd.DataFrame(
             [
                 {
@@ -1032,19 +1148,36 @@ class TestChartIndicators:
         assert body["data"][0]["sma_50"] == 2470.0
         assert body["data"][0]["sma_200"] == 2400.0
 
+    @patch("dashboard_routes.is_market_open")
+    @patch("dashboard_routes._get_stock_repo")
     @patch(
         "tools._analysis_movement._analyse_price_movement",
     )
-    @patch("tools._analysis_shared.compute_indicators")
+    @patch(
+        "tools._analysis_indicators._calculate_technical_indicators",
+    )
     @patch("dashboard_routes.get_cache")
     def test_short_history_returns_partial_levels(
         self,
         mock_cache_fn,
         mock_compute,
         mock_movement,
+        mock_repo_fn,
+        mock_is_market_open,
         client,
     ):
         """Newly-listed ticker may yield <3 levels."""
+        mock_is_market_open.return_value = False
+        mock_repo_fn.return_value.get_ohlcv.return_value = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "open": [99.0],
+                "high": [101.0],
+                "low": [98.0],
+                "close": [100.0],
+                "volume": [500_000],
+            }
+        )
         mock_compute.return_value = pd.DataFrame(
             [
                 {

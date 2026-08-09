@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     ForeignKey,
@@ -20,6 +21,10 @@ from sqlalchemy.orm import (
 )
 
 from backend.db.base import Base
+
+# SQLite (used by tests) can't render postgresql.JSONB — fall back
+# to generic JSON there while keeping real JSONB on Postgres.
+_JSONB_OR_JSON = JSONB().with_variant(JSON(), "sqlite")
 
 
 class Pipeline(Base):
@@ -112,9 +117,12 @@ class PipelineStep(Base):
     # default — wrappers that ignore ``payload`` keep their
     # existing behaviour. ASETPLTFRM-418.
     payload: Mapped[dict] = mapped_column(
-        JSONB,
+        _JSONB_OR_JSON,
         nullable=False,
-        server_default=text("'{}'::jsonb"),
+        # No explicit ::jsonb cast — Postgres implicitly coerces
+        # the literal to the column's type, and the cast syntax
+        # isn't valid SQLite DDL (used by tests).
+        server_default=text("'{}'"),
         default=dict,
     )
 

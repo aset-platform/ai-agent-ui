@@ -17,13 +17,28 @@ from backend.db.models.user import User
 @pytest_asyncio.fixture
 async def pg_session():
     """In-memory SQLite async session for repo tests."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    # schema_translate_map strips "stocks." qualification for SQLite
+    # (no cross-schema concept) while leaving real Postgres DDL/DML
+    # untouched in production.
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        execution_options={
+            "schema_translate_map": {"stocks": None},
+        },
+    )
     async with engine.begin() as conn:
-        # Exclude user_memories (requires pgvector
-        # + JSONB — not available in SQLite).
+        # user_memories requires pgvector (not available in
+        # SQLite); pipelines/pipeline_steps/conversation_contexts
+        # use raw Postgres-only JSONB/ARRAY columns and aren't
+        # under test in this file — exclude rather than widen the
+        # blast radius of type changes to untested models.
+        _skip = {
+            "user_memories", "pipelines", "pipeline_steps",
+            "conversation_contexts",
+        }
         _tables = [
             t for t in Base.metadata.sorted_tables
-            if t.name != "user_memories"
+            if t.name not in _skip
         ]
         await conn.run_sync(
             Base.metadata.create_all,

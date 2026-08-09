@@ -20,14 +20,27 @@ from backend.db.base import Base
 async def pg_session():
     """In-memory SQLite session for recommendation tests.
 
-    Excludes user_memories (pgvector) and creates all
-    other tables including recommendation_*.
+    Excludes user_memories (pgvector, not available in SQLite);
+    creates all other tables including recommendation_*.
+    schema_translate_map strips "stocks." qualification for SQLite
+    (no cross-schema concept) while leaving real Postgres DDL/DML
+    untouched in production.
     """
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
+        execution_options={
+            "schema_translate_map": {"stocks": None},
+        },
     )
     async with engine.begin() as conn:
-        _skip = {"user_memories"}
+        # pipelines/pipeline_steps/conversation_contexts use raw
+        # Postgres-only JSONB/ARRAY columns and aren't under test
+        # in this file — exclude rather than widen the blast
+        # radius of type changes to untested models.
+        _skip = {
+            "user_memories", "pipelines", "pipeline_steps",
+            "conversation_contexts",
+        }
         _tables = [
             t for t in Base.metadata.sorted_tables
             if t.name not in _skip

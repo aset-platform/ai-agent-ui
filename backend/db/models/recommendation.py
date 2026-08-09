@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy import (
     ARRAY,
+    JSON,
     Date,
     DateTime,
     Float,
@@ -20,6 +21,14 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db.base import Base
+
+# Real Postgres (prod) unchanged; the in-memory SQLite engine used by
+# tests/backend/test_pg_models.py / test_pg_repos.py /
+# test_recommendation_engine.py for Base.metadata.create_all falls
+# back to generic JSON — JSONB/ARRAY are Postgres-only and previously
+# broke every test sharing this metadata, not just this model's own.
+_JSONB_OR_JSON = JSONB().with_variant(JSON(), "sqlite")
+_STR_ARRAY_OR_JSON = ARRAY(String).with_variant(JSON(), "sqlite")
 
 
 class RecommendationRun(Base):
@@ -51,7 +60,7 @@ class RecommendationRun(Base):
         server_default="all",
     )
     portfolio_snapshot: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False,
+        _JSONB_OR_JSON, nullable=False,
     )
     health_score: Mapped[float] = mapped_column(
         Float, nullable=False,
@@ -132,7 +141,7 @@ class Recommendation(Base):
         Text, nullable=True,
     )
     data_signals: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False,
+        _JSONB_OR_JSON, nullable=False,
     )
     price_at_rec: Mapped[float | None] = mapped_column(
         Float, nullable=True,
@@ -144,7 +153,7 @@ class Recommendation(Base):
         Float, nullable=True,
     )
     index_tags: Mapped[list[str] | None] = mapped_column(
-        ARRAY(String), nullable=True,
+        _STR_ARRAY_OR_JSON, nullable=True,
     )
     status: Mapped[str] = mapped_column(
         String(15), nullable=False,
