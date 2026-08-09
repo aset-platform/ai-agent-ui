@@ -4,11 +4,29 @@ from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 from tools._sentiment_sources import HeadlineItem
 
 
 class TestScoreHeadlines:
-    """Tests for score_headlines weighted average."""
+    """Tests for score_headlines weighted average.
+
+    score_headlines_with_source tries FinBERT FIRST (config default
+    sentiment_scorer="finbert" — zero API cost, real local model) and
+    only falls through to the LLM path when FinBERT is unavailable or
+    returns no score. These tests are specifically about the LLM
+    path's behavior (weighted average, no-llm, llm-failure), so
+    every test here force-disables FinBERT via autouse fixture rather
+    than letting the real (correct, but non-deterministic-feeling
+    for a unit test) local model run and mask the LLM mock.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _disable_finbert(self, monkeypatch):
+        monkeypatch.setattr(
+            "tools._sentiment_finbert.score_headlines_finbert",
+            lambda titles: None,
+        )
 
     def test_weighted_average(self):
         from tools._sentiment_scorer import (
@@ -115,11 +133,14 @@ class TestRefreshTickerSentiment:
         "tools._sentiment_scorer.fetch_all_headlines",
     )
     @patch(
-        "tools._sentiment_scorer.score_headlines",
+        "tools._sentiment_scorer.score_headlines_with_source",
     )
     def test_scores_and_persists(
         self, mock_score, mock_fetch, mock_repo_fn,
     ):
+        """refresh_ticker_sentiment calls score_headlines_with_
+        source directly (for provenance) — NOT the score_headlines
+        backward-compat wrapper."""
         from tools._sentiment_scorer import (
             refresh_ticker_sentiment,
         )
@@ -135,7 +156,7 @@ class TestRefreshTickerSentiment:
                 "Good news", "yfinance", 1.0,
             ),
         ]
-        mock_score.return_value = 0.7
+        mock_score.return_value = (0.7, "llm")
 
         result = refresh_ticker_sentiment(
             "AAPL", llm=MagicMock(),
@@ -181,7 +202,7 @@ class TestRefreshTickerSentiment:
         "tools._sentiment_scorer.fetch_all_headlines",
     )
     @patch(
-        "tools._sentiment_scorer.score_headlines",
+        "tools._sentiment_scorer.score_headlines_with_source",
     )
     def test_llm_none_writes_zero(
         self, mock_score, mock_fetch, mock_repo_fn,
@@ -198,8 +219,8 @@ class TestRefreshTickerSentiment:
         mock_fetch.return_value = [
             HeadlineItem("News", "yfinance", 1.0),
         ]
-        # score_headlines returns None when LLM unavail.
-        mock_score.return_value = None
+        # (None, "none") when neither FinBERT nor LLM available.
+        mock_score.return_value = (None, "none")
 
         result = refresh_ticker_sentiment(
             "AAPL", llm=None,

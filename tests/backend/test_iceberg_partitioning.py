@@ -82,8 +82,20 @@ class TestScanTickerDateRange:
         )
 
         mock_tbl = _make_mock_table(df)
-        with patch.object(
-            repo, "_load_table", return_value=mock_tbl
+        # _scan_ticker_date_range tries a DuckDB fast path FIRST
+        # (backend.db.duckdb_engine.query_iceberg_df, lazily
+        # imported) and only falls through to the PyIceberg
+        # scan()/row_filter path this test actually exercises when
+        # that raises — force it to fail so _load_table's mock is
+        # ever reached.
+        with (
+            patch(
+                "backend.db.duckdb_engine.query_iceberg_df",
+                side_effect=Exception("duckdb unavailable"),
+            ),
+            patch.object(
+                repo, "_load_table", return_value=mock_tbl
+            ),
         ):
             result = repo._scan_ticker_date_range(
                 "stocks.ohlcv",
@@ -112,8 +124,14 @@ class TestScanTickerDateRange:
         )
 
         mock_tbl = _make_mock_table(df)
-        with patch.object(
-            repo, "_load_table", return_value=mock_tbl
+        with (
+            patch(
+                "backend.db.duckdb_engine.query_iceberg_df",
+                side_effect=Exception("duckdb unavailable"),
+            ),
+            patch.object(
+                repo, "_load_table", return_value=mock_tbl
+            ),
         ):
             result = repo._scan_ticker_date_range(
                 "stocks.ohlcv",
@@ -142,8 +160,13 @@ class TestScanTickerDateRange:
             }
         )
 
-        # Make _load_table raise so fallback kicks in.
+        # Make the DuckDB fast path AND _load_table raise so the
+        # pandas fallback kicks in.
         with (
+            patch(
+                "backend.db.duckdb_engine.query_iceberg_df",
+                side_effect=Exception("duckdb unavailable"),
+            ),
             patch.object(
                 repo,
                 "_load_table",
@@ -341,8 +364,18 @@ class TestScanDateRange:
         )
 
         mock_tbl = _make_mock_table(df)
-        with patch.object(
-            repo, "_load_table", return_value=mock_tbl
+        # _scan_date_range tries a DuckDB fast path first
+        # (backend.db.duckdb_engine.query_iceberg_df, lazily
+        # imported) — force it to fail so the PyIceberg
+        # scan()/row_filter path under test is actually reached.
+        with (
+            patch(
+                "backend.db.duckdb_engine.query_iceberg_df",
+                side_effect=Exception("duckdb unavailable"),
+            ),
+            patch.object(
+                repo, "_load_table", return_value=mock_tbl
+            ),
         ):
             result = repo._scan_date_range(
                 "stocks.llm_usage",
@@ -368,8 +401,14 @@ class TestScanDateRange:
         )
 
         mock_tbl = _make_mock_table(df)
-        with patch.object(
-            repo, "_load_table", return_value=mock_tbl
+        with (
+            patch(
+                "backend.db.duckdb_engine.query_iceberg_df",
+                side_effect=Exception("duckdb unavailable"),
+            ),
+            patch.object(
+                repo, "_load_table", return_value=mock_tbl
+            ),
         ):
             result = repo._scan_date_range(
                 "stocks.llm_usage",
@@ -395,6 +434,10 @@ class TestScanDateRange:
         )
 
         with (
+            patch(
+                "backend.db.duckdb_engine.query_iceberg_df",
+                side_effect=Exception("duckdb unavailable"),
+            ),
             patch.object(
                 repo,
                 "_load_table",

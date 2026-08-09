@@ -349,8 +349,16 @@ def guardrail(state: dict) -> dict:
             # mentions a ticker and we have a recent
             # agent context, treat as follow-up
             # (e.g. "fundamentals of X" after recs).
+            # MUST use the stopword-filtered extractor,
+            # not a raw _TICKER_PATTERN.search — the bare
+            # pattern matches ANY standalone capitalized
+            # 1-5 letter word, so ordinary sentences
+            # containing "I" (e.g. "which one should I
+            # increase?") were false-positive ticker
+            # hits, permanently starving the LLM
+            # classifier branch below for such messages.
             _has_ticker = bool(
-                _TICKER_PATTERN.search(user_input)
+                _extract_tickers(user_input)
             )
             if _has_ticker and _ctx.last_agent:
                 _logger.info(

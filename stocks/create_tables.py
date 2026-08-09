@@ -1300,6 +1300,12 @@ def _llm_usage_schema() -> Schema:
             field_type=StringType(),
             required=False,
         ),
+        NestedField(
+            field_id=21,
+            name="key_source",
+            field_type=StringType(),
+            required=False,
+        ),
     )
 
 

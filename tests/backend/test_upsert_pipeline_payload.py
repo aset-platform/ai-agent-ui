@@ -22,7 +22,14 @@ import uuid
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 
+from backend.db.base import Base
+from backend.db.models.pipeline import Pipeline, PipelineStep
 from backend.db.pg_stocks import (
     get_pipelines,
     upsert_pipeline,
@@ -31,26 +38,43 @@ from backend.db.pg_stocks import (
 
 @pytest_asyncio.fixture
 async def session_factory():
-    """Fresh PG session per call — mirrors production where each
+    """Fresh session per call — mirrors production where each
     FastAPI request handler gets its own session.  Sharing a
     session across multiple ``upsert_pipeline`` invocations
     triggers SQLAlchemy identity-map caching that doesn't occur
     in the real request lifecycle.
 
-    ``pipeline_steps.payload`` is JSONB which SQLite can't
-    render, so we use the local dev PG via
-    ``disposable_pg_session``.
+    In-memory SQLite (same ``schema_translate_map`` pattern as
+    ``test_pg_repos.py``) rather than a real Postgres via
+    ``disposable_pg_session`` — CI has no Postgres service, and
+    ``pipeline_steps.payload`` now renders as generic JSON on
+    SQLite via the model's dialect variant, so a real DB isn't
+    needed to exercise ``upsert_pipeline``'s merge logic.
     """
     from contextlib import asynccontextmanager
 
-    from backend.db.engine import disposable_pg_session
+    engine = create_async_engine(
+        "sqlite+aiosqlite:///:memory:",
+        execution_options={
+            "schema_translate_map": {"stocks": None},
+        },
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(
+            Base.metadata.create_all,
+            tables=[Pipeline.__table__, PipelineStep.__table__],
+        )
+    factory = async_sessionmaker(
+        engine, class_=AsyncSession, expire_on_commit=False,
+    )
 
     @asynccontextmanager
     async def make():
-        async with disposable_pg_session() as s:
+        async with factory() as s:
             yield s
 
-    return make
+    yield make
+    await engine.dispose()
 
 
 @pytest_asyncio.fixture

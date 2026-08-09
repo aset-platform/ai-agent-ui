@@ -458,8 +458,10 @@ class TestAnalyseStockPrice:
         assert "AAPL" in result
         assert "PRICE ANALYSIS" in result
 
-        # Verify Iceberg writes were called (not swallowed)
-        repo.upsert_technical_indicators.assert_called_once()
+        # Verify the Iceberg write was called (not swallowed).
+        # Persistence is a single insert_analysis_summary call now
+        # (folded in with the S/R + volatility + drawdown movement
+        # stats) — there's no separate technical-indicators write.
         repo.insert_analysis_summary.assert_called_once()
 
     def test_iceberg_write_failure_propagates(self, tmp_path, monkeypatch):
@@ -469,7 +471,7 @@ class TestAnalyseStockPrice:
 
         repo = _mock_repo()
         repo.get_ohlcv.return_value = _make_iceberg_ohlcv(300, "AAPL")
-        repo.upsert_technical_indicators.side_effect = RuntimeError(
+        repo.insert_analysis_summary.side_effect = RuntimeError(
             "Iceberg write failed"
         )
 
@@ -502,8 +504,8 @@ class TestAnalyseStockPrice:
         result = price_analysis_tool.analyse_stock_price.invoke(
             {"ticker": "AAPL"}
         )
-        assert "already up-to-date" in result
-        repo.upsert_technical_indicators.assert_not_called()
+        assert "is up-to-date" in result
+        repo.insert_analysis_summary.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
