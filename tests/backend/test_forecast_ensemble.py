@@ -53,25 +53,33 @@ def _make_forecast_df(months: int = 9) -> pd.DataFrame:
     )
 
 
-def _make_tech_indicators(
-    rows: int = 500,
-    ticker: str = "AAPL",
-) -> pd.DataFrame:
-    """Simulate repo.get_technical_indicators."""
-    idx = pd.date_range("2022-01-01", periods=rows, freq="B")
+def _make_raw_ohlcv() -> pd.DataFrame:
+    """Simulate repo.get_ohlcv(ticker) — the real call site behind
+    ensemble_forecast's tech-indicator step (via tools._analysis_
+    shared.compute_indicators -> _load_ohlcv), not a StockRepository
+    get_technical_indicators()/get_ohlcv_batch()-style batch method.
+
+    Spans business days from well before _make_train_df's 2022-01-01
+    start (>=200 rows of SMA_200 warmup) through TODAY, so
+    _is_ohlcv_stale never triggers _auto_fetch's real yfinance call.
+    Lowercase columns matching StockRepository.get_ohlcv's real
+    shape (date/open/high/low/close/volume).
+    """
+    idx = pd.date_range(
+        "2021-01-01", pd.Timestamp.now().normalize(), freq="B",
+    )
     rng = np.random.default_rng(42)
-    close = 150 + rng.standard_normal(rows).cumsum()
+    close = 150 + rng.standard_normal(len(idx)).cumsum()
     return pd.DataFrame(
         {
-            "ticker": [ticker] * rows,
-            "date": idx.date,
-            "sma_50": pd.Series(close).rolling(50).mean(),
-            "sma_200": pd.Series(close).rolling(200).mean(),
-            "rsi_14": rng.uniform(30, 70, rows),
-            "macd": rng.standard_normal(rows),
-            "bb_upper": close + 10,
-            "bb_lower": close - 10,
-            "atr_14": rng.uniform(2, 8, rows),
+            "date": idx.strftime("%Y-%m-%d"),
+            "open": close - 1,
+            "high": close + 2,
+            "low": close - 2,
+            "close": close,
+            "volume": rng.integers(
+                1_000_000, 5_000_000, len(idx),
+            ),
         }
     )
 
@@ -93,11 +101,11 @@ def _mock_prophet_model():
     return model
 
 
-@patch("tools._stock_shared._require_repo")
+@patch("tools._analysis_shared._require_repo")
 def test_ensemble_corrects_forecast(mock_require):
     """Ensemble should modify yhat values."""
     repo = MagicMock()
-    repo.get_technical_indicators.return_value = _make_tech_indicators()
+    repo.get_ohlcv.return_value = _make_raw_ohlcv()
     mock_require.return_value = repo
 
     model = _mock_prophet_model()
@@ -126,13 +134,13 @@ def test_ensemble_corrects_forecast(mock_require):
     assert not result["yhat"].equals(original_yhat)
 
 
-@patch("tools._stock_shared._require_repo")
+@patch("tools._analysis_shared._require_repo")
 def test_ensemble_graceful_fallback_no_tech(
     mock_require,
 ):
     """Returns None when no tech indicators exist."""
     repo = MagicMock()
-    repo.get_technical_indicators.return_value = pd.DataFrame()
+    repo.get_ohlcv.return_value = pd.DataFrame()
     mock_require.return_value = repo
 
     model = _mock_prophet_model()
@@ -155,11 +163,11 @@ def test_ensemble_graceful_fallback_no_tech(
     assert result is None
 
 
-@patch("tools._stock_shared._require_repo")
+@patch("tools._analysis_shared._require_repo")
 def test_ensemble_too_few_rows(mock_require):
     """Returns None with insufficient training rows."""
     repo = MagicMock()
-    repo.get_technical_indicators.return_value = _make_tech_indicators(rows=50)
+    repo.get_ohlcv.return_value = _make_raw_ohlcv()
     mock_require.return_value = repo
 
     model = _mock_prophet_model()
@@ -182,12 +190,12 @@ def test_ensemble_too_few_rows(mock_require):
     assert result is None
 
 
-@patch("tools._stock_shared._require_repo")
+@patch("tools._analysis_shared._require_repo")
 def test_ensemble_preserves_shape(mock_require):
     """Output should have same shape and columns
     as input forecast_df."""
     repo = MagicMock()
-    repo.get_technical_indicators.return_value = _make_tech_indicators()
+    repo.get_ohlcv.return_value = _make_raw_ohlcv()
     mock_require.return_value = repo
 
     model = _mock_prophet_model()
