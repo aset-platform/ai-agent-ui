@@ -149,6 +149,17 @@ _MIN_BUY_TIME_IST = _parse_ist_time(
     env_name="ALGO_MIN_BUY_TIME_IST",
 )
 
+# Earliest wall-clock at which a SIGNAL-based SELL (rebalance / AST
+# ``sell``/``exit``) may be placed. Safety exits — stop-loss,
+# time-stop, STOP_HIT, GTT-triggered, MIS square-off — are all
+# handled EARLIER in _on_bar_close and return before this floor is
+# ever reached, so they are NEVER gated here.
+# Override: ALGO_MIN_SELL_TIME_IST (HH:MM IST).
+_MIN_SELL_TIME_IST = _parse_ist_time(
+    os.environ.get("ALGO_MIN_SELL_TIME_IST", "09:30"),
+    env_name="ALGO_MIN_SELL_TIME_IST",
+)
+
 # PR3 — live-mode events are buffered and flushed on this cadence
 # instead of one Iceberg commit per signal. The terminal flush on
 # session stop drains whatever remains. Env-overridable for tuning.
@@ -3969,6 +3980,26 @@ class LiveRuntime:
                     _MIN_BUY_TIME_IST.strftime("%H:%M"),
                     bar.ticker,
                     now_ist.strftime("%H:%M:%S"),
+                )
+                return 0
+
+        # Gate S: no SIGNAL-based SELL (rebalance / AST sell/exit)
+        # before _MIN_SELL_TIME_IST (default 09:30). Sits OUTSIDE
+        # the daily_realtime/is_flat block above — a discretionary
+        # SELL always has an open position, so is_flat is False and
+        # that block never runs for it. Safety exits (stop-loss,
+        # time-stop, STOP_HIT, GTT-triggered, MIS square-off) are
+        # handled earlier in this method and already returned before
+        # reaching here — this floor can never gate them.
+        if signal is not None and signal.side == "SELL":
+            sell_now_ist = datetime.now(IST).time()
+            if sell_now_ist < _MIN_SELL_TIME_IST:
+                _logger.info(
+                    "signal SELL deferred — before %s IST "
+                    "(ticker=%s now=%s IST)",
+                    _MIN_SELL_TIME_IST.strftime("%H:%M"),
+                    bar.ticker,
+                    sell_now_ist.strftime("%H:%M:%S"),
                 )
                 return 0
 
