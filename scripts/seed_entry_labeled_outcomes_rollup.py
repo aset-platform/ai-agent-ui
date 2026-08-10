@@ -27,11 +27,11 @@ _NS = uuid.UUID("bd1513df-3023-4cf0-8e95-9bc71d42f565")
 _JOB = {
     "name": "Algo Entry Labeled Outcomes Rollup - Daily",
     "job_type": "algo_entry_labeled_outcomes_rollup",
-    # 16:00 IST, after market close (15:30 IST), so filled
-    # candidates' exits have settled. Mon-Fri only (no trading
-    # on weekends).
+    # 16:45 IST — AFTER closed_trades_rollup (16:30) so today's
+    # fills are materialized before this job reads them (avoids the
+    # T-1 lag). After market close (15:30 IST). Mon-Fri only.
     "cron_days": "mon,tue,wed,thu,fri",
-    "cron_time": "16:00",
+    "cron_time": "16:45",
     "cron_dates": None,
     "scope": None,
 }
