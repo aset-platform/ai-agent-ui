@@ -42,8 +42,23 @@ def test_entry_conditions_identical_to_v3(td):
     features = {op["left"]["feature"] for op in entry}
     assert features == {
         "rsi_2", "distance_from_sma200", "stress_prob",
-        "nifty_above_sma200", "nifty_30d_return_pct",
+        "nifty_distance_from_sma200_pct", "nifty_30d_return_pct",
     }
+
+
+def test_nifty_regime_gate_uses_distance_pct(td):
+    """v5 gates on the nifty_distance_from_sma200_pct regime band,
+    not the old binary nifty_above_sma200 flag."""
+    entry = td["root"]["cond"]["operands"]
+    gate = next(
+        op for op in entry
+        if op["left"]["feature"] == "nifty_distance_from_sma200_pct"
+    )
+    assert gate["op"] == ">"
+    assert gate["right"]["literal"] == -5
+    assert not any(
+        op["left"]["feature"] == "nifty_above_sma200" for op in entry
+    )
 
 
 def test_risk_fields(td):
