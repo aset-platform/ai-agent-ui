@@ -557,15 +557,19 @@ def run_backtest(
                 period_start=request.period_start,
                 period_end=request.period_end,
             )
-        except Exception as exc:
-            # A missing/partial feature panel (or any loader
-            # failure — Iceberg catalog, cache, on-demand backfill)
-            # MUST NOT crash the run. Task 2 will find no entries
-            # for these tickers at the exec grain; they still get
-            # the existing daily-close signal-bar evaluation, so
-            # this degrades gracefully rather than failing closed.
+        except FeaturePanelMissingError as exc:
+            # A missing/not-yet-backfilled feature panel MUST NOT
+            # crash the run — Task 2 will find no entries for
+            # these tickers at the exec grain; they still get the
+            # existing daily-close signal-bar evaluation, so this
+            # degrades gracefully rather than failing closed. A
+            # genuine code/config bug (TypeError, bad kwarg,
+            # Iceberg-catalog wiring error) is NOT this exception
+            # type and propagates loudly, matching the two existing
+            # ``load_intraday_features_window`` call sites above
+            # (~L198-215) — narrow on purpose, not ``Exception``.
             _logger.warning(
-                "two-clock: intraday feature panel load failed for "
+                "two-clock: intraday feature panel missing for "
                 "exec-covered tickers (interval_sec=%d, %s..%s); "
                 "entries stay daily-close-only: %s",
                 execution_interval_sec,
