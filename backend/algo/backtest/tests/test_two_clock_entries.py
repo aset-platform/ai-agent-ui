@@ -939,3 +939,130 @@ def test_held_ticker_set_target_weight_never_trims_via_exec_clock():
         f"set_target_weight must never trim a held position via "
         f"the exec clock, got SELL fill(s): {sell_fills}"
     )
+
+    # Fix-loop round 3 (IMPORTANT 2) — this ticker's ENTRY was
+    # itself a ``set_target_weight`` BUY (the strategy's whole
+    # root), filled via ``exec_sim_broker`` with a real exec-bar
+    # ts_ns. The ``set_target_weight`` BUY branch of
+    # ``_action_to_intent`` used to omit ``product=`` entirely
+    # (unlike the ``buy`` branch, fixed earlier), so ``SimBroker``
+    # inferred INTRADAY from that ts_ns regardless of the
+    # strategy's true CNC product — a v5-style strategy's real
+    # entry action IS ``set_target_weight``, so this is the
+    # ACTUAL entry shape, not an edge case.
+    buy_fills = [
+        e for e in captured
+        if e.get("type") == "order_filled"
+        and _payload(e).get("side") == "BUY"
+    ]
+    assert len(buy_fills) == 1, buy_fills
+    buy_payload = _payload(buy_fills[0])
+    entry_fill_price = Decimal(buy_payload["fill_price"])
+    entry_booked_fees = Decimal(buy_payload["fees_inr"])
+
+    fees = IndianFeeModel(as_of=d)
+    entry_delivery_fees = fees.compute(
+        Trade(
+            symbol=ticker, exchange="NSE", side="BUY",
+            product="DELIVERY", qty=buy_payload["qty"],
+            price=entry_fill_price,
+        )
+    ).total_inr
+    entry_intraday_fees = fees.compute(
+        Trade(
+            symbol=ticker, exchange="NSE", side="BUY",
+            product="INTRADAY", qty=buy_payload["qty"],
+            price=entry_fill_price,
+        )
+    ).total_inr
+
+    assert entry_booked_fees == entry_delivery_fees, (
+        f"a CNC set_target_weight intraday entry must bill "
+        f"DELIVERY fees ({entry_delivery_fees}), got "
+        f"{entry_booked_fees} — the set_target_weight BUY branch "
+        f"of _action_to_intent must forward ``product`` into the "
+        f"OrderIntent"
+    )
+    assert entry_delivery_fees != entry_intraday_fees, (
+        "fixture is vacuous — DELIVERY and INTRADAY fees must "
+        "differ for this test to prove anything"
+    )
+
+
+# ── Fix-loop round 3 — ATR lookahead in the intraday-entry
+# trailing-stop setup. An entry that fills INTRADAY (e.g. 09:45)
+# must size its ATR-14 from bars STRICTLY BEFORE entry_bar_date
+# (the last COMPLETED daily bar) — entry_bar_date's own daily bar
+# (today's full high/low/close) hasn't happened yet at fill time,
+# so including it is lookahead. The LEGACY signal-bar entry path
+# (fires ~15:15, today's bar essentially complete) correctly keeps
+# ``<=`` and is untouched/unasserted here.
+
+
+def test_intraday_entry_trailing_atr_excludes_todays_bar():
+    ticker = "ATRLOOK.NS"
+    d = _BASE + timedelta(days=20)
+    # 21 flat (tight-range) daily bars so ATR-14 is well-formed;
+    # entry_bar_date's OWN bar is a deliberately WILD high/low —
+    # if the ATR calc wrongly included it, ``_wilder_atr`` would
+    # be called with entry_bar_date in its input bar list.
+    daily_bars = _daily_bars_for(ticker, [100] * 20)
+    daily_bars.append(
+        _daily_bar(
+            ticker, d, open_="100", high="500", low="1", close="100",
+        )
+    )
+    daily = {ticker: daily_bars}
+    cov = {ticker: TickerCoverage(ticker, 900, _BASE, d, 21)}
+    exec_bars = {ticker: _exec_bars_for(ticker, d)}
+    rsi_by_slot = {slot: "50" for slot in _EXEC_SLOTS}
+    rsi_by_slot[(9, 30)] = "3"
+    feat_panel = _feat_panel(ticker, d, rsi_by_slot)
+
+    strategy = parse_strategy(_rsi2_strategy())
+    req = BacktestRequest(
+        strategy_id=strategy.id, period_start=d, period_end=d,
+    )
+
+    from backend.algo.backtest import runner as runner_mod
+
+    _real_atr = runner_mod._wilder_atr
+    _seen_bar_dates: list[list] = []
+
+    def _spy_atr(bars, window):  # noqa: ANN001
+        _seen_bar_dates.append([b.date for b in bars])
+        return _real_atr(bars, window)
+
+    with patch(
+        "backend.algo.backtest.runner.load_ohlcv_window",
+        return_value=daily,
+    ), patch(
+        "backend.algo.backtest.runner.intraday_coverage",
+        return_value=cov,
+    ), patch(
+        "backend.algo.backtest.runner.load_intraday_bars_window",
+        return_value=exec_bars,
+    ), patch(
+        "backend.algo.backtest.runner.load_intraday_features_window",
+        return_value=feat_panel,
+    ), patch(
+        "backend.algo.backtest.runner._wilder_atr",
+        side_effect=_spy_atr,
+    ), patch("backend.algo.backtest.runner.flush_events"):
+        run_backtest(
+            strategy=strategy, request=req,
+            user_id=uuid4(), universe=[ticker],
+        )
+
+    assert _seen_bar_dates, "expected at least one ATR computation"
+    for _dates in _seen_bar_dates:
+        assert d not in _dates, (
+            f"intraday-entry trailing ATR must be computed from "
+            f"bars strictly before entry_bar_date {d} (today's "
+            f"own bar hasn't happened yet at the 09:45 fill) — "
+            f"saw {_dates}"
+        )
+        assert all(_d < d for _d in _dates), (
+            f"intraday-entry trailing ATR saw a bar on/after "
+            f"entry_bar_date {d}: {_dates}"
+        )

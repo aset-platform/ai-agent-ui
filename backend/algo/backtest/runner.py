@@ -486,6 +486,14 @@ def run_backtest(
     pt = PositionTracker()
     risk = RiskEngine()
     risk_payload = strategy.risk.model_dump()
+    # Fix-loop round 3 (PERF, CLAUDE.md §4.1) — ``strategy.root``
+    # is invariant for the whole run; hoist its ``model_dump``
+    # once instead of re-serialising it on every ``eval_node``
+    # call (per-ticker, per-exec-bar in two-clock mode — millions
+    # of redundant serialisations of the same object on a multi-
+    # year/~497-ticker run). Reused at every ``eval_node`` call
+    # site below (legacy signal-bar + all 3 two-clock sites).
+    _root_dump = strategy.root.model_dump(by_alias=True)
 
     fee_rates_version = ""
     total_fees = Decimal("0")
@@ -835,7 +843,7 @@ def run_backtest(
         )
         try:
             action = evaluator.eval_node(
-                strategy.root.model_dump(by_alias=True),
+                _root_dump,
                 EvalContext(
                     ticker=ticker,
                     bar_date=exit_bar_date,
@@ -1145,7 +1153,7 @@ def run_backtest(
                 )
                 try:
                     forming_action = evaluator.eval_node(
-                        strategy.root.model_dump(by_alias=True),
+                        _root_dump,
                         EvalContext(
                             ticker=ticker,
                             bar_date=entry_bar_date,
@@ -1205,9 +1213,7 @@ def run_backtest(
                         )
                         try:
                             closed_action = evaluator.eval_node(
-                                strategy.root.model_dump(
-                                    by_alias=True,
-                                ),
+                                _root_dump,
                                 EvalContext(
                                     ticker=ticker,
                                     bar_date=prior_date,
@@ -1428,10 +1434,20 @@ def run_backtest(
 
             # Trailing manager — always via ``exec_sim`` (an
             # exec-covered ticker; ``two_clock`` implies
-            # ``_trailing_enabled``). Same ATR-from-daily-bars
-            # computation the signal-bar entry path uses below.
+            # ``_trailing_enabled``). Fix-loop round 3 — this
+            # entry fills INTRADAY (e.g. 09:45), so
+            # ``entry_bar_date``'s OWN daily bar (today's full
+            # high/low/close) hasn't happened yet: including it
+            # would be lookahead. Use bars STRICTLY BEFORE
+            # entry_bar_date — the last COMPLETED daily bar,
+            # matching live's ``on_buy_fill_trailing`` (sources
+            # atr_14 from yesterday's daily factor row). The
+            # LEGACY signal-bar entry path below intentionally
+            # keeps ``<=`` — it fires ~15:15 when today's daily
+            # bar is essentially complete, so including it there
+            # is correct and must NOT change.
             _bars_up = [
-                b for b in daily_blist if b.date <= entry_bar_date
+                b for b in daily_blist if b.date < entry_bar_date
             ]
             _atr_series = _wilder_atr(_bars_up, 14)
             _atr = float(
@@ -2190,7 +2206,7 @@ def run_backtest(
             )
             try:
                 action = evaluator.eval_node(
-                    strategy.root.model_dump(by_alias=True),
+                    _root_dump,
                     ctx,
                 )
             except KeyError as _ke:
@@ -2811,6 +2827,7 @@ def _action_to_intent(
                 qty=int(diff),
                 intent_emitted_at=bar_date,
                 intent_emitted_ts_ns=bar_open_ts_ns,
+                product=product,
             )
         # set_target_weight is BUY-only once a position is open —
         # never trims (diff<0). Mirrors LiveRuntime/PaperRuntime's
