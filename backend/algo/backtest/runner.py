@@ -773,6 +773,177 @@ def run_backtest(
     _closed_leg_cache: dict[
         tuple[str, date], tuple[Any, dict[str, Any] | None]
     ] = {}
+    # Fix-loop round 1 (LOW) — the falling-knife-veto / risk-reject
+    # ``signal_rejected`` events are keyed on inputs that are
+    # CONSTANT for the whole trading day (the veto's ret_3d/gap and,
+    # in practice, the risk gate's daily-scale thresholds), so
+    # appending one every eligible exec bar (~24/day/ticker) is pure
+    # algo.events volume bloat on a multi-year run — cf. the prior
+    # bloat incident. Emit at most once per (ticker, bar_date); the
+    # in-memory ``rejected_count`` stat still increments every
+    # attempt (cheap, not an Iceberg write).
+    _rejected_today: set[tuple[str, date]] = set()
+
+    def _evaluate_held_ticker_ast_exit(
+        ticker: str,
+        pos: Any,
+        exit_bar_date: date,
+        exit_ts_ns: int | None,
+    ) -> None:
+        """Fix-loop round 1 (HIGH) — AST-level SIGNAL exit
+        (``sell`` / ``exit``) for a HELD two-clock exec-covered
+        ticker, evaluated on every exec bar from the 09:30 floor
+        (the caller, ``_evaluate_intraday_entry``, already
+        applied that floor before reaching the per-ticker loop).
+
+        Mirrors live's ``_action_to_signal`` sell path: unlike
+        ENTRIES, there's no OR-trigger / falling-knife veto here
+        — live evaluates the strategy fresh every bar-close off
+        the CURRENT (forming) features only, and a resolved SELL
+        just exits, gated only by the (here: 09:30) time floor.
+        ``set_target_weight`` never trims an open position (by
+        design, mirrors live/paper's ``_action_to_signal`` — see
+        ``_action_to_intent``), so it safely no-ops here too.
+
+        Distinct from the stop/trailing/time/regime exits that
+        already ran ungated above this bar: this is called only
+        for a ticker ``open_now`` (fetched AFTER those exits
+        applied their fills) still shows as held, so it can never
+        double-close a position those exits already closed.
+        """
+        nonlocal total_fees, fee_rates_version
+        _raw = exec_intraday_features.get((ticker, exit_ts_ns))
+        if _raw is None:
+            return  # no forming-bar features -> nothing to eval.
+        feats = assemble_per_bar_features(
+            bar_feats=_raw,
+            market_regime=market_regime.get(exit_bar_date),
+            market_trend=market_trend.get(exit_bar_date),
+            market_dist_sma200=market_dist_sma200.get(
+                exit_bar_date,
+            ),
+            factor_row=factors_by_key.get(
+                (ticker, exit_bar_date),
+            ),
+            regime_row=regime_by_date.get(exit_bar_date),
+            daily_overlay=lookup_daily_overlay(
+                daily_panel=daily_overlay_panel,
+                ticker=ticker,
+                bar_date=exit_bar_date,
+            ),
+        )
+        try:
+            action = evaluator.eval_node(
+                strategy.root.model_dump(by_alias=True),
+                EvalContext(
+                    ticker=ticker,
+                    bar_date=exit_bar_date,
+                    features=feats,
+                    open_qty=pos.qty,
+                ),
+            )
+        except KeyError:
+            return
+        except Exception:  # noqa: BLE001
+            return
+        if not isinstance(action, dict):
+            return
+        # ``last_price``/``current_equity`` matter only for
+        # ``set_target_weight`` (buy-side sizing on a rebalance —
+        # it never trims, see ``_action_to_intent``, so this can
+        # only ever no-op here, never SELL); ``sell``/``exit``
+        # don't read them. Computed the same way the entry path
+        # above does.
+        _cur = exec_by_ts.get(ticker, {}).get(exit_ts_ns)
+        intent = _action_to_intent(
+            action,
+            ticker=ticker,
+            bar_date=exit_bar_date,
+            pt=pt,
+            last_price=_cur.close if _cur is not None else None,
+            current_equity=(
+                request.initial_capital_inr
+                + pt.total_realised_pnl_inr()
+                - total_fees
+            ),
+            bar_open_ts_ns=exit_ts_ns,
+            # Fee-product fix mirrors the stop/trailing exits
+            # above — a CNC daily strategy's intraday-detected
+            # AST exit is still a delivery sell.
+            product=(
+                "DELIVERY"
+                if strategy.product == "CNC"
+                else "INTRADAY"
+            ),
+        )
+        if intent is None or intent.side != "SELL":
+            return  # buy / hold / a never-trims set_target_weight.
+        try:
+            fill = (
+                exec_sim_broker.execute(intent)
+                if exec_sim_broker is not None
+                else None
+            )
+        except NoBarAvailableError:
+            fill = None
+        if fill is None:
+            return
+        pt.apply_fill(fill)
+        total_fees += fill.fees_inr
+        fee_rates_version = fill.fee_rates_version
+        if exec_sim.has(fill.ticker):
+            exec_sim.drop(fill.ticker)
+        events.append(
+            event_row(
+                session_id=session_id,
+                user_id=user_id,
+                strategy_id=strategy.id,
+                mode="backtest",
+                type_="order_filled",
+                payload={
+                    "ticker": fill.ticker,
+                    "side": fill.side,
+                    "qty": fill.qty,
+                    "fill_price": str(fill.fill_price),
+                    "fill_date": fill.fill_date.isoformat(),
+                    "fees_inr": str(fill.fees_inr),
+                    "fee_rates_version": fill.fee_rates_version,
+                },
+            )
+        )
+        try:
+            from backend.algo.features.snapshots import (
+                write_trade_feature_snapshot,
+            )
+
+            _snap_fill_id = (
+                f"{session_id}:{fill.ticker}:{fill.intent_id}"
+            )
+            write_trade_feature_snapshot(
+                fill_id=_snap_fill_id,
+                run_id=str(session_id),
+                strategy_id=str(strategy.id),
+                ticker=fill.ticker,
+                side=fill.side,
+                qty=fill.qty,
+                fill_price=fill.fill_price,
+                fill_ts_ns=(
+                    fill.fill_ts_ns
+                    if fill.fill_ts_ns is not None
+                    else exit_ts_ns
+                ),
+                bar_date=fill.fill_date.isoformat(),
+                mode="backtest",
+                features=feats,
+            )
+        except Exception:  # noqa: BLE001
+            _logger.exception(
+                "trade_feature_snapshot hook failed "
+                "(non-fatal): ticker=%s mode=backtest "
+                "ts_ns=%s",
+                fill.ticker,
+                exit_ts_ns,
+            )
 
     def _evaluate_intraday_entry(
         entry_bar_date: date, entry_ts_ns: int | None,
@@ -807,11 +978,33 @@ def run_backtest(
         for ticker in universe:
             if ticker not in exec_covered:
                 continue  # daily-fallback keeps the legacy path.
-            if (ticker, entry_bar_date) in _entered_today:
-                continue  # once-per-day-per-ticker dedup.
+            # ``open_now`` was fetched ABOVE, after every stop/
+            # trailing/time/regime exit block for THIS bar already
+            # ran and applied its fills — so a ticker a stop just
+            # closed this same bar already reads flat here and
+            # falls through to the entry branch below (mirrors
+            # live's ordering: safety exits first, AST signal
+            # after; never both act on the same position same
+            # bar, since a closed position can't also be "held").
             pos = open_now.get(ticker)
             if pos is not None and pos.qty > 0:
-                continue  # only a FLAT ticker evaluates an entry.
+                # Fix-loop round 1 (HIGH) — a HELD covered ticker
+                # still needs its AST evaluated every exec bar so
+                # an explicit ``sell``/``exit`` leg (or a strategy
+                # rebalance) can fire intraday, exactly as live
+                # does every bar-close from the 09:30 floor. The
+                # pre-fix code silently ``continue``d here, so a
+                # covered ticker's AST-level exit was DROPPED
+                # entirely — it could only ever leave via a stop/
+                # trailing/time/regime exit, diverging from live
+                # and poisoning the holding-period/outcome labels
+                # this whole feature exists to produce.
+                _evaluate_held_ticker_ast_exit(
+                    ticker, pos, entry_bar_date, entry_ts_ns,
+                )
+                continue
+            if (ticker, entry_bar_date) in _entered_today:
+                continue  # once-per-day-per-ticker dedup.
             if cooldown_days and in_cooldown(
                 ticker=ticker,
                 bar_date=entry_bar_date,
@@ -955,21 +1148,24 @@ def run_backtest(
             )
             if veto:
                 rejected_count += 1
-                events.append(
-                    event_row(
-                        session_id=session_id,
-                        user_id=user_id,
-                        strategy_id=strategy.id,
-                        mode="backtest",
-                        type_="signal_rejected",
-                        payload={
-                            "ticker": ticker,
-                            "side": "BUY",
-                            "reason": "falling_knife_veto",
-                            **_knife,
-                        },
+                _rk = (ticker, entry_bar_date)
+                if _rk not in _rejected_today:
+                    _rejected_today.add(_rk)
+                    events.append(
+                        event_row(
+                            session_id=session_id,
+                            user_id=user_id,
+                            strategy_id=strategy.id,
+                            mode="backtest",
+                            type_="signal_rejected",
+                            payload={
+                                "ticker": ticker,
+                                "side": "BUY",
+                                "reason": "falling_knife_veto",
+                                **_knife,
+                            },
+                        )
                     )
-                )
                 _logger.debug(
                     "falling-knife veto ticker=%s ret_3d=%s "
                     "gap=%s",
@@ -1064,36 +1260,40 @@ def run_backtest(
             )
             if decision.outcome == "reject":
                 rejected_count += 1
-                events.append(
-                    event_row(
-                        session_id=session_id,
-                        user_id=user_id,
-                        strategy_id=strategy.id,
-                        mode="backtest",
-                        type_="signal_rejected",
-                        payload={
-                            "ticker": intent.ticker,
-                            "side": intent.side,
-                            "qty": intent.qty,
-                            "reason": (
-                                decision.reason.value
-                                if decision.reason
-                                else "unknown"
-                            ),
-                            "threshold": (
-                                str(decision.threshold)
-                                if decision.threshold is not None
-                                else None
-                            ),
-                            "observed_value": (
-                                str(decision.observed_value)
-                                if decision.observed_value
-                                is not None
-                                else None
-                            ),
-                        },
+                _rk = (ticker, entry_bar_date)
+                if _rk not in _rejected_today:
+                    _rejected_today.add(_rk)
+                    events.append(
+                        event_row(
+                            session_id=session_id,
+                            user_id=user_id,
+                            strategy_id=strategy.id,
+                            mode="backtest",
+                            type_="signal_rejected",
+                            payload={
+                                "ticker": intent.ticker,
+                                "side": intent.side,
+                                "qty": intent.qty,
+                                "reason": (
+                                    decision.reason.value
+                                    if decision.reason
+                                    else "unknown"
+                                ),
+                                "threshold": (
+                                    str(decision.threshold)
+                                    if decision.threshold
+                                    is not None
+                                    else None
+                                ),
+                                "observed_value": (
+                                    str(decision.observed_value)
+                                    if decision.observed_value
+                                    is not None
+                                    else None
+                                ),
+                            },
+                        )
                     )
-                )
                 continue
             if (
                 decision.outcome == "scale"

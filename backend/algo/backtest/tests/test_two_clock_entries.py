@@ -720,3 +720,117 @@ def test_plain_daily_run_entries_unchanged():
     # intraday timestamp, exactly as before this feature existed.
     assert summary.trade_list[0].opened_at_ts_ns is None
     assert summary.execution_interval_sec == 86400
+
+
+# ── Fix-loop round 1 (HIGH) — AST-level exit on a HELD covered
+# ticker. Pre-fix, the legacy ``is_signal_bar`` block's skip for
+# ``exec_covered`` tickers dropped this entirely: a HELD covered
+# ticker's ``sell``/``exit`` leg was never evaluated intraday, so
+# it could only leave via a stop/trailing/time/regime exit —
+# diverging from live (which acts on AST sells every bar-close
+# from 09:30) and poisoning the holding-period/outcome labels this
+# feature exists to produce. Manually verified this test FAILS
+# (no "signal" exit; the position rides to period-end instead) if
+# the held-ticker branch in ``_evaluate_intraday_entry`` is
+# reverted to an unconditional ``continue``.
+
+
+def test_ast_sell_exits_intraday_for_held_covered_ticker():
+    ticker = "EXIT.NS"
+    d = _BASE + timedelta(days=8)
+    # Flat daily closes -> the closed-bar OR-trigger leg never
+    # fires (rsi_2 stays 100 all warmup) — only the forming leg
+    # (mocked per-slot below) can enter or exit this ticker.
+    daily = {ticker: _daily_bars_for(ticker, [100] * 9)}
+    cov = {ticker: TickerCoverage(ticker, 900, _BASE, d, 9)}
+    exec_bars = {ticker: _exec_bars_for(ticker, d)}
+    # Entry trigger at 09:30 (rsi_2<=5); neutral in between;
+    # explicit AST exit trigger at 11:00 (rsi_2>=70).
+    rsi_by_slot = {slot: "50" for slot in _EXEC_SLOTS}
+    rsi_by_slot[(9, 30)] = "3"
+    rsi_by_slot[(11, 0)] = "75"
+    feat_panel = _feat_panel(ticker, d, rsi_by_slot)
+
+    strategy_dict = _rsi2_strategy()
+    # Extend the entry-only root with an explicit exit leg,
+    # mirroring live's v5 AST shape ("explicit exit leg
+    # rsi_2 >= 70"): BUY on oversold, else EXIT on overbought,
+    # else hold.
+    strategy_dict["root"]["else"] = {
+        "type": "if",
+        "cond": {
+            "type": "compare",
+            "left": {"feature": "rsi_2"},
+            "op": ">=",
+            "right": {"literal": 70},
+        },
+        "then": {"type": "exit", "scope": "this_symbol"},
+        "else": {"type": "hold"},
+    }
+
+    summary = _run(
+        strategy_dict=strategy_dict,
+        daily=daily, cov=cov, exec_bars=exec_bars,
+        feat_panel=feat_panel, universe=[ticker],
+        period_start=d, period_end=d,
+    )
+    assert len(summary.trade_list) == 1, summary.trade_list
+    trade = summary.trade_list[0]
+    assert trade.opened_at_ts_ns == _ns(d, 9, 45), trade
+    # AST SIGNAL exit (not a stop/trailing/time/regime exit) must
+    # fire intraday: decision at 11:00 -> fills at 11:15's open.
+    assert trade.exit_reason == "signal", (
+        f"expected an AST-level signal exit, got "
+        f"{trade.exit_reason!r} (a non-'signal' reason means the "
+        f"AST sell was dropped and the position rode to a "
+        f"different exit path instead)"
+    )
+    assert trade.closed_at_ts_ns == _ns(d, 11, 15), (
+        f"expected the 11:00 AST exit decision to fill at 11:15, "
+        f"got {trade.closed_at_ts_ns}"
+    )
+
+
+def test_held_ticker_set_target_weight_never_trims_via_exec_clock():
+    # Regression guard for the fee-product/held-ticker fix: an
+    # unconditional ``set_target_weight`` root must still NEVER
+    # trim an open position once two-clock exec-bar AST
+    # evaluation reaches a HELD ticker every 15m (mirrors the
+    # existing daily-clock contract — reductions only ever come
+    # from an explicit exit/stop_loss/time_stop/regime_exit).
+    ticker = "REBAL.NS"
+    d = _BASE + timedelta(days=8)
+    daily = {ticker: _daily_bars_for(ticker, [100] * 9)}
+    cov = {ticker: TickerCoverage(ticker, 900, _BASE, d, 9)}
+    exec_bars = {ticker: _exec_bars_for(ticker, d)}
+    # set_target_weight doesn't reference rsi_2, but the forming
+    # leg still needs a non-None feature row to evaluate at all.
+    rsi_by_slot = {slot: "50" for slot in _EXEC_SLOTS}
+    feat_panel = _feat_panel(ticker, d, rsi_by_slot)
+
+    strategy_dict = _rsi2_strategy()
+    strategy_dict["root"] = {
+        "type": "set_target_weight", "weight": 0.01,
+    }
+    captured: list = []
+
+    summary = _run(
+        strategy_dict=strategy_dict,
+        daily=daily, cov=cov, exec_bars=exec_bars,
+        feat_panel=feat_panel, universe=[ticker],
+        period_start=d, period_end=d, captured_events=captured,
+    )
+    assert len(summary.trade_list) == 1, summary.trade_list
+    # Position rides to the period-end force-close, not a "signal"
+    # SELL fired mid-day by the held-ticker AST-exit path.
+    assert summary.trade_list[0].exit_reason == "period_end_mtm"
+
+    sell_fills = [
+        e for e in captured
+        if e.get("type") == "order_filled"
+        and _payload(e).get("side") == "SELL"
+    ]
+    assert sell_fills == [], (
+        f"set_target_weight must never trim a held position via "
+        f"the exec clock, got SELL fill(s): {sell_fills}"
+    )
