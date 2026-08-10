@@ -16,7 +16,7 @@ this job's very first real run, because a fill with no matching
 from __future__ import annotations
 
 from datetime import date
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import text
 
@@ -653,3 +653,55 @@ async def test_run_upsert_clears_rejection_reason_when_fills():
             assert float(row["qm_score"]) == 77.3
     finally:
         await _cleanup_qa_row()
+
+
+# --------------------------------------------------------------- #
+# Executor registration (Task 2) — mirrors
+# test_closed_trades_rollup.test_wrapper_marks_scheduler_run_success
+# --------------------------------------------------------------- #
+
+
+def test_registered_and_marks_scheduler_run_success():
+    """The ``algo_entry_labeled_outcomes_rollup`` job type must be
+    registered in ``JOB_EXECUTORS`` (scheduler dispatch depends on
+    this) and, per every other standalone algo job wrapper (e.g.
+    ``_job_algo_reconciliation``, ``_job_algo_closed_trades_rollup``),
+    must call the shared ``_algo_job_success`` helper on success --
+    scheduler_service.py's dispatcher only ever sets ``duration_secs``
+    on the success path, leaving ``status`` up to the executor."""
+    from backend.jobs.executor import (
+        JOB_EXECUTORS,
+        _job_algo_entry_labeled_outcomes_rollup,
+    )
+
+    assert (
+        JOB_EXECUTORS["algo_entry_labeled_outcomes_rollup"]
+        is _job_algo_entry_labeled_outcomes_rollup
+    )
+
+    run_id = "test-run-id"
+    repo = MagicMock()
+    with (
+        patch(f"{_MODULE}._fetch_snapshots", return_value={}),
+        patch(f"{_MODULE}._fetch_rejections", return_value={}),
+        patch(
+            f"{_MODULE}._fetch_closed_trades",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(f"{_MODULE}._fetch_eqd", return_value={}),
+        patch(f"{_MODULE}._compute_outcomes", return_value={}),
+    ):
+        result = _job_algo_entry_labeled_outcomes_rollup(
+            scope="all",
+            run_id=run_id,
+            repo=repo,
+            payload={"today": "2026-08-10", "dry_run": True},
+        )
+
+    assert result["status"] == "dry_run"
+    repo.update_scheduler_run.assert_called_once()
+    call_args = repo.update_scheduler_run.call_args
+    assert call_args.args[0] == run_id
+    updates = call_args.args[1]
+    assert updates["status"] == "success"
+    assert "completed_at" in updates
