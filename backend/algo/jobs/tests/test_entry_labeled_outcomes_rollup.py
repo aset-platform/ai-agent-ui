@@ -1,20 +1,31 @@
 """Tests for ``entry_labeled_outcomes_rollup`` (PRE-6).
 
 Targets the pure ``_assemble_rows``/``_aggregate_fills`` helpers per
-the design tip in the task brief — no Iceberg/PG mocking needed for
-(a)-(c); (d) idempotency is exercised by calling the same pure
-helper twice with identical inputs.
+the design tip in the task brief for (a)-(c); (d) idempotency has
+TWO layers: a pure-helper check (calling ``_assemble_rows`` twice
+with identical inputs) AND a real integration test against the
+Docker Postgres (``TestRunUpsertEnrichmentSurvives`` below) that
+exercises the actual ``_UPSERT_SQL`` text — the pure-helper check
+alone is tautological for upsert correctness since it never touches
+SQL. The integration tests are the regression guard for the
+2026-08-10 data-loss bug: a straight ``EXCLUDED.<col>`` assignment
+on feature/QM/ESS columns nulled all 70 PRE-1-reconstructed rows on
+this job's very first real run, because a fill with no matching
+``entry_strength_snapshot`` has NULL ``EXCLUDED.<feature>``.
 """
 from __future__ import annotations
 
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
+from sqlalchemy import text
 
 from backend.algo.jobs.entry_labeled_outcomes_rollup import (
     _aggregate_fills,
     _assemble_rows,
     _bare_ticker,
     _compute_outcomes,
+    _run,
     _scale_pct,
     _to_float,
     _to_ns_ticker,
@@ -23,6 +34,15 @@ from backend.algo.jobs.entry_labeled_outcomes_rollup import (
 _STRAT = "5c4aa66f-887c-44d6-a945-cefd4feec926"
 _USER = "60d30496-acb9-4530-8a4c-cf774c4934f4"
 _DAY = date(2026, 8, 10)
+_MODULE = "backend.algo.jobs.entry_labeled_outcomes_rollup"
+
+# A ticker that can never collide with real candidate data — the
+# integration tests below seed/upsert/delete rows scoped to exactly
+# this (strategy_id, ticker, trade_date) key against the real Docker
+# Postgres, using the real _STRAT (FK-valid) so no schema constraint
+# stands in the way, and clean up unconditionally in a finally block.
+_QA_TICKER = "ZZQATEST"
+_QA_DATE = date(2020, 1, 1)
 
 
 def _snapshot(**overrides):
@@ -433,3 +453,203 @@ def test_compute_outcomes_none_when_no_bars_found():
     assert out[key]["outcome_src"] == "none"
     assert out[key]["mfe_pct"] is None
     assert out[key]["mae_pct"] is None
+
+
+# --------------------------------------------------------------- #
+# Integration: real Docker Postgres, real _UPSERT_SQL
+# --------------------------------------------------------------- #
+#
+# These hit the actual algo.entry_labeled_outcomes table (via the
+# real disposable_pg_session, unmocked) to prove the DO UPDATE SET
+# clause itself is correct — a pure-Python mock session cannot
+# validate SQL semantics like COALESCE-vs-EXCLUDED. Only the Iceberg
+# gather functions (_fetch_snapshots/_fetch_rejections/
+# _fetch_closed_trades/_fetch_eqd/_compute_outcomes) are mocked, so
+# the run processes exactly the one synthetic candidate below and
+# never touches real dev data.
+
+
+async def _cleanup_qa_row() -> None:
+    async with _pg_session_cm() as session:
+        await session.execute(
+            text(
+                "DELETE FROM algo.entry_labeled_outcomes "
+                "WHERE ticker = :ticker AND trade_date = :trade_date "
+                "AND strategy_id = :strategy_id"
+            ),
+            {
+                "ticker": _QA_TICKER, "trade_date": _QA_DATE,
+                "strategy_id": _STRAT,
+            },
+        )
+        await session.commit()
+
+
+async def _seed_qa_row(**overrides) -> None:
+    """Simulate a PRE-1-reconstructed row: non-NULL features/QM/ESS
+    seeded directly (as PRE-1's backfill would have done), which the
+    daily job must never null out on a re-run."""
+    base = {
+        "user_id": _USER, "strategy_id": _STRAT, "mode": "live",
+        "ticker": _QA_TICKER, "trade_date": _QA_DATE,
+        "rsi2_at_entry": 42.5, "dist_sma50_pct": 12.3,
+        "dist_sma200_pct": 30.1, "qm_score": 77.3, "ess_score": 61.0,
+        "filled": True, "rejection_reason": None,
+        "realised_pnl_inr": 10.0, "outcome_settled": True,
+        "label_win": True, "dry_run": False,
+    }
+    base.update(overrides)
+    async with _pg_session_cm() as session:
+        await session.execute(
+            text(
+                "INSERT INTO algo.entry_labeled_outcomes ("
+                " user_id, strategy_id, mode, ticker, trade_date,"
+                " rsi2_at_entry, dist_sma50_pct, dist_sma200_pct,"
+                " qm_score, ess_score, filled, rejection_reason,"
+                " realised_pnl_inr, outcome_settled, label_win,"
+                " dry_run"
+                ") VALUES ("
+                " :user_id, :strategy_id, :mode, :ticker, :trade_date,"
+                " :rsi2_at_entry, :dist_sma50_pct, :dist_sma200_pct,"
+                " :qm_score, :ess_score, :filled, :rejection_reason,"
+                " :realised_pnl_inr, :outcome_settled, :label_win,"
+                " :dry_run"
+                ")"
+            ),
+            base,
+        )
+        await session.commit()
+
+
+def _pg_session_cm():
+    from backend.db.engine import disposable_pg_session
+
+    return disposable_pg_session()
+
+
+def _qa_fill(**overrides) -> dict:
+    base = {
+        "user_id": _USER, "strategy_id": _STRAT, "mode": "live",
+        "ticker": _QA_TICKER, "trade_date": _QA_DATE,
+        "entry_price": 100.0, "exit_price": 115.0,
+        "realised_pnl_inr": 15.0, "return_pct": 15.0,
+        "opened_at_ts_ns": 1000, "closed_at_ts_ns": 2000,
+        "closed_at": _QA_DATE, "exit_reason": "signal",
+        "buy_event_id": "qa-buy", "sell_event_id": "qa-sell",
+        "dry_run": False,
+    }
+    base.update(overrides)
+    return base
+
+
+async def _select_qa_row() -> dict:
+    async with _pg_session_cm() as session:
+        result = await session.execute(
+            text(
+                "SELECT rsi2_at_entry, dist_sma50_pct, "
+                "dist_sma200_pct, qm_score, ess_score, filled, "
+                "rejection_reason, realised_pnl_inr, "
+                "outcome_settled, label_win "
+                "FROM algo.entry_labeled_outcomes "
+                "WHERE ticker = :ticker AND trade_date = :trade_date "
+                "AND strategy_id = :strategy_id"
+            ),
+            {
+                "ticker": _QA_TICKER, "trade_date": _QA_DATE,
+                "strategy_id": _STRAT,
+            },
+        )
+        return dict(result.mappings().one())
+
+
+async def test_run_upsert_preserves_reconstructed_features():
+    """(1) seed a PRE-1-style row with non-NULL features for a fill
+    that has NO snapshot this run; (2) run the real upsert path;
+    (3) features survive (COALESCE), outcome cols update
+    (unconditional EXCLUDED). Runs the job TWICE to also prove the
+    real upsert path — not just the pure helper — is idempotent."""
+    await _cleanup_qa_row()
+    await _seed_qa_row()
+    try:
+        fill = _qa_fill()
+        with (
+            patch(f"{_MODULE}._fetch_snapshots", return_value={}),
+            patch(f"{_MODULE}._fetch_rejections", return_value={}),
+            patch(
+                f"{_MODULE}._fetch_closed_trades",
+                new=AsyncMock(return_value=[fill]),
+            ),
+            patch(f"{_MODULE}._fetch_eqd", return_value={}),
+            patch(f"{_MODULE}._compute_outcomes", return_value={}),
+        ):
+            result = await _run(
+                {"today": "2026-08-10", "window_days": 400},
+            )
+            assert result["rows_upserted"] == 1
+
+            row = await _select_qa_row()
+            # Enrichment columns SURVIVE: this run's fill carries no
+            # snapshot and _fetch_eqd found nothing new, so
+            # EXCLUDED.<feature> is NULL and COALESCE must fall back
+            # to the PRE-1-reconstructed values seeded above.
+            assert float(row["rsi2_at_entry"]) == 42.5
+            assert float(row["dist_sma50_pct"]) == 12.3
+            assert float(row["dist_sma200_pct"]) == 30.1
+            assert float(row["qm_score"]) == 77.3
+            assert float(row["ess_score"]) == 61.0
+            # Outcome/state columns DO update unconditionally.
+            assert row["filled"] is True
+            assert row["rejection_reason"] is None
+            assert float(row["realised_pnl_inr"]) == 15.0
+            assert row["outcome_settled"] is True
+
+            # Re-run: real upsert idempotency, not the pure helper.
+            result2 = await _run(
+                {"today": "2026-08-10", "window_days": 400},
+            )
+            assert result2["rows_upserted"] == 1
+            row2 = await _select_qa_row()
+            assert row2 == row
+    finally:
+        await _cleanup_qa_row()
+
+
+async def test_run_upsert_clears_rejection_reason_when_fills():
+    """A candidate rejected on an earlier run (rejection_reason set,
+    filled=false) that now FILLS must transition rejection_reason ->
+    NULL and filled -> true. Proves outcome/state columns are NOT
+    coalesced (a COALESCE there would wrongly freeze the stale
+    rejection_reason forever)."""
+    await _cleanup_qa_row()
+    await _seed_qa_row(
+        filled=False, rejection_reason="ticker_not_allowed",
+        realised_pnl_inr=None, outcome_settled=False,
+        label_win=None,
+    )
+    try:
+        fill = _qa_fill(realised_pnl_inr=20.0, return_pct=20.0)
+        with (
+            patch(f"{_MODULE}._fetch_snapshots", return_value={}),
+            patch(f"{_MODULE}._fetch_rejections", return_value={}),
+            patch(
+                f"{_MODULE}._fetch_closed_trades",
+                new=AsyncMock(return_value=[fill]),
+            ),
+            patch(f"{_MODULE}._fetch_eqd", return_value={}),
+            patch(f"{_MODULE}._compute_outcomes", return_value={}),
+        ):
+            result = await _run(
+                {"today": "2026-08-10", "window_days": 400},
+            )
+            assert result["rows_upserted"] == 1
+
+            row = await _select_qa_row()
+            assert row["filled"] is True
+            assert row["rejection_reason"] is None
+            assert float(row["realised_pnl_inr"]) == 20.0
+            assert row["outcome_settled"] is True
+            # Features seeded by PRE-1 still survive this transition.
+            assert float(row["rsi2_at_entry"]) == 42.5
+            assert float(row["qm_score"]) == 77.3
+    finally:
+        await _cleanup_qa_row()

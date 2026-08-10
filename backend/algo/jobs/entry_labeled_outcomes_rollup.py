@@ -138,7 +138,12 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
     async with disposable_pg_session() as session:
         fills = await _fetch_closed_trades(session, start, today)
 
-    eqd = _fetch_eqd(start, today)
+    candidate_tickers = sorted({
+        _to_ns_ticker(t) for t in (
+            {k[2] for k in snapshots} | {f["ticker"] for f in fills}
+        )
+    })
+    eqd = _fetch_eqd(candidate_tickers, start, today)
     outcomes = _compute_outcomes(fills)
 
     rows = _assemble_rows(snapshots, rejections, fills, eqd, outcomes)
@@ -291,11 +296,18 @@ def _fetch_rejections(
 
 
 def _fetch_eqd(
-    start: date, today: date,
+    tickers_ns: list[str], start: date, today: date,
 ) -> dict[tuple[str, date], dict[str, Any]]:
-    """QM/ESS join source, keyed by bare ticker + trade_date."""
+    """QM/ESS join source, keyed by bare ticker + trade_date.
+
+    Batched single read (CLAUDE.md §4.1 #1) scoped to the union of
+    every candidate/fill ticker (``.NS``-normalized) in this run —
+    never a full-universe scan."""
     from backend.db.duckdb_engine import query_iceberg_table
 
+    if not tickers_ns:
+        return {}
+    placeholders = ", ".join("?" for _ in tickers_ns)
     sql = (
         "SELECT ticker, trade_date, qm_score, ess_score, "
         "       ess_gate_passed, qm_mdd_pctile, qm_rs_pctile, "
@@ -303,9 +315,10 @@ def _fetch_eqd(
         "       ess_selling_deceleration_score, "
         "       ess_trend_stability_score "
         "FROM entry_quality_daily "
-        "WHERE trade_date >= ? AND trade_date <= ?"
+        f"WHERE ticker IN ({placeholders}) "
+        "  AND trade_date >= ? AND trade_date <= ?"
     )
-    params = [start.isoformat(), today.isoformat()]
+    params = [*tickers_ns, start.isoformat(), today.isoformat()]
     try:
         raw = query_iceberg_table(
             "stocks.entry_quality_daily", sql, params,
@@ -724,7 +737,7 @@ def _assemble_rows(
 
 
 _UPSERT_SQL = """
-INSERT INTO algo.entry_labeled_outcomes (
+INSERT INTO algo.entry_labeled_outcomes AS elo (
     user_id, strategy_id, mode, ticker, trade_date,
     signal_ts_ns, trigger, rsi2_at_entry, dist_sma50_pct,
     dist_sma200_pct, ret_1d_prior, ret_3d_prior, gap_pct,
@@ -751,27 +764,63 @@ INSERT INTO algo.entry_labeled_outcomes (
 )
 ON CONFLICT ON CONSTRAINT uq_entry_labeled_outcomes_signal
 DO UPDATE SET
-    signal_ts_ns = EXCLUDED.signal_ts_ns,
-    trigger = EXCLUDED.trigger,
-    rsi2_at_entry = EXCLUDED.rsi2_at_entry,
-    dist_sma50_pct = EXCLUDED.dist_sma50_pct,
-    dist_sma200_pct = EXCLUDED.dist_sma200_pct,
-    ret_1d_prior = EXCLUDED.ret_1d_prior,
-    ret_3d_prior = EXCLUDED.ret_3d_prior,
-    gap_pct = EXCLUDED.gap_pct,
-    breadth_oversold = EXCLUDED.breadth_oversold,
-    breadth_total = EXCLUDED.breadth_total,
-    qm_score = EXCLUDED.qm_score,
-    ess_score = EXCLUDED.ess_score,
-    ess_gate_passed = EXCLUDED.ess_gate_passed,
-    qm_mdd_pctile = EXCLUDED.qm_mdd_pctile,
-    qm_rs_pctile = EXCLUDED.qm_rs_pctile,
-    qm_sharpe_pctile = EXCLUDED.qm_sharpe_pctile,
-    ess_absorption_volume_score =
+    -- Enrichment (feature / QM / ESS) columns: COALESCE onto the
+    -- existing row. A fill with no matching entry_strength_snapshot
+    -- (or a trade_date outside stocks.entry_quality_daily coverage)
+    -- has NULL EXCLUDED.* for these columns — a straight EXCLUDED
+    -- assignment would overwrite a PRE-1 reconstructed value with
+    -- NULL on every re-run (2026-08-10 data-loss bug: this job
+    -- nulled all 70 PRE-1-seeded feature columns on its very first
+    -- run). ``elo`` (the INSERT INTO alias) qualifies the existing
+    -- row — a bare column name is AMBIGUOUS between the target row
+    -- and EXCLUDED (confirmed via psql), not an implicit reference
+    -- to the target row as the docs' phrasing suggests.
+    signal_ts_ns = COALESCE(EXCLUDED.signal_ts_ns, elo.signal_ts_ns),
+    trigger = COALESCE(EXCLUDED.trigger, elo.trigger),
+    rsi2_at_entry = COALESCE(
+        EXCLUDED.rsi2_at_entry, elo.rsi2_at_entry
+    ),
+    dist_sma50_pct = COALESCE(
+        EXCLUDED.dist_sma50_pct, elo.dist_sma50_pct
+    ),
+    dist_sma200_pct = COALESCE(
+        EXCLUDED.dist_sma200_pct, elo.dist_sma200_pct
+    ),
+    ret_1d_prior = COALESCE(EXCLUDED.ret_1d_prior, elo.ret_1d_prior),
+    ret_3d_prior = COALESCE(EXCLUDED.ret_3d_prior, elo.ret_3d_prior),
+    gap_pct = COALESCE(EXCLUDED.gap_pct, elo.gap_pct),
+    breadth_oversold = COALESCE(
+        EXCLUDED.breadth_oversold, elo.breadth_oversold
+    ),
+    breadth_total = COALESCE(
+        EXCLUDED.breadth_total, elo.breadth_total
+    ),
+    qm_score = COALESCE(EXCLUDED.qm_score, elo.qm_score),
+    ess_score = COALESCE(EXCLUDED.ess_score, elo.ess_score),
+    ess_gate_passed = COALESCE(
+        EXCLUDED.ess_gate_passed, elo.ess_gate_passed
+    ),
+    qm_mdd_pctile = COALESCE(
+        EXCLUDED.qm_mdd_pctile, elo.qm_mdd_pctile
+    ),
+    qm_rs_pctile = COALESCE(
+        EXCLUDED.qm_rs_pctile, elo.qm_rs_pctile
+    ),
+    qm_sharpe_pctile = COALESCE(
+        EXCLUDED.qm_sharpe_pctile, elo.qm_sharpe_pctile
+    ),
+    ess_absorption_volume_score = COALESCE(
         EXCLUDED.ess_absorption_volume_score,
-    ess_selling_deceleration_score =
+        elo.ess_absorption_volume_score
+    ),
+    ess_selling_deceleration_score = COALESCE(
         EXCLUDED.ess_selling_deceleration_score,
-    ess_trend_stability_score = EXCLUDED.ess_trend_stability_score,
+        elo.ess_selling_deceleration_score
+    ),
+    ess_trend_stability_score = COALESCE(
+        EXCLUDED.ess_trend_stability_score,
+        elo.ess_trend_stability_score
+    ),
     filled = EXCLUDED.filled,
     rejection_reason = EXCLUDED.rejection_reason,
     buy_event_id = EXCLUDED.buy_event_id,
