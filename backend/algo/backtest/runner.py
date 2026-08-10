@@ -1235,6 +1235,16 @@ def run_backtest(
             else:
                 continue
 
+            # Which leg fired — recorded on both the event and
+            # the entry-time feature snapshot below (spec §3.5).
+            _trigger_leg = (
+                "both"
+                if (forming_is_buy and closed_is_buy)
+                else "intraday_forming"
+                if forming_is_buy
+                else "yesterday_close"
+            )
+
             # Falling-knife veto — hard NO-ENTRY regardless of
             # which OR-trigger leg resolved the BUY.
             veto, _knife = _entry_falling_knife_veto(
@@ -1457,13 +1467,7 @@ def run_backtest(
                         "fee_rates_version": (
                             fill.fee_rates_version
                         ),
-                        "trigger": (
-                            "both"
-                            if (forming_is_buy and closed_is_buy)
-                            else "intraday_forming"
-                            if forming_is_buy
-                            else "yesterday_close"
-                        ),
+                        "trigger": _trigger_leg,
                     },
                 )
             )
@@ -1475,6 +1479,30 @@ def run_backtest(
 
                 _snap_fill_id = (
                     f"{session_id}:{fill.ticker}:{fill.intent_id}"
+                )
+                # Entry-time feature snapshot (spec §3.5) — the
+                # SAME per-trade mechanism the daily path uses
+                # (``write_trade_feature_snapshot``), fed the
+                # OR-trigger's winning-leg features (rsi_2,
+                # dist_sma50/200, ... via ``assemble_per_bar_
+                # features``, unchanged) PLUS the falling-knife
+                # veto's ret_3d/gap metrics (always computed
+                # above, regardless of veto outcome) and which
+                # leg fired. Built on a COPY — ``winning_feats``
+                # may be the cached ``closed_feats`` object
+                # shared across every exec bar of the same day
+                # via ``_closed_leg_cache``.
+                _entry_snapshot_feats: dict[str, Any] = dict(
+                    winning_feats or {},
+                )
+                _entry_snapshot_feats["entry_trigger_leg"] = (
+                    _trigger_leg
+                )
+                _entry_snapshot_feats["entry_ret_3d_pct"] = (
+                    _knife["ret_3d_pct"]
+                )
+                _entry_snapshot_feats["entry_gap_pct"] = (
+                    _knife["gap_pct"]
                 )
                 write_trade_feature_snapshot(
                     fill_id=_snap_fill_id,
@@ -1491,7 +1519,7 @@ def run_backtest(
                     ),
                     bar_date=fill.fill_date.isoformat(),
                     mode="backtest",
-                    features=winning_feats or {},
+                    features=_entry_snapshot_feats,
                 )
             except Exception:  # noqa: BLE001
                 _logger.exception(

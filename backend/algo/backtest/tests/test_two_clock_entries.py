@@ -1,5 +1,5 @@
-"""PRE-3 Task 1 + Task 2 — intraday entry evaluation on the exec
-clock.
+"""PRE-3 Task 1 + Task 2 + Task 3 — intraday entry evaluation on
+the exec clock.
 
 Task 1 (original tests below, unchanged): a *daily*-signal
 strategy running in two-clock mode must load per-exec-bar
@@ -15,6 +15,13 @@ the new path; uncovered tickers and every other mode (plain-
 daily, native-intraday, non-two-clock) keep the legacy once/day
 signal-bar entry.
 
+Task 3 (appended below): a closed trade produced by the intraday
+entry path carries its ENTRY-TIME features on the SAME per-trade
+snapshot mechanism the daily path uses
+(``write_trade_feature_snapshot``) — the OR-trigger's winning-leg
+features plus the falling-knife veto's ret_3d/gap metrics and
+which leg fired.
+
 Patch targets are module-level references in ``runner`` (mirrors
 ``test_two_clock_runner.py``):
   - ``runner.load_ohlcv_window``            — daily signal bars
@@ -23,6 +30,9 @@ Patch targets are module-level references in ``runner`` (mirrors
   - ``runner.load_intraday_features_window``— 15m exec features
     (the exec-bar "forming" leg's rsi_2, Task 1)
   - ``runner.flush_events``                 — no Iceberg writes
+  - ``backend.algo.features.snapshots.write_trade_feature_``
+    ``snapshot`` — patched at its SOURCE module (Task 3) so the
+    per-fill feature dict can be asserted on directly.
 """
 from __future__ import annotations
 
@@ -654,6 +664,56 @@ def test_intraday_entry_bills_delivery_fees_for_cnc():
         "fixture is vacuous — DELIVERY and INTRADAY fees must "
         "differ for this test to prove anything"
     )
+
+
+# ── (6b) PRE-3 Task 3 — entry-time feature snapshot ──────────────
+# The closed trade produced by the intraday entry path must carry
+# its ENTRY-TIME features (the R2 labeled row): same mechanism the
+# daily path uses (``write_trade_feature_snapshot``), fed the
+# OR-trigger's winning-leg features plus the falling-knife veto's
+# ret_3d/gap metrics and which leg fired.
+
+
+def test_intraday_entry_captures_entry_time_features():
+    ticker = "ENTRYFEAT.NS"
+    d = _BASE + timedelta(days=8)
+    daily = {ticker: _daily_bars_for(ticker, [100] * 9)}
+    cov = {ticker: TickerCoverage(ticker, 900, _BASE, d, 9)}
+    exec_bars = {ticker: _exec_bars_for(ticker, d)}
+    # rsi_2 neutral (50) all day except an oversold print at 11:00
+    # -> entry fires on the FORMING leg (mirrors test 1).
+    rsi_by_slot = {slot: "50" for slot in _EXEC_SLOTS}
+    rsi_by_slot[(11, 0)] = "3"
+    feat_panel = _feat_panel(ticker, d, rsi_by_slot)
+
+    with patch(
+        "backend.algo.features.snapshots.write_trade_feature_snapshot",
+    ) as mock_snap:
+        summary = _run(
+            strategy_dict=_rsi2_strategy(),
+            daily=daily, cov=cov, exec_bars=exec_bars,
+            feat_panel=feat_panel, universe=[ticker],
+            period_start=d, period_end=d,
+        )
+    assert len(summary.trade_list) == 1, summary.trade_list
+
+    buy_calls = [
+        c for c in mock_snap.call_args_list
+        if c.kwargs.get("side") == "BUY"
+    ]
+    assert len(buy_calls) == 1, mock_snap.call_args_list
+    feats = buy_calls[0].kwargs["features"]
+
+    # rsi_2 — the OR-trigger's winning (forming) leg value.
+    assert feats.get("rsi_2") == Decimal("3"), feats
+    # Which OR-trigger leg fired.
+    assert feats.get("entry_trigger_leg") == "intraday_forming", (
+        feats
+    )
+    # Falling-knife inputs — always computed (flat 100-close
+    # fixture -> both resolve to 0.0, not None/missing).
+    assert feats.get("entry_ret_3d_pct") is not None, feats
+    assert feats.get("entry_gap_pct") is not None, feats
 
 
 # ── (7) Uncovered ticker -> daily-fallback once/day entry ────────
