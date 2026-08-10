@@ -768,11 +768,12 @@ def test_ast_sell_exits_intraday_for_held_covered_ticker():
         "else": {"type": "hold"},
     }
 
+    captured: list = []
     summary = _run(
         strategy_dict=strategy_dict,
         daily=daily, cov=cov, exec_bars=exec_bars,
         feat_panel=feat_panel, universe=[ticker],
-        period_start=d, period_end=d,
+        period_start=d, period_end=d, captured_events=captured,
     )
     assert len(summary.trade_list) == 1, summary.trade_list
     trade = summary.trade_list[0]
@@ -788,6 +789,50 @@ def test_ast_sell_exits_intraday_for_held_covered_ticker():
     assert trade.closed_at_ts_ns == _ns(d, 11, 15), (
         f"expected the 11:00 AST exit decision to fill at 11:15, "
         f"got {trade.closed_at_ts_ns}"
+    )
+
+    # Fix-loop round 2 (MUST-FIX) — the AST-exit SELL must bill
+    # DELIVERY fees for this CNC strategy, exactly like the
+    # entry-side regression (test 6). ``_action_to_intent``'s
+    # ``sell``/``exit`` branches used to drop ``product``
+    # entirely, so ``SimBroker`` inferred INTRADAY from the real
+    # exec-bar ``ts_ns`` and mis-billed cheap intraday STT/
+    # brokerage on a CNC exit.
+    sell_fills = [
+        e for e in captured
+        if e.get("type") == "order_filled"
+        and _payload(e).get("side") == "SELL"
+    ]
+    assert len(sell_fills) == 1, sell_fills
+    sell_payload = _payload(sell_fills[0])
+    exit_fill_price = Decimal(sell_payload["fill_price"])
+    exit_booked_fees = Decimal(sell_payload["fees_inr"])
+
+    fees = IndianFeeModel(as_of=d)
+    exit_delivery_fees = fees.compute(
+        Trade(
+            symbol=ticker, exchange="NSE", side="SELL",
+            product="DELIVERY", qty=sell_payload["qty"],
+            price=exit_fill_price,
+        )
+    ).total_inr
+    exit_intraday_fees = fees.compute(
+        Trade(
+            symbol=ticker, exchange="NSE", side="SELL",
+            product="INTRADAY", qty=sell_payload["qty"],
+            price=exit_fill_price,
+        )
+    ).total_inr
+
+    assert exit_booked_fees == exit_delivery_fees, (
+        f"CNC intraday-triggered AST exit must bill DELIVERY fees "
+        f"({exit_delivery_fees}), got {exit_booked_fees} — "
+        f"'sell'/'exit' branches of _action_to_intent must forward "
+        f"``product`` into the OrderIntent"
+    )
+    assert exit_delivery_fees != exit_intraday_fees, (
+        "fixture is vacuous — DELIVERY and INTRADAY fees must "
+        "differ for this test to prove anything"
     )
 
 

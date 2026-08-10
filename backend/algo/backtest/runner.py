@@ -812,6 +812,7 @@ def run_backtest(
         double-close a position those exits already closed.
         """
         nonlocal total_fees, fee_rates_version
+        nonlocal rejected_count, scaled_count
         _raw = exec_intraday_features.get((ticker, exit_ts_ns))
         if _raw is None:
             return  # no forming-bar features -> nothing to eval.
@@ -878,6 +879,99 @@ def run_backtest(
         )
         if intent is None or intent.side != "SELL":
             return  # buy / hold / a never-trims set_target_weight.
+
+        # Fix-loop round 2 (SHOULD-FIX) — route this SIGNAL exit
+        # through the SAME 3-tier RiskEngine gate the sibling
+        # non-covered AST-sell path uses (both sides, not just
+        # BUY), so the two paths handle a resolved SELL
+        # identically rather than one skipping the gate. Backtest
+        # hardcodes ``kill_switch_active=False`` so behaviour is
+        # unchanged today; this removes the structural divergence.
+        if _cur is None:
+            return  # no price to gate/size against this bar.
+        current_equity = (
+            request.initial_capital_inr
+            + pt.total_realised_pnl_inr()
+            - total_fees
+        )
+        open_qty_map = {
+            t: p.qty for t, p in pt.open_positions().items()
+        }
+        day_realised = (
+            pt.total_realised_pnl_inr() - day_start_realised
+        )
+        account_state = AccountState(
+            user_id=user_id,
+            day_date=exit_bar_date,
+            initial_capital_inr=request.initial_capital_inr,
+            current_equity_inr=current_equity,
+            daily_realised_pnl_inr=day_realised,
+            daily_unrealised_pnl_inr=Decimal("0"),
+            open_positions=open_qty_map,
+            open_position_count=len(open_qty_map),
+            kill_switch_active=False,
+        )
+        signal = Signal(
+            strategy_id=strategy.id,
+            user_id=user_id,
+            ticker=intent.ticker,
+            side=intent.side,
+            qty=intent.qty,
+            emitted_at_ns=exit_ts_ns,
+        )
+        decision = risk.gate(
+            signal=signal,
+            account=account_state,
+            risk=risk_payload,
+            last_price=_cur.close,
+        )
+        if decision.outcome == "reject":
+            rejected_count += 1
+            _rk = (ticker, exit_bar_date)
+            if _rk not in _rejected_today:
+                _rejected_today.add(_rk)
+                events.append(
+                    event_row(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy.id,
+                        mode="backtest",
+                        type_="signal_rejected",
+                        payload={
+                            "ticker": intent.ticker,
+                            "side": intent.side,
+                            "qty": intent.qty,
+                            "reason": (
+                                decision.reason.value
+                                if decision.reason
+                                else "unknown"
+                            ),
+                            "threshold": (
+                                str(decision.threshold)
+                                if decision.threshold is not None
+                                else None
+                            ),
+                            "observed_value": (
+                                str(decision.observed_value)
+                                if decision.observed_value
+                                is not None
+                                else None
+                            ),
+                        },
+                    )
+                )
+            return
+        if (
+            decision.outcome == "scale"
+            and decision.adjusted_qty
+            and decision.adjusted_qty > 0
+            and decision.adjusted_qty < intent.qty
+        ):
+            scaled_count += 1
+            intent = intent.model_copy(
+                update={"qty": decision.adjusted_qty},
+            )
+
         try:
             fill = (
                 exec_sim_broker.execute(intent)
@@ -2637,6 +2731,7 @@ def _action_to_intent(
                 qty=existing.qty,
                 intent_emitted_at=bar_date,
                 intent_emitted_ts_ns=bar_open_ts_ns,
+                product=product,
             )
         qty = qty_spec.get("shares") or 0
         if qty <= 0:
@@ -2647,6 +2742,7 @@ def _action_to_intent(
             qty=int(qty),
             intent_emitted_at=bar_date,
             intent_emitted_ts_ns=bar_open_ts_ns,
+            product=product,
         )
     if t == "exit":
         existing = pt.open_positions().get(ticker)
@@ -2658,6 +2754,7 @@ def _action_to_intent(
             qty=existing.qty,
             intent_emitted_at=bar_date,
             intent_emitted_ts_ns=bar_open_ts_ns,
+            product=product,
         )
     if t == "set_target_weight":
         # Resolve the weight against current equity at this bar.
