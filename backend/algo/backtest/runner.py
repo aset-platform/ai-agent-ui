@@ -535,6 +535,50 @@ def run_backtest(
             len(daily_fallback_tickers),
         )
 
+    # ASETPLTFRM-477 / PRE-3 Task 1 — per-exec-bar intraday
+    # FEATURES (incl. ``rsi_2``) for exec-covered tickers, so a
+    # later task can evaluate entries against the execution clock
+    # (mirroring live R1's OR-trigger), rather than daily-close
+    # only. Loaded ONLY for two-clock DAILY-signal runs (this
+    # whole setup block is gated on ``request.interval_sec ==
+    # 86400``, i.e. ``not is_intraday``) — the native-intraday
+    # branch above already loads its own feature panel and the
+    # non-two-clock daily path is untouched. Uncovered tickers
+    # (``daily_fallback_tickers``) are skipped — they're not in
+    # ``exec_covered`` and keep the once/day daily-close entry.
+    # Indexed flat by ``(ticker, ts_ns)`` per the design spec
+    # (§3.1) so Task 2 can do a single dict lookup per exec bar.
+    exec_intraday_features: dict[tuple[str, int], dict[str, Any]] = {}
+    if exec_covered and not is_intraday:
+        try:
+            _exec_feature_panel = load_intraday_features_window(
+                tickers=sorted(exec_covered),
+                interval_sec=execution_interval_sec,
+                period_start=request.period_start,
+                period_end=request.period_end,
+            )
+        except Exception as exc:
+            # A missing/partial feature panel (or any loader
+            # failure — Iceberg catalog, cache, on-demand backfill)
+            # MUST NOT crash the run. Task 2 will find no entries
+            # for these tickers at the exec grain; they still get
+            # the existing daily-close signal-bar evaluation, so
+            # this degrades gracefully rather than failing closed.
+            _logger.warning(
+                "two-clock: intraday feature panel load failed for "
+                "exec-covered tickers (interval_sec=%d, %s..%s); "
+                "entries stay daily-close-only: %s",
+                execution_interval_sec,
+                request.period_start,
+                request.period_end,
+                exc,
+                exc_info=True,
+            )
+            _exec_feature_panel = {}
+        for _ticker, _rows in _exec_feature_panel.items():
+            for _ts_ns, _feat in _rows.items():
+                exec_intraday_features[(_ticker, _ts_ns)] = _feat
+
     # ExecutionSimulator owns the per-ticker TrailingStopManager
     # lifecycle in two-clock mode (same class drives live, so
     # behaviour cannot diverge). Instantiated always; only USED
