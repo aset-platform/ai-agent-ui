@@ -165,6 +165,13 @@ FEATURES: list[Feature] = [
         scale="percent",
     ),
     Feature(
+        key="nifty_distance_from_sma200_pct",
+        label="NIFTY distance from SMA200 %",
+        type="float",
+        source="technical",
+        scale="percent",
+    ),
+    Feature(
         key="today_dpc",
         label="Today delivery %",
         type="float",

@@ -26,6 +26,7 @@ from backend.algo.backtest.event_writer import event_row, flush_events
 from backend.algo.backtest.indicators import (
     DEFAULT_WARMUP_BARS,
     compute_indicators_for_universe,
+    compute_market_distance_from_sma200,
     compute_market_regime,
     compute_market_trend_strength,
 )
@@ -270,6 +271,13 @@ def run_backtest(
         period_end=request.period_end,
     )
     market_trend = compute_market_trend_strength(
+        period_start=request.period_start,
+        period_end=request.period_end,
+    )
+    # Continuous-band counterpart to ``market_regime`` — percent
+    # distance from SMA200 instead of the binary 1/0 flag. Empty
+    # dict if ^NSEI absent → callers fall back to Decimal("0").
+    market_dist_sma200 = compute_market_distance_from_sma200(
         period_start=request.period_start,
         period_end=request.period_end,
     )
@@ -1022,6 +1030,10 @@ def run_backtest(
                 market_feats["nifty_30d_return_pct"] = (
                     _mt if _mt is not None else Decimal("0")
                 )
+                _mds = market_dist_sma200.get(bar_date)
+                market_feats["nifty_distance_from_sma200_pct"] = (
+                    _mds if _mds is not None else Decimal("0")
+                )
                 _rr = regime_by_date.get(bar_date)
                 if _rr:
                     # regime_by_date returns dict with regime_label
@@ -1196,6 +1208,7 @@ def run_backtest(
                 bar_feats=bar_feats,
                 market_regime=market_regime.get(bar_date),
                 market_trend=market_trend.get(bar_date),
+                market_dist_sma200=market_dist_sma200.get(bar_date),
                 factor_row=factors_by_key.get((ticker, bar_date)),
                 regime_row=regime_by_date.get(bar_date),
                 daily_overlay=lookup_daily_overlay(

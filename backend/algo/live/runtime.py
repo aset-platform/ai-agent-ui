@@ -505,10 +505,14 @@ class LiveRuntime:
         # pattern as PaperRuntime + the backtest runner.
         self._market_regime: dict[Any, Decimal] = {}
         self._market_trend: dict[Any, Decimal] = {}
+        self._market_dist_sma200: dict[Any, Decimal] = {}
         try:
             from datetime import date as _date
             from datetime import timedelta
 
+            from backend.algo.backtest.indicators import (
+                compute_market_distance_from_sma200 as _cmds,
+            )
             from backend.algo.backtest.indicators import (
                 compute_market_regime as _cmr,
             )
@@ -523,11 +527,13 @@ class LiveRuntime:
             window_start = today - timedelta(days=365 * 3)
             self._market_regime = _cmr(window_start, today)
             self._market_trend = _cmts(window_start, today)
+            self._market_dist_sma200 = _cmds(window_start, today)
             _logger.info(
                 "LiveRuntime: regime cache loaded — %d regime "
-                "days, %d trend days",
+                "days, %d trend days, %d dist-sma200 days",
                 len(self._market_regime),
                 len(self._market_trend),
+                len(self._market_dist_sma200),
             )
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
@@ -3681,6 +3687,20 @@ class LiveRuntime:
                 ),
                 None,
             ),
+            market_dist_sma200=next(
+                (
+                    self._market_dist_sma200.get(
+                        bar_date_obj - timedelta(days=n)
+                    )
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._market_dist_sma200.get(
+                        bar_date_obj - timedelta(days=n)
+                    )
+                    is not None
+                ),
+                None,
+            ),
             factor_row=next(
                 (
                     self._factor_cache.get(
@@ -5538,6 +5558,20 @@ class LiveRuntime:
                         for n in range(8)
                         if (closed_date - timedelta(days=n)).weekday() < 5
                         and self._market_trend.get(closed_date - timedelta(days=n))
+                        is not None
+                    ),
+                    None,
+                ),
+                market_dist_sma200=next(
+                    (
+                        self._market_dist_sma200.get(
+                            closed_date - timedelta(days=n)
+                        )
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._market_dist_sma200.get(
+                            closed_date - timedelta(days=n)
+                        )
                         is not None
                     ),
                     None,

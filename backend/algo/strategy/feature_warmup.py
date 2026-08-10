@@ -79,6 +79,7 @@ _OVERRIDES: dict[str, int] = {
     "vix_sma_20": 0,
     "nifty_above_sma200": 0,
     "nifty_30d_return_pct": 0,
+    "nifty_distance_from_sma200_pct": 0,
     "midcap_largecap_ratio": 0,
     "advance_decline_ratio": 0,
     "minutes_since_open": 0,
