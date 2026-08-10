@@ -29,6 +29,103 @@ import {
   useStrategies,
 } from "@/hooks/useStrategies";
 
+interface StartConfirmModalProps {
+  strategyName: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  pending: boolean;
+  error: string | null;
+}
+
+/** Typed-confirmation gate on every live-runtime start, mirroring
+ * LiveModeToggle's EnableConfirmModal. Caps.live_orders_enabled is
+ * a one-time toggle — once flipped (e.g. during earlier setup), a
+ * bare "Start live runtime" click on any later day places real
+ * Kite orders with no further confirmation. Found 2026-08-10: a
+ * dry-run rehearsal was intended but this panel (Live tab, no
+ * dry-run option) was clicked instead, and the run went live
+ * immediately since caps were already enabled from prior testing. */
+function StartLiveConfirmModal({
+  strategyName,
+  onConfirm,
+  onCancel,
+  pending,
+  error,
+}: StartConfirmModalProps) {
+  const [typed, setTyped] = useState("");
+  const matches = typed.trim() === strategyName;
+
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex items-center justify-center
+        bg-black/50 backdrop-blur-sm"
+      data-testid="live-start-confirm-modal-overlay"
+    >
+      <div
+        className="w-full max-w-sm rounded-lg border border-slate-200
+          bg-white p-5 shadow-xl dark:border-slate-700 dark:bg-slate-900"
+        data-testid="live-start-confirm-modal"
+      >
+        <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+          Start live runtime
+        </h3>
+        <p className="mt-2 text-xs text-slate-600 dark:text-slate-400">
+          Real orders will be placed via Kite. Losses are possible.
+          <br />
+          Type the strategy name to confirm:
+          <strong className="block mt-1 text-slate-800 dark:text-slate-200">
+            {strategyName}
+          </strong>
+        </p>
+
+        <input
+          type="text"
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          placeholder="Retype strategy name"
+          autoFocus
+          className="mt-3 w-full rounded border border-slate-300 px-2 py-1.5
+            text-sm dark:border-slate-600 dark:bg-slate-800
+            dark:text-slate-100"
+          data-testid="live-start-confirm-modal-name-input"
+        />
+
+        {error && (
+          <p
+            className="mt-2 text-xs text-rose-600"
+            data-testid="live-start-confirm-modal-error"
+          >
+            {error}
+          </p>
+        )}
+
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={pending}
+            className="rounded border border-slate-300 px-3 py-1 text-sm
+              dark:border-slate-600"
+            data-testid="live-start-confirm-modal-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={!matches || pending}
+            className="rounded bg-rose-600 px-3 py-1 text-sm text-white
+              hover:bg-rose-700 disabled:opacity-50"
+            data-testid="live-start-confirm-modal-confirm"
+          >
+            {pending ? "Starting…" : "Start live runtime"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface Props {
   /** Selected strategy id, hoisted to LiveDashboard so all Live
    *  page dropdowns (Start picker, safety belts, attribution)
@@ -71,10 +168,13 @@ export function LiveActiveRunsPanel({
   const [capital, setCapital] = useState<string>("100000.00");
   const [pending, setPending] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [showStartConfirm, setShowStartConfirm] = useState(false);
 
   const kiteConnected = brokerStatus?.status === "connected";
+  const selectedStrategyName =
+    strategies.find((s) => s.id === strategyId)?.name ?? "";
 
-  async function handleStart() {
+  function handleStart() {
     if (!strategyId) {
       setErr("Pick a strategy");
       return;
@@ -83,6 +183,11 @@ export function LiveActiveRunsPanel({
       setErr("Connect Zerodha first");
       return;
     }
+    setErr(null);
+    setShowStartConfirm(true);
+  }
+
+  async function doStart() {
     setErr(null);
     setPending(strategyId);
     try {
@@ -93,6 +198,7 @@ export function LiveActiveRunsPanel({
         "live-ws",
         "live",
       );
+      setShowStartConfirm(false);
     } catch (exc) {
       setErr(exc instanceof Error ? exc.message : "Failed");
     } finally {
@@ -113,6 +219,7 @@ export function LiveActiveRunsPanel({
   }
 
   return (
+    <>
     <div
       className="rounded-md border border-rose-200 dark:border-rose-900/40 bg-rose-50/30 dark:bg-rose-950/10 p-3"
       data-testid="live-active-runs-panel"
@@ -251,5 +358,19 @@ export function LiveActiveRunsPanel({
         )}
       </div>
     </div>
+
+    {showStartConfirm && (
+      <StartLiveConfirmModal
+        strategyName={selectedStrategyName}
+        onConfirm={doStart}
+        onCancel={() => {
+          setShowStartConfirm(false);
+          setErr(null);
+        }}
+        pending={pending === strategyId}
+        error={err}
+      />
+    )}
+    </>
   );
 }
