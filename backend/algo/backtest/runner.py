@@ -9,8 +9,10 @@ commit at the end (not per-event), no per-ticker hot loops.
 
 from __future__ import annotations
 
+import bisect
 import logging
-from datetime import date, datetime, timezone
+import os
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -83,6 +85,131 @@ from backend.algo.strategy.ast import Strategy
 from backend.db.duckdb_engine import query_iceberg_table
 
 _logger = logging.getLogger(__name__)
+
+
+# ASETPLTFRM-477 / PRE-3 Task 2 — intraday entry evaluation on
+# the execution clock (two-clock daily-signal mode only).
+# Mirrors ``backend/algo/live/runtime.py``'s OR-trigger entry
+# stack: 09:30 floor + falling-knife veto. No new schema — the
+# env knobs are the SAME ones live already reads, per spec §7.
+
+
+def _env_float(name: str, default: float) -> float:
+    """Parse a float env var; falls back to ``default`` on any
+    parse failure (unset, empty, non-numeric)."""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Earliest exec-bar IST time at which an intraday-triggered BUY
+# may fire — skips the 09:15 opening bar (pre-open auction /
+# high-volatility price discovery), mirroring live's
+# ``_MIN_BUY_TIME_IST`` default. No env override here (only the
+# knife thresholds are env-tunable per spec §7).
+_INTRADAY_ENTRY_FLOOR_IST = time(9, 30)
+
+# Falling-knife veto thresholds — same env vars live reads.
+_ENTRY_KNIFE_3D_PCT = _env_float(
+    "ALGO_ENTRY_FALLING_KNIFE_3D_PCT", -10.0,
+)
+_ENTRY_KNIFE_GAP_PCT = _env_float(
+    "ALGO_ENTRY_FALLING_KNIFE_GAP_PCT", -4.0,
+)
+
+
+def _entry_closed_bars_and_today(
+    daily_bars: list[Any], bar_date: date,
+) -> tuple[list[Any], Any | None]:
+    """Split a ticker's ASCENDING daily bar list into (closed
+    bars strictly before ``bar_date``, today's own daily bar or
+    ``None``). Mirrors live's ``history[:-1]`` / ``history[-1]``
+    split used by ``_eval_entry_on_closed_bar`` /
+    ``_in_free_fall`` — the closed-bar OR-trigger leg and the
+    falling-knife veto both read from this same split so they
+    can never disagree on what "yesterday" means for a ticker.
+    """
+    idx = bisect.bisect_left(
+        daily_bars, bar_date, key=lambda b: b.date,
+    )
+    closed = daily_bars[:idx]
+    today = (
+        daily_bars[idx]
+        if idx < len(daily_bars) and daily_bars[idx].date == bar_date
+        else None
+    )
+    return closed, today
+
+
+def _entry_falling_knife_veto(
+    closed_bars: list[Any], today_bar: Any | None,
+) -> tuple[bool, dict[str, float | None]]:
+    """True + metrics iff the entry-day name is a "falling
+    knife" (mirrors live ``LiveRuntime._in_free_fall``):
+    prior-3-trading-day return <= ``_ENTRY_KNIFE_3D_PCT`` OR
+    entry-day gap (today's open vs yesterday's close) <=
+    ``_ENTRY_KNIFE_GAP_PCT``. Missing/short history -> no veto.
+    """
+    metrics: dict[str, float | None] = {
+        "ret_3d_pct": None,
+        "gap_pct": None,
+    }
+    if len(closed_bars) >= 4:
+        c_now = float(closed_bars[-1].close)
+        c_4 = float(closed_bars[-4].close)
+        if c_4 > 0:
+            metrics["ret_3d_pct"] = (c_now / c_4 - 1.0) * 100.0
+    if closed_bars and today_bar is not None:
+        c_prev = float(closed_bars[-1].close)
+        if c_prev > 0:
+            metrics["gap_pct"] = (
+                float(today_bar.open) / c_prev - 1.0
+            ) * 100.0
+    veto = (
+        (
+            metrics["ret_3d_pct"] is not None
+            and metrics["ret_3d_pct"] <= _ENTRY_KNIFE_3D_PCT
+        )
+        or (
+            metrics["gap_pct"] is not None
+            and metrics["gap_pct"] <= _ENTRY_KNIFE_GAP_PCT
+        )
+    )
+    return veto, metrics
+
+
+def _entry_is_buy_action(action: Any) -> bool:
+    """True iff an evaluator action resolves to a BUY for a FLAT
+    ticker — mirrors live's ``signal.side == "BUY"`` check
+    without needing a full ``OrderIntent``/sizing context.
+    ``set_target_weight`` with weight>0 always resolves to a BUY
+    when flat (diff = target_qty - 0); ``_action_to_intent``
+    remains the authority that can still drop a ``buy`` to
+    qty<=0 (no-op) once real sizing runs.
+    """
+    if not isinstance(action, dict):
+        return False
+    t = action.get("type")
+    if t == "buy":
+        qty_spec = action.get("qty") or {}
+        if "shares" in qty_spec:
+            return (qty_spec.get("shares") or 0) > 0
+        if "notional_inr" in qty_spec:
+            try:
+                return Decimal(str(qty_spec["notional_inr"])) > 0
+            except Exception:  # noqa: BLE001
+                return False
+        # vol_target_pct / kelly_fraction — resolved via the
+        # sizing composer downstream; treat any such spec as a
+        # buy candidate here (composer can still size to 0).
+        return True
+    if t == "set_target_weight":
+        try:
+            return Decimal(str(action.get("weight", 0))) > 0
+        except Exception:  # noqa: BLE001
+            return False
+    return False
 
 
 def _trade_row(p, fill_price: Decimal) -> TradeRow:  # noqa: ANN001
@@ -436,9 +563,9 @@ def run_backtest(
         square_off_ist = parse_ist_time(
             strategy.square_off_time
         ) or parse_ist_time("15:14 IST")
-        # Group bar ts_ns by trading day.
+        # Group bar ts_ns by trading day. ``time`` is imported at
+        # module level (PRE-3 Task 2 needs it for the 09:30 floor).
         by_day: dict[date, list[tuple[int, "time"]]] = {}
-        from datetime import time  # noqa: E402  (local import)
 
         for bd, ns in timeline:
             if ns is None:
@@ -635,6 +762,451 @@ def run_backtest(
     walk_timeline: list[tuple[date, int | None]] = (
         exec_timeline if two_clock else timeline  # type: ignore[assignment]
     )
+
+    # ASETPLTFRM-477 / PRE-3 Task 2 — per-ticker/day dedup + the
+    # closed-bar-leg action cache (mirrors live's
+    # ``_closed_entry_cache`` — the "yesterday's close" decision
+    # is constant for the whole trading day, so it's computed
+    # once per (ticker, bar_date) and reused across every exec
+    # bar that day).
+    _entered_today: set[tuple[str, date]] = set()
+    _closed_leg_cache: dict[
+        tuple[str, date], tuple[Any, dict[str, Any] | None]
+    ] = {}
+
+    def _evaluate_intraday_entry(
+        entry_bar_date: date, entry_ts_ns: int | None,
+    ) -> None:
+        """Evaluate ENTRIES on the execution clock for two-clock
+        daily-signal COVERED tickers (mirrors live R1's
+        OR-trigger: intraday-forming leg OR prior daily-close
+        leg). NO-OP unless ``two_clock and not is_intraday`` —
+        every other mode (plain-daily, native-intraday, non-two-
+        clock, and two-clock daily-fallback UNCOVERED tickers)
+        is untouched by this function; those keep the once/day
+        ``is_signal_bar``-gated entry block below, which now
+        skips ``exec_covered`` tickers (see the reconciliation
+        there) to avoid a double-entry.
+        """
+        nonlocal total_fees, fee_rates_version
+        nonlocal rejected_count, scaled_count, cooldown_skip_count
+        if not (two_clock and not is_intraday):
+            return
+        bar_ist = ist_time_from_ns(entry_ts_ns)
+        if bar_ist is None or bar_ist < _INTRADAY_ENTRY_FLOOR_IST:
+            return  # 09:30 floor — skip the 09:15 opening bar.
+
+        cooldown_days = (
+            strategy.risk.per_trade.cooldown_after_failed_exit_days
+        )
+        closed_for_cd = (
+            pt.closed_positions() if cooldown_days else []
+        )
+        open_now = pt.open_positions()
+
+        for ticker in universe:
+            if ticker not in exec_covered:
+                continue  # daily-fallback keeps the legacy path.
+            if (ticker, entry_bar_date) in _entered_today:
+                continue  # once-per-day-per-ticker dedup.
+            pos = open_now.get(ticker)
+            if pos is not None and pos.qty > 0:
+                continue  # only a FLAT ticker evaluates an entry.
+            if cooldown_days and in_cooldown(
+                ticker=ticker,
+                bar_date=entry_bar_date,
+                closed_positions=closed_for_cd,
+                cooldown_days=cooldown_days,
+            ):
+                cooldown_skip_count += 1
+                continue
+
+            daily_blist = bars.get(ticker, [])
+            closed_bars, today_bar = _entry_closed_bars_and_today(
+                daily_blist, entry_bar_date,
+            )
+
+            # -- Forming leg: current exec-bar intraday features.
+            forming_action: Any = None
+            forming_feats: dict[str, Any] | None = None
+            _raw_forming = exec_intraday_features.get(
+                (ticker, entry_ts_ns),
+            )
+            if _raw_forming is not None:
+                forming_feats = assemble_per_bar_features(
+                    bar_feats=_raw_forming,
+                    market_regime=market_regime.get(
+                        entry_bar_date,
+                    ),
+                    market_trend=market_trend.get(
+                        entry_bar_date,
+                    ),
+                    market_dist_sma200=market_dist_sma200.get(
+                        entry_bar_date,
+                    ),
+                    factor_row=factors_by_key.get(
+                        (ticker, entry_bar_date),
+                    ),
+                    regime_row=regime_by_date.get(
+                        entry_bar_date,
+                    ),
+                    daily_overlay=lookup_daily_overlay(
+                        daily_panel=daily_overlay_panel,
+                        ticker=ticker,
+                        bar_date=entry_bar_date,
+                    ),
+                )
+                try:
+                    forming_action = evaluator.eval_node(
+                        strategy.root.model_dump(by_alias=True),
+                        EvalContext(
+                            ticker=ticker,
+                            bar_date=entry_bar_date,
+                            features=forming_feats,
+                            open_qty=0,
+                        ),
+                    )
+                except KeyError:
+                    forming_action = None
+                except Exception:  # noqa: BLE001
+                    forming_action = None
+            forming_is_buy = _entry_is_buy_action(forming_action)
+
+            # -- Closed leg: prior trading day's daily close,
+            # cached per (ticker, entry_bar_date) since it never
+            # changes across the day's exec bars.
+            prior_date = (
+                closed_bars[-1].date if closed_bars else None
+            )
+            closed_action: Any = None
+            closed_feats: dict[str, Any] | None = None
+            if prior_date is not None:
+                _ck = (ticker, entry_bar_date)
+                if _ck in _closed_leg_cache:
+                    closed_action, closed_feats = (
+                        _closed_leg_cache[_ck]
+                    )
+                else:
+                    _bar_feats = indicators.get(ticker, {}).get(
+                        prior_date,
+                    )
+                    if _bar_feats is not None:
+                        closed_feats = assemble_per_bar_features(
+                            bar_feats=_bar_feats,
+                            market_regime=market_regime.get(
+                                prior_date,
+                            ),
+                            market_trend=market_trend.get(
+                                prior_date,
+                            ),
+                            market_dist_sma200=(
+                                market_dist_sma200.get(
+                                    prior_date,
+                                )
+                            ),
+                            factor_row=factors_by_key.get(
+                                (ticker, prior_date),
+                            ),
+                            regime_row=regime_by_date.get(
+                                prior_date,
+                            ),
+                            daily_overlay=lookup_daily_overlay(
+                                daily_panel=daily_overlay_panel,
+                                ticker=ticker,
+                                bar_date=prior_date,
+                            ),
+                        )
+                        try:
+                            closed_action = evaluator.eval_node(
+                                strategy.root.model_dump(
+                                    by_alias=True,
+                                ),
+                                EvalContext(
+                                    ticker=ticker,
+                                    bar_date=prior_date,
+                                    features=closed_feats,
+                                    open_qty=0,
+                                ),
+                            )
+                        except KeyError:
+                            closed_action = None
+                        except Exception:  # noqa: BLE001
+                            closed_action = None
+                    _closed_leg_cache[_ck] = (
+                        closed_action, closed_feats,
+                    )
+            closed_is_buy = _entry_is_buy_action(closed_action)
+
+            # OR-trigger — forming leg wins if it fires; else
+            # fall back to the carried closed-bar decision.
+            if forming_is_buy:
+                winning_action = forming_action
+                winning_feats = forming_feats
+            elif closed_is_buy:
+                winning_action = closed_action
+                winning_feats = closed_feats
+            else:
+                continue
+
+            # Falling-knife veto — hard NO-ENTRY regardless of
+            # which OR-trigger leg resolved the BUY.
+            veto, _knife = _entry_falling_knife_veto(
+                closed_bars, today_bar,
+            )
+            if veto:
+                rejected_count += 1
+                events.append(
+                    event_row(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy.id,
+                        mode="backtest",
+                        type_="signal_rejected",
+                        payload={
+                            "ticker": ticker,
+                            "side": "BUY",
+                            "reason": "falling_knife_veto",
+                            **_knife,
+                        },
+                    )
+                )
+                _logger.debug(
+                    "falling-knife veto ticker=%s ret_3d=%s "
+                    "gap=%s",
+                    ticker,
+                    _knife["ret_3d_pct"],
+                    _knife["gap_pct"],
+                )
+                continue
+
+            current_bar = exec_by_ts.get(ticker, {}).get(
+                entry_ts_ns,
+            )
+            if current_bar is None:
+                continue
+            current_equity = (
+                request.initial_capital_inr
+                + pt.total_realised_pnl_inr()
+                - total_fees
+            )
+            factor_row = factors_by_key.get(
+                (ticker, entry_bar_date), {},
+            )
+            realized_vol = factor_row.get(
+                "realized_vol_60d", Decimal("NaN"),
+            )
+            sizing_ctx = SizingContext(
+                ticker=ticker,
+                bar_date=entry_bar_date,
+                nav=current_equity,
+                cash=current_equity,
+                stock_price=current_bar.close,
+                realized_vol_annual=realized_vol,
+                sector=None,
+                sector_exposure=Decimal("0"),
+                equity_curve=[
+                    (p.bar_date, p.equity_inr)
+                    for p in equity_points
+                ],
+            )
+            intent = _action_to_intent(
+                winning_action,
+                ticker=ticker,
+                bar_date=entry_bar_date,
+                pt=pt,
+                last_price=current_bar.close,
+                current_equity=current_equity,
+                sizing_ctx=sizing_ctx,
+                bar_open_ts_ns=entry_ts_ns,
+                # Fee-product fix — an intraday-triggered entry
+                # fills via exec_sim_broker (a ts_ns-stamped
+                # intent), which SimBroker would otherwise infer
+                # as INTRADAY. Bill the strategy's TRUE product.
+                product=(
+                    "DELIVERY"
+                    if strategy.product == "CNC"
+                    else "INTRADAY"
+                ),
+            )
+            if intent is None or intent.side != "BUY":
+                continue
+
+            open_qty_map = {
+                t: p.qty for t, p in pt.open_positions().items()
+            }
+            day_realised = (
+                pt.total_realised_pnl_inr() - day_start_realised
+            )
+            account_state = AccountState(
+                user_id=user_id,
+                day_date=entry_bar_date,
+                initial_capital_inr=request.initial_capital_inr,
+                current_equity_inr=current_equity,
+                daily_realised_pnl_inr=day_realised,
+                daily_unrealised_pnl_inr=Decimal("0"),
+                open_positions=open_qty_map,
+                open_position_count=len(open_qty_map),
+                kill_switch_active=False,
+            )
+            signal = Signal(
+                strategy_id=strategy.id,
+                user_id=user_id,
+                ticker=intent.ticker,
+                side=intent.side,
+                qty=intent.qty,
+                emitted_at_ns=entry_ts_ns,
+            )
+            decision = risk.gate(
+                signal=signal,
+                account=account_state,
+                risk=risk_payload,
+                last_price=current_bar.close,
+            )
+            if decision.outcome == "reject":
+                rejected_count += 1
+                events.append(
+                    event_row(
+                        session_id=session_id,
+                        user_id=user_id,
+                        strategy_id=strategy.id,
+                        mode="backtest",
+                        type_="signal_rejected",
+                        payload={
+                            "ticker": intent.ticker,
+                            "side": intent.side,
+                            "qty": intent.qty,
+                            "reason": (
+                                decision.reason.value
+                                if decision.reason
+                                else "unknown"
+                            ),
+                            "threshold": (
+                                str(decision.threshold)
+                                if decision.threshold is not None
+                                else None
+                            ),
+                            "observed_value": (
+                                str(decision.observed_value)
+                                if decision.observed_value
+                                is not None
+                                else None
+                            ),
+                        },
+                    )
+                )
+                continue
+            if (
+                decision.outcome == "scale"
+                and decision.adjusted_qty
+                and decision.adjusted_qty > 0
+                and decision.adjusted_qty < intent.qty
+            ):
+                scaled_count += 1
+                intent = intent.model_copy(
+                    update={"qty": decision.adjusted_qty},
+                )
+
+            try:
+                fill = (
+                    exec_sim_broker.execute(intent)
+                    if exec_sim_broker is not None
+                    else None
+                )
+            except NoBarAvailableError:
+                fill = None
+            if fill is None:
+                continue
+
+            pt.apply_fill(fill)
+            total_fees += fill.fees_inr
+            fee_rates_version = fill.fee_rates_version
+            _entered_today.add((ticker, entry_bar_date))
+
+            # Trailing manager — always via ``exec_sim`` (an
+            # exec-covered ticker; ``two_clock`` implies
+            # ``_trailing_enabled``). Same ATR-from-daily-bars
+            # computation the signal-bar entry path uses below.
+            _bars_up = [
+                b for b in daily_blist if b.date <= entry_bar_date
+            ]
+            _atr_series = _wilder_atr(_bars_up, 14)
+            _atr = float(
+                _atr_series[-1]
+                if _atr_series and _atr_series[-1] is not None
+                else 0.0
+            )
+            if _atr > 0 and not exec_sim.has(fill.ticker):
+                exec_sim.on_buy_fill(
+                    fill.ticker, float(fill.fill_price), _atr,
+                )
+            else:
+                _logger.warning(
+                    "intraday-entry trailing: insufficient bars "
+                    "for atr_14 on %s at %s — skip manager",
+                    fill.ticker, entry_bar_date,
+                )
+
+            events.append(
+                event_row(
+                    session_id=session_id,
+                    user_id=user_id,
+                    strategy_id=strategy.id,
+                    mode="backtest",
+                    type_="order_filled",
+                    payload={
+                        "ticker": fill.ticker,
+                        "side": fill.side,
+                        "qty": fill.qty,
+                        "fill_price": str(fill.fill_price),
+                        "fill_date": fill.fill_date.isoformat(),
+                        "fees_inr": str(fill.fees_inr),
+                        "fee_rates_version": (
+                            fill.fee_rates_version
+                        ),
+                        "trigger": (
+                            "both"
+                            if (forming_is_buy and closed_is_buy)
+                            else "intraday_forming"
+                            if forming_is_buy
+                            else "yesterday_close"
+                        ),
+                    },
+                )
+            )
+
+            try:
+                from backend.algo.features.snapshots import (
+                    write_trade_feature_snapshot,
+                )
+
+                _snap_fill_id = (
+                    f"{session_id}:{fill.ticker}:{fill.intent_id}"
+                )
+                write_trade_feature_snapshot(
+                    fill_id=_snap_fill_id,
+                    run_id=str(session_id),
+                    strategy_id=str(strategy.id),
+                    ticker=fill.ticker,
+                    side=fill.side,
+                    qty=fill.qty,
+                    fill_price=fill.fill_price,
+                    fill_ts_ns=(
+                        fill.fill_ts_ns
+                        if fill.fill_ts_ns is not None
+                        else entry_ts_ns
+                    ),
+                    bar_date=fill.fill_date.isoformat(),
+                    mode="backtest",
+                    features=winning_feats or {},
+                )
+            except Exception:  # noqa: BLE001
+                _logger.exception(
+                    "trade_feature_snapshot hook failed "
+                    "(non-fatal): ticker=%s mode=backtest "
+                    "ts_ns=%s",
+                    fill.ticker,
+                    entry_ts_ns,
+                )
 
     for bar_date, ts_ns in walk_timeline:
         # In two-clock mode AST/signal evaluation runs only on the
@@ -1170,6 +1742,15 @@ def run_backtest(
                         len(mtre_triggers), bar_date.isoformat(),
                     )
 
+        # ASETPLTFRM-477 / PRE-3 Task 2 — evaluate entries on the
+        # EXECUTION clock for two-clock daily-signal COVERED
+        # tickers (mirrors live R1's OR-trigger). Sited alongside
+        # the ungated exit blocks above — this bar's stop/
+        # trailing/time-stop/regime-exit fills have already
+        # applied, so a same-bar exit correctly reads as flat
+        # here. NO-OP outside two-clock daily-signal mode.
+        _evaluate_intraday_entry(bar_date, ts_ns)
+
         # ASETPLTFRM-434 Exp.2 — cooldown gate input. The function
         # is pure; we hoist the closed-positions snapshot once per
         # outer bar so the per-ticker loop is O(1) per call (the
@@ -1196,6 +1777,20 @@ def run_backtest(
         # is always True outside two-clock mode, so the daily and
         # intraday paths are unchanged.
         for ticker in (universe if is_signal_bar else []):
+            if ticker in exec_covered:
+                # ASETPLTFRM-477 / PRE-3 Task 2 reconciliation —
+                # two-clock daily-signal COVERED tickers now get
+                # their entries evaluated on every exec bar by
+                # ``_evaluate_intraday_entry`` above; skip here
+                # to avoid a double-entry. ``exec_covered`` is
+                # only ever non-empty in two-clock daily-signal
+                # mode (``two_clock and not is_intraday``) — every
+                # other mode (plain-daily, native-intraday, non-
+                # two-clock, and two-clock daily-fallback
+                # UNCOVERED tickers) has it empty, so this branch
+                # never fires there and this block stays
+                # byte-identical for them.
+                continue
             if ticker in stop_loss_skip:
                 continue
             # ASETPLTFRM-434 Exp.2 — pre-AST repeat-offender gate.
@@ -1783,6 +2378,7 @@ def _action_to_intent(
     current_equity: Decimal | None = None,
     sizing_ctx: SizingContext | None = None,
     bar_open_ts_ns: int | None = None,
+    product: str | None = None,
 ) -> OrderIntent | None:
     """Translate an evaluator action dict to an OrderIntent (or None).
 
@@ -1792,6 +2388,16 @@ def _action_to_intent(
     (``vol_target_pct`` / ``kelly_fraction``); legacy modes
     (``shares`` / ``notional_inr``) bypass the composer entirely
     for byte-for-byte backward compatibility.
+
+    ``product`` (``"DELIVERY"`` / ``"INTRADAY"``) is optional and
+    defaults to ``None`` — the ordinary once/day daily-clock
+    entry path leaves it unset (``bar_open_ts_ns=None`` already
+    makes ``SimBroker`` infer DELIVERY correctly). PRE-3 Task 2's
+    intraday-triggered entries pass it explicitly from
+    ``strategy.product`` because THEIR intent carries a real
+    exec-bar ``ts_ns``, which ``SimBroker`` would otherwise
+    mis-infer as INTRADAY (the same fee-product gotcha already
+    fixed on the exit side).
     """
     t = action.get("type")
     if t == "buy":
@@ -1817,6 +2423,7 @@ def _action_to_intent(
             qty=int(qty),
             intent_emitted_at=bar_date,
             intent_emitted_ts_ns=bar_open_ts_ns,
+            product=product,
         )
     if t == "sell":
         qty_spec = action["qty"]
