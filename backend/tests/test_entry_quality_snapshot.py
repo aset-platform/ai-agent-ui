@@ -666,3 +666,62 @@ async def test_qualifying_discovers_ticker_outside_allowed():
     assert tcs_row["in_allowed_tickers"] is True
     assert tcs_row["qm_score"] is not None
     assert tcs_row["qm_score"] < 58
+
+
+@pytest.mark.asyncio
+async def test_run_bounds_ohlcv_and_nifty_fetch_to_as_of():
+    """PRE-2 backfill: an ``as_of`` payload truncates the trailing
+    OHLCV (and Nifty) window to ``date <= as_of`` so the snapshot is
+    recomputed *as of* a historical date. ``trade_date`` then follows
+    the last in-window bar, so no separate date stamp is needed."""
+    with (
+        patch(
+            "backend.jobs.entry_quality_snapshot._full_universe_tickers",
+            new_callable=AsyncMock,
+            return_value=["TCS.NS"],
+        ),
+        patch(
+            "backend.jobs.entry_quality_snapshot._allowed_tickers_union",
+            new_callable=AsyncMock,
+            return_value=set(),
+        ),
+        patch(
+            "backend.jobs.entry_quality_snapshot.query_iceberg_df",
+            new_callable=AsyncMock,
+            return_value=pd.DataFrame(),  # empty → short-circuit pre-compute
+        ) as mock_query,
+    ):
+        result = await _run({"as_of": "2026-06-30"})
+
+    assert result == {"rows_written": 0}
+    ohlcv_sql = mock_query.call_args_list[0].args[1]
+    assert "date <= '2026-06-30'" in ohlcv_sql
+
+
+@pytest.mark.asyncio
+async def test_run_without_as_of_keeps_unbounded_window():
+    """Regression guard: the default (no ``as_of``) path must NOT add
+    a ``date <=`` upper bound — the daily job's behaviour is
+    unchanged."""
+    with (
+        patch(
+            "backend.jobs.entry_quality_snapshot._full_universe_tickers",
+            new_callable=AsyncMock,
+            return_value=["TCS.NS"],
+        ),
+        patch(
+            "backend.jobs.entry_quality_snapshot._allowed_tickers_union",
+            new_callable=AsyncMock,
+            return_value=set(),
+        ),
+        patch(
+            "backend.jobs.entry_quality_snapshot.query_iceberg_df",
+            new_callable=AsyncMock,
+            return_value=pd.DataFrame(),
+        ) as mock_query,
+    ):
+        result = await _run({})
+
+    assert result == {"rows_written": 0}
+    ohlcv_sql = mock_query.call_args_list[0].args[1]
+    assert "date <=" not in ohlcv_sql

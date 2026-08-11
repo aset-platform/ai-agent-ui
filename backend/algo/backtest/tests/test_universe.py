@@ -44,7 +44,7 @@ async def test_resolve_universe_filters_to_fno_when_is_fno_true(
     async def fake_scoped(*, user, scope):
         return candidates
 
-    monkeypatch.setattr(uni, "_scoped_tickers", fake_scoped)
+    monkeypatch.setattr(uni, "_scoped_tickers_for_strategy", fake_scoped)
     monkeypatch.setattr(uni, "_registry_meta", lambda: _FAKE_REGISTRY)
 
     def fake_fno_universe():
@@ -74,7 +74,7 @@ async def test_resolve_universe_unchanged_when_is_fno_false(
     async def fake_scoped(*, user, scope):
         return candidates
 
-    monkeypatch.setattr(uni, "_scoped_tickers", fake_scoped)
+    monkeypatch.setattr(uni, "_scoped_tickers_for_strategy", fake_scoped)
     monkeypatch.setattr(uni, "_registry_meta", lambda: _FAKE_REGISTRY)
 
     out = await uni.resolve_universe(
@@ -82,3 +82,35 @@ async def test_resolve_universe_unchanged_when_is_fno_false(
         strategy=_StrategyStub(is_fno=False),
     )
     assert set(out) == set(candidates)
+
+
+@pytest.mark.asyncio
+async def test_resolve_universe_drops_fno_ticker_without_15m_coverage(
+    monkeypatch,
+):
+    """is_fno=True: an F&O ticker lacking 15m coverage is dropped by
+    the PRE-4 coverage gate even though it passes the F&O intersect."""
+    candidates = ["RELIANCE.NS", "HDFCBANK.NS", "INFY.NS", "OBSCURE.NS"]
+
+    async def fake_scoped(*, user, scope):
+        return candidates
+
+    monkeypatch.setattr(uni, "_scoped_tickers_for_strategy", fake_scoped)
+    monkeypatch.setattr(uni, "_registry_meta", lambda: _FAKE_REGISTRY)
+    monkeypatch.setattr(
+        "backend.algo.research.intraday_15m_mis_bakeoff.universe."
+        "load_fno_universe",
+        lambda: ["RELIANCE.NS", "HDFCBANK.NS", "INFY.NS"],
+    )
+    # INFY is F&O but has insufficient 15m coverage → gate excludes it.
+    monkeypatch.setattr(
+        "backend.algo.backtest.coverage.sufficiently_covered",
+        lambda **kw: {"RELIANCE.NS", "HDFCBANK.NS"},
+    )
+
+    out = await uni.resolve_universe(
+        user=SimpleNamespace(),
+        strategy=_StrategyStub(is_fno=True),
+    )
+    assert set(out) == {"RELIANCE.NS", "HDFCBANK.NS"}
+    assert "INFY.NS" not in out  # dropped by the 15m-coverage gate
