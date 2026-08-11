@@ -33,10 +33,20 @@ def test_composite_separates_when_components_aligned():
 
 
 def test_analyze_ranks_absorption_top_and_flags_min_n():
-    res = analyze(_df(), min_n=30)
+    res = analyze(_df(), min_n=30, mode="live")
     assert res.n_total == 4 and res.n_win == 2 and res.n_loss == 2
     assert res.min_n_ok is False           # 4 < 30
+    assert res.min_n == 30
     top = res.feature_stats[0]
     assert top.feature == "ess_absorption_volume_score"
     assert top.auc == 1.0 and top.direction == "higher"
     assert res.composite.auc >= 0.5
+
+
+def test_analyze_labels_requested_mode_not_derived():
+    # blended --mode all cohort: internal rows carry their own
+    # per-trade mode, mixing live and paper.
+    df = _df()
+    df["mode"] = ["live", "paper", "live", "paper"]
+    res = analyze(df, min_n=30, mode="all")
+    assert res.mode == "all"

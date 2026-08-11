@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         _logger.warning("no labeled cohort for mode=%s — nothing to do.",
                         args.mode)
         return 0
-    result = analyze(df, args.min_n)
+    result = analyze(df, args.min_n, args.mode)
     out_dir = (
         pathlib.Path(args.out_dir) if args.out_dir else _default_out_dir()
     )

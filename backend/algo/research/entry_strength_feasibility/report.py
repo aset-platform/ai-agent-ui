@@ -14,6 +14,12 @@ _CAVEAT = (
     "calibrate thresholds from this report."
 )
 
+# Cosmetic separation hint: it only selects which English sentence
+# the go/no-go section prints below — it never gates live orders.
+_SEPARATION_HINT = 0.15
+# Significance cutoff for the go/no-go's Mann-Whitney U p-value gate.
+_ALPHA = 0.05
+
 
 def _fmt(x: float | None) -> str:
     return "—" if x is None else f"{x:.3f}"
@@ -56,17 +62,39 @@ def render_report(result: FeasibilityResult) -> str:
     lines.append("## Go / no-go read")
     lines.append("")
     best = result.feature_stats[0] if result.feature_stats else None
-    if best and best.separation >= 0.15:
+    well_supported = (
+        best is not None
+        and best.separation >= _SEPARATION_HINT
+        and best.n >= result.min_n
+        and best.mwu_p is not None
+        and best.mwu_p < _ALPHA
+    )
+    if well_supported:
         lines.append(
             f"Strongest separator: **{best.feature}** "
             f"(AUC {_fmt(best.auc)}). Worth carrying into a "
             "properly-powered (OOS) study as data grows."
         )
     else:
+        dropped = ""
+        raw_hint = best is not None and (
+            best.separation >= _SEPARATION_HINT
+        )
+        if raw_hint and best.n < result.min_n:
+            dropped = (
+                f" (strongest raw separator **{best.feature}** "
+                f"dropped for small n={best.n} < {result.min_n})"
+            )
+        elif raw_hint:
+            dropped = (
+                f" (strongest raw separator **{best.feature}** "
+                f"dropped for non-significant p={_fmt(best.mwu_p)})"
+            )
         lines.append(
             "No feature separates winners from losers meaningfully at "
-            "this n — consistent with 'indistinguishable at entry'. "
-            "Accumulate more labeled trades before revisiting."
+            "this n — consistent with 'indistinguishable at entry'."
+            f"{dropped} Accumulate more labeled trades before "
+            "revisiting."
         )
     return "\n".join(lines) + "\n"
 

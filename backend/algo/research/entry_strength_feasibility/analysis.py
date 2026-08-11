@@ -46,6 +46,7 @@ class FeasibilityResult:
     first_date: str | None
     last_date: str | None
     min_n_ok: bool
+    min_n: int
     feature_stats: tuple[FeatureStat, ...]
     composite: CompositeStat
 
@@ -77,8 +78,9 @@ def _feature_stat(df: pd.DataFrame, dim: str, feat: str) -> FeatureStat:
     )
 
 
-def analyze(df: pd.DataFrame, min_n: int) -> FeasibilityResult:
-    mode = str(df["mode"].iloc[0]) if "mode" in df and len(df) else "?"
+def analyze(
+    df: pd.DataFrame, min_n: int, mode: str
+) -> FeasibilityResult:
     n = len(df)
     n_win = int(df["label_win"].sum()) if n else 0
     dates = (
@@ -107,6 +109,6 @@ def analyze(df: pd.DataFrame, min_n: int) -> FeasibilityResult:
         mode=mode, n_total=n, n_win=n_win, n_loss=n - n_win,
         first_date=str(dates.min()) if dates is not None else None,
         last_date=str(dates.max()) if dates is not None else None,
-        min_n_ok=n >= min_n,
+        min_n_ok=n >= min_n, min_n=min_n,
         feature_stats=tuple(stats), composite=composite,
     )
