@@ -52,6 +52,8 @@ def mannwhitney_p(
     losers = [x for x, y in zip(xs, ys) if y == 0]
     if not winners or not losers:
         return None
+    if len(set(xs)) < 2:
+        return None
     try:
         return float(
             mannwhitneyu(

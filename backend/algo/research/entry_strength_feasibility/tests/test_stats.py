@@ -33,3 +33,7 @@ def test_mannwhitney_p_range_and_empty_class():
     p = mannwhitney_p(_F, _PERFECT)
     assert p is not None and 0.0 <= p <= 1.0
     assert mannwhitney_p(_F, [True, True, True, True]) is None
+
+
+def test_mannwhitney_p_none_when_all_values_identical():
+    assert mannwhitney_p([2.0, 2.0, 2.0, 2.0], _PERFECT) is None
