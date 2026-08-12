@@ -5,6 +5,9 @@ from backend.db.models.market_index import MarketIndex
 from backend.db.models.memory import UserMemory
 from backend.db.models.payment import PaymentTransaction
 from backend.db.models.pipeline import Pipeline, PipelineStep
+from backend.db.models.portfolio_close import (
+    PortfolioClosedPosition,
+)
 from backend.db.models.recommendation import (
     Recommendation,
     RecommendationOutcome,
@@ -27,6 +30,7 @@ __all__ = [
     "PaymentTransaction",
     "Pipeline",
     "PipelineStep",
+    "PortfolioClosedPosition",
     "Recommendation",
     "RecommendationOutcome",
     "RecommendationRun",
