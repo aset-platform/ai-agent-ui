@@ -252,4 +252,29 @@ test.describe("Portfolio CRUD", () => {
     const rowAfter = portfolio.isTickerVisible(ticker);
     await expect(rowAfter).toBeVisible({ timeout: 5_000 });
   });
+
+  // ── Close Position (tab + row icon presence) ───────
+
+  test("close-position icon renders on an open portfolio row and Closed tab is reachable", async ({
+    page,
+  }) => {
+    const ticker = "RELIANCE.NS";
+
+    const row = portfolio.isTickerVisible(ticker);
+    await expect(row).toBeVisible({ timeout: 10_000 });
+
+    const closeIcon = portfolio.closeIcon(ticker);
+    await closeIcon.scrollIntoViewIfNeeded();
+    await expect(closeIcon).toBeVisible({ timeout: 5_000 });
+
+    // Closed tab is reachable and renders without error
+    // (full close flow is covered by Task 6/4 unit + API
+    // tests — this is a lightweight UI-presence check).
+    await portfolio.openClosedTab();
+    await expect(
+      page.getByTestId("tab-portfolio-closed"),
+    ).toBeVisible();
+
+    await portfolio.openOpenTab();
+  });
 });
