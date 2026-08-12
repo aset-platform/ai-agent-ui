@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -12,7 +13,14 @@ from backend.db.models.portfolio_close import PortfolioClosedPosition
 
 
 def _to_dict(m: PortfolioClosedPosition) -> dict[str, Any]:
-    return {c.name: getattr(m, c.name) for c in m.__table__.columns}
+    # Numeric columns come back as Decimal; JSON-encode them as floats so
+    # the API matches the frontend's `number` contract (Decimal serializes
+    # to a JSON string via pydantic and breaks `.toFixed()` in the UI).
+    out: dict[str, Any] = {}
+    for c in m.__table__.columns:
+        val = getattr(m, c.name)
+        out[c.name] = float(val) if isinstance(val, Decimal) else val
+    return out
 
 
 def _coerce_date(v: Any) -> date | None:

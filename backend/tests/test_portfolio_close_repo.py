@@ -15,9 +15,12 @@ async def test_add_and_list_round_trip(pg_session):
         "sell_transaction_id": "t1",
     })
     assert row["id"] and row["ticker"] == "DLF.NS"
+    # Numeric columns must serialize as float (not Decimal/str) so the
+    # JSON API matches the frontend's `number` contract.
+    assert isinstance(row["buy_price"], float)
+    assert isinstance(row["realized_pnl"], float)
+    assert isinstance(row["realized_pnl_pct"], float)
     rows = await repo.list_closed_positions(pg_session, "u1")
-    assert any(
-        r["ticker"] == "DLF.NS"
-        and float(r["realized_pnl"]) == 1074.8
-        for r in rows
-    )
+    match = next(r for r in rows if r["ticker"] == "DLF.NS")
+    assert match["realized_pnl"] == 1074.8
+    assert isinstance(match["buy_price"], float)

@@ -597,7 +597,16 @@ export function WatchlistWidget({
             <div className="divide-y divide-gray-100 dark:divide-gray-800">
               {closedPositions.map((c) => {
                 const sym = currencySymbol(c.currency);
-                const positive = c.realized_pnl >= 0;
+                // API returns Numeric columns as JSON strings (Decimal);
+                // coerce before any toFixed/toLocaleString.
+                const buy = Number(c.buy_price);
+                const sell = Number(c.sell_price);
+                const pnl = Number(c.realized_pnl);
+                const pct =
+                  c.realized_pnl_pct != null
+                    ? Number(c.realized_pnl_pct)
+                    : null;
+                const positive = pnl >= 0;
                 return (
                   <div
                     key={c.id}
@@ -610,8 +619,8 @@ export function WatchlistWidget({
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-400">
                         {c.quantity} shares &middot; {sym}
-                        {c.buy_price.toFixed(2)} &rarr; {sym}
-                        {c.sell_price.toFixed(2)}
+                        {buy.toFixed(2)} &rarr; {sym}
+                        {sell.toFixed(2)}
                       </p>
                     </div>
                     <div className="text-right">
@@ -624,7 +633,7 @@ export function WatchlistWidget({
                       >
                         {positive ? "+" : ""}
                         {sym}
-                        {c.realized_pnl.toLocaleString(
+                        {pnl.toLocaleString(
                           "en-US",
                           {
                             minimumFractionDigits: 2,
@@ -633,8 +642,8 @@ export function WatchlistWidget({
                         )}
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-                        {c.realized_pnl_pct != null
-                          ? `${positive ? "+" : ""}${c.realized_pnl_pct.toFixed(2)}%`
+                        {pct != null
+                          ? `${positive ? "+" : ""}${pct.toFixed(2)}%`
                           : "—"}
                       </p>
                     </div>
