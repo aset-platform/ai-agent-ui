@@ -865,16 +865,23 @@ def get_portfolio_transactions(
             },
         )
 
-    # Aggregate respecting BUY/SELL sign.
+    # Net quantity respects BUY/SELL sign, but avg_price (and
+    # therefore invested) is derived from BUY lots only —
+    # consistent with get_portfolio_holdings. A SELL changes
+    # the remaining quantity, not the cost basis of the shares
+    # still held.
     total_qty = 0.0
-    invested = 0.0
+    buy_qty = 0.0
+    buy_cost = 0.0
     for t in transactions:
-        sign = -1 if t["side"].upper() == "SELL" else 1
+        side = t["side"].upper()
+        sign = -1 if side == "SELL" else 1
         total_qty += sign * t["quantity"]
-        invested += sign * t["quantity"] * t["price"]
-    avg_price = (
-        invested / total_qty if total_qty else 0.0
-    )
+        if side != "SELL":
+            buy_qty += t["quantity"]
+            buy_cost += t["quantity"] * t["price"]
+    avg_price = (buy_cost / buy_qty) if buy_qty else 0.0
+    invested = total_qty * avg_price
 
     current_price: float | None = None
     try:
@@ -1021,7 +1028,17 @@ async def close_portfolio_position(
     realized = (
         (body.sell_price - avg_price) * body.quantity - body.fees
     )
-    realized_pct = (realized / cost) if cost > 0 else None
+    # Stored/returned as a percentage (matches gain_loss_pct /
+    # gain_pct convention elsewhere), not a fraction.
+    realized_pct = (realized / cost * 100) if cost > 0 else None
+
+    try:
+        sell_date = date.fromisoformat(body.sell_date)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="invalid sell_date",
+        )
 
     sell_txn_id = str(uuid.uuid4())
     stock_repo.add_portfolio_transaction({
@@ -1033,7 +1050,7 @@ async def close_portfolio_position(
         "price": body.sell_price,
         "currency": ccy,
         "market": mkt,
-        "trade_date": date.fromisoformat(body.sell_date),
+        "trade_date": sell_date,
         "fees": body.fees,
         "notes": body.notes or "",
     })
@@ -1112,8 +1129,16 @@ async def list_closed_positions(
             session,
             user.user_id,
         )
-    total = sum(float(r["realized_pnl"]) for r in rows)
-    return {"closed": rows, "totals": {"realized_pnl": total}}
+    by_currency: Dict[str, float] = {}
+    for r in rows:
+        ccy = str(r.get("currency") or "USD")
+        by_currency[ccy] = (
+            by_currency.get(ccy, 0) + float(r["realized_pnl"])
+        )
+    return {
+        "closed": rows,
+        "totals": {"realized_pnl_by_currency": by_currency},
+    }
 
 
 @router.put("/portfolio/{transaction_id}")

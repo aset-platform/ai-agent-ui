@@ -10,7 +10,7 @@ async def test_add_and_list_round_trip(pg_session):
         "user_id": "u1", "ticker": "DLF.NS", "quantity": 20,
         "buy_price": 746.26, "sell_price": 800.0,
         "sell_date": "2026-08-12",
-        "fees": 0, "realized_pnl": 1074.8, "realized_pnl_pct": 0.036,
+        "fees": 0, "realized_pnl": 1074.8, "realized_pnl_pct": 3.6,
         "currency": "INR", "market": "india",
         "sell_transaction_id": "t1",
     })

@@ -18,9 +18,13 @@ export interface ClosedPosition {
   market: string;
 }
 
+interface ClosedTotals {
+  realized_pnl_by_currency: Record<string, number>;
+}
+
 interface ClosedResponse {
   closed: ClosedPosition[];
-  totals: { realized_pnl: number };
+  totals: ClosedTotals;
 }
 
 async function fetcher(url: string): Promise<ClosedResponse> {
@@ -41,7 +45,7 @@ export function useClosedPositions() {
 
   return {
     closed: data?.closed ?? [],
-    totals: data?.totals ?? { realized_pnl: 0 },
+    totals: data?.totals ?? { realized_pnl_by_currency: {} },
     loading: isLoading,
     error: error ? "Failed to load" : null,
     refresh: () => mutate(),

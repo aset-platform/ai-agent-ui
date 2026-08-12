@@ -571,23 +571,28 @@ export function WatchlistWidget({
           <div>
             <div
               data-testid="closed-total"
-              className={`px-5 py-2.5 text-xs font-semibold border-b border-gray-100 dark:border-gray-800 ${
-                closedTotals.realized_pnl >= 0
-                  ? "text-emerald-600 dark:text-emerald-400"
-                  : "text-red-600 dark:text-red-400"
-              }`}
+              className="px-5 py-2.5 border-b border-gray-100 dark:border-gray-800"
             >
-              Realized P&amp;L: {closedTotals.realized_pnl >= 0 ? "+" : ""}
-              {currencySymbol(
-                closedPositions[0]?.currency ?? "USD",
-              )}
-              {closedTotals.realized_pnl.toLocaleString(
-                "en-US",
-                {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                },
-              )}
+              {Object.entries(
+                closedTotals.realized_pnl_by_currency,
+              ).map(([ccy, amount]) => (
+                <p
+                  key={ccy}
+                  className={`text-xs font-semibold ${
+                    amount >= 0
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : "text-red-600 dark:text-red-400"
+                  }`}
+                >
+                  Realized P&amp;L ({ccy}):{" "}
+                  {amount >= 0 ? "+" : ""}
+                  {currencySymbol(ccy)}
+                  {amount.toLocaleString("en-US", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </p>
+              ))}
             </div>
             <div className="divide-y divide-gray-100 dark:divide-gray-800">
               {closedPositions.map((c) => {
