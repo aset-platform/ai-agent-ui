@@ -21,12 +21,13 @@ import {
   useMemo,
   useState,
 } from "react";
+import { useSWRConfig } from "swr";
 import {
   usePortfolio,
   type PortfolioHolding,
 } from "@/hooks/usePortfolio";
 import { useRegistry } from "@/hooks/useDashboardData";
-import { useClosedPositions } from "@/hooks/useClosedPositions";
+import { API_URL } from "@/lib/config";
 import { AddStockModal } from "@/components/widgets/AddStockModal";
 import { EditStockModal } from "@/components/widgets/EditStockModal";
 import ClosePositionModal from "@/components/widgets/ClosePositionModal";
@@ -69,7 +70,7 @@ export function PortfolioActionsProvider({
 }) {
   const portfolio = usePortfolio();
   const registry = useRegistry();
-  const closedPositions = useClosedPositions();
+  const { mutate } = useSWRConfig();
 
   const registryTickers = useMemo(
     () =>
@@ -223,7 +224,9 @@ export function PortfolioActionsProvider({
               body,
             );
             setCloseTarget(null);
-            closedPositions.refresh();
+            mutate(
+              `${API_URL}/users/me/portfolio/closed`,
+            );
           }}
         />
       )}
