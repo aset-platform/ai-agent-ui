@@ -1037,24 +1037,59 @@ async def close_portfolio_position(
         "fees": body.fees,
         "notes": body.notes or "",
     })
-    async with _close_session_scope() as session:
-        closed = await portfolio_close_repo.add_closed_position(
-            session,
-            {
-                "user_id": user.user_id,
-                "ticker": tkr,
-                "quantity": body.quantity,
-                "buy_price": avg_price,
-                "sell_price": body.sell_price,
-                "sell_date": body.sell_date,
-                "fees": body.fees,
-                "realized_pnl": realized,
-                "realized_pnl_pct": realized_pct,
-                "currency": ccy,
-                "market": mkt,
-                "sell_transaction_id": sell_txn_id,
-                "notes": body.notes,
-            },
+    try:
+        async with _close_session_scope() as session:
+            closed = await portfolio_close_repo.add_closed_position(
+                session,
+                {
+                    "user_id": user.user_id,
+                    "ticker": tkr,
+                    "quantity": body.quantity,
+                    "buy_price": avg_price,
+                    "sell_price": body.sell_price,
+                    "sell_date": body.sell_date,
+                    "fees": body.fees,
+                    "realized_pnl": realized,
+                    "realized_pnl_pct": realized_pct,
+                    "currency": ccy,
+                    "market": mkt,
+                    "sell_transaction_id": sell_txn_id,
+                    "notes": body.notes,
+                },
+            )
+    except Exception as exc:
+        _logger.error(
+            "close_portfolio_position: PG insert failed for "
+            "user=%s ticker=%s qty=%s sell_txn_id=%s; "
+            "rolling back SELL: %s",
+            user.user_id,
+            tkr,
+            body.quantity,
+            sell_txn_id,
+            exc,
+            exc_info=True,
+        )
+        try:
+            stock_repo.delete_portfolio_transaction(
+                sell_txn_id,
+                user.user_id,
+            )
+        except Exception as del_exc:
+            _logger.critical(
+                "close_portfolio_position: compensating delete "
+                "FAILED for user=%s ticker=%s qty=%s "
+                "sell_txn_id=%s — manual reconciliation "
+                "required: %s",
+                user.user_id,
+                tkr,
+                body.quantity,
+                sell_txn_id,
+                del_exc,
+                exc_info=True,
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="close failed; rolled back",
         )
     _invalidate_portfolio_caches(user.user_id)
     return {

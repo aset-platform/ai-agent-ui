@@ -139,6 +139,112 @@ async def test_close_position_over_open_qty_returns_400():
 
 
 @pytest.mark.asyncio
+async def test_close_position_realized_pnl_pct_matches_ratio():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    stock_repo.add_portfolio_transaction.side_effect = lambda t: None
+
+    async def _add_closed(session, data):
+        return {**data, "id": "c3"}
+
+    user = MagicMock(user_id="u1")
+    close_repo_target = (
+        "auth.repo.portfolio_close_repo.add_closed_position"
+    )
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo), \
+         patch(close_repo_target, _add_closed), \
+         patch.object(tr, "_close_session_scope") as scope, \
+         patch.object(tr, "_invalidate_portfolio_caches"):
+        scope.return_value.__aenter__.return_value = MagicMock()
+        resp = await tr.close_portfolio_position(
+            "DLF.NS",
+            tr.ClosePositionRequest(quantity=45, sell_price=800.0,
+                                    sell_date="2026-08-12"),
+            user=user,
+        )
+
+    # realized = 2418.30, cost = 746.26 * 45 = 33581.70
+    expected_pct = 2418.30 / (746.26 * 45)
+    assert resp["realized_pnl_pct"] == pytest.approx(expected_pct)
+
+
+@pytest.mark.asyncio
+async def test_close_position_pct_guard_not_hit_for_normal_close():
+    """cost>0 → else None guard must not fire on a normal close."""
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    stock_repo.add_portfolio_transaction.side_effect = lambda t: None
+
+    async def _add_closed(session, data):
+        return {**data, "id": "c4"}
+
+    user = MagicMock(user_id="u1")
+    close_repo_target = (
+        "auth.repo.portfolio_close_repo.add_closed_position"
+    )
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo), \
+         patch(close_repo_target, _add_closed), \
+         patch.object(tr, "_close_session_scope") as scope, \
+         patch.object(tr, "_invalidate_portfolio_caches"):
+        scope.return_value.__aenter__.return_value = MagicMock()
+        resp = await tr.close_portfolio_position(
+            "DLF.NS",
+            tr.ClosePositionRequest(quantity=20, sell_price=800.0,
+                                    sell_date="2026-08-12"),
+            user=user,
+        )
+
+    assert resp["realized_pnl_pct"] is not None
+
+
+@pytest.mark.asyncio
+async def test_close_position_pg_failure_rolls_back_sell():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    added = {}
+
+    def _add(txn):
+        added.update(txn)
+    stock_repo.add_portfolio_transaction.side_effect = _add
+
+    async def _add_closed_fails(session, data):
+        raise RuntimeError("pg insert boom")
+
+    user = MagicMock(user_id="u1")
+    close_repo_target = (
+        "auth.repo.portfolio_close_repo.add_closed_position"
+    )
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo), \
+         patch(close_repo_target, _add_closed_fails), \
+         patch.object(tr, "_close_session_scope") as scope, \
+         patch.object(tr, "_invalidate_portfolio_caches") as inval:
+        scope.return_value.__aenter__.return_value = MagicMock()
+        with pytest.raises(HTTPException) as exc_info:
+            await tr.close_portfolio_position(
+                "DLF.NS",
+                tr.ClosePositionRequest(quantity=45, sell_price=800.0,
+                                        sell_date="2026-08-12"),
+                user=user,
+            )
+
+    assert exc_info.value.status_code == 500
+    sell_txn_id = added["transaction_id"]
+    stock_repo.delete_portfolio_transaction.assert_called_once_with(
+        sell_txn_id, "u1",
+    )
+    inval.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_close_position_unknown_ticker_returns_404():
     from auth.endpoints import ticker_routes as tr
 
