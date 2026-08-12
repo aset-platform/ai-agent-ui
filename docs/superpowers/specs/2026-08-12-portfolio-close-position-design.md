@@ -1,8 +1,31 @@
 # Portfolio — Close Position + Realized-P&L History — Design
 
-**Status:** Design approved.
+**Status:** Design approved. **Mechanism corrected after code audit (see §2a)** — behavior is unchanged; the internal close mechanism is now per-ticker aggregate + append-only SELL, and cost basis = the displayed weighted average.
 
 ---
+
+## 2a. Correction after code audit (supersedes the "reduce the source lot" mechanism)
+
+The portfolio list rows are **per-ticker aggregates**, not per-lot:
+`get_portfolio_holdings` groups all `side='BUY'` rows by ticker and shows the
+**weighted average** buy price; the row's `transaction_id` is merely the
+*latest* txn for that ticker (`ticker_routes.py:708-712`). So there is no
+single "source lot" to reduce.
+
+**Revised mechanism (append-only, Iceberg-clean, matches the UI):**
+- **Close appends a SELL transaction** (`add_portfolio_transaction` with
+  `side="SELL"`) — no copy-on-write on the ledger.
+- **`get_portfolio_holdings` is updated to net BUY − SELL per ticker** so the
+  open quantity drops automatically (today it ignores SELL — a latent bug once
+  sells exist). This read is used across dashboard/tools, so the change is
+  covered by tests.
+- **Cost basis = the displayed weighted average buy price** at close time
+  (exactly what the user sees, e.g. "10 @ ₹837"), stored on the closed record
+  so realized P&L is stable as later buys change the average.
+- **Close is per-ticker** (the row you click), quantity capped at the ticker's
+  net open quantity. No lot-picking / FIFO on the open side.
+
+§4–§7 below are amended to this mechanism.
 
 ## 1. Motivation
 
