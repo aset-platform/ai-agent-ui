@@ -163,3 +163,62 @@ def test_distance_from_sma20_absent_before_warmup():
     last = out[bars[-1].date]
     assert "distance_from_sma20" not in last
     assert "distance_from_sma50" not in last
+
+
+def test_rsi_14_delta_1bar_matches_consecutive_rsi_difference():
+    # Zigzag keeps RSI(14) away from 0/100 saturation.
+    closes = [100.0]
+    for i in range(1, 40):
+        closes.append(closes[-1] + (1.5 if i % 2 else -1.0))
+    bars = _bars(closes)
+    out = compute_indicators(bars)
+    dates = sorted(out.keys())
+    for i in range(15, len(dates)):
+        feats = out[dates[i]]
+        prev_feats = out[dates[i - 1]]
+        assert "rsi_14_delta_1bar" in feats
+        expected = feats["rsi_14"] - prev_feats["rsi_14"]
+        assert feats["rsi_14_delta_1bar"] == expected
+
+
+def test_rsi_14_delta_1bar_absent_before_warmup():
+    closes = [100.0 + i for i in range(10)]
+    bars = _bars(closes)
+    out = compute_indicators(bars)
+    for feats in out.values():
+        assert "rsi_14_delta_1bar" not in feats
+
+
+def test_bars_below_sma50_increments_and_resets():
+    closes = [100.0] * 60 + [90.0, 90.0] + [100.0] * 5
+    bars = _bars(closes)
+    out = compute_indicators(bars, sma_windows=(50,))
+    dates = sorted(out.keys())
+    for i in range(49, 60):
+        assert out[dates[i]]["bars_below_sma50"] == 0
+    assert out[dates[60]]["bars_below_sma50"] == 1
+    assert out[dates[61]]["bars_below_sma50"] == 2
+    assert out[dates[62]]["bars_below_sma50"] == 0
+    assert out[dates[63]]["bars_below_sma50"] == 0
+
+
+def test_bars_below_sma50_absent_before_sma50_warmup():
+    closes = [100.0] * 10
+    bars = _bars(closes)
+    out = compute_indicators(bars, sma_windows=(50,))
+    for feats in out.values():
+        assert "bars_below_sma50" not in feats
+
+
+def test_dist_from_prev_day_high_pct():
+    # _bars() sets high = close + 1 for every bar.
+    bars = _bars([100.0, 105.0, 103.0])
+    out = compute_indicators(bars)
+    dates = sorted(out.keys())
+    assert "dist_from_prev_day_high_pct" not in out[dates[0]]
+    # bar 1: close=105, prev high = 100+1=101 -> (105-101)/101*100
+    expected_1 = (Decimal("105") - Decimal("101")) / Decimal("101") * Decimal("100")
+    assert out[dates[1]]["dist_from_prev_day_high_pct"] == expected_1
+    # bar 2: close=103, prev high = 105+1=106 -> (103-106)/106*100
+    expected_2 = (Decimal("103") - Decimal("106")) / Decimal("106") * Decimal("100")
+    assert out[dates[2]]["dist_from_prev_day_high_pct"] == expected_2

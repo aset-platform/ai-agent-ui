@@ -8,8 +8,9 @@ from pathlib import Path
 import pytest
 
 from backend.algo.backtest.evaluator import EvalContext, Evaluator
+from backend.algo.backtest.indicators import compute_indicators
 from backend.algo.backtest.types import BarData
-from backend.algo.features.daily_engine import compute_daily_features
+from backend.algo.features.per_bar import assemble_per_bar_features
 from backend.algo.strategy.ast import parse_strategy
 
 _TEMPLATE_PATH = (
@@ -202,17 +203,24 @@ def test_evaluator_exits_on_soft_trend_weakness(template_dict):
 def test_end_to_end_wires_real_computed_features_without_missing_feature_error(
     template_dict,
 ):
-    """Wires an actual compute_daily_features panel into the
-    evaluator for a well-warmed synthetic uptrend series, merged
-    with distance_from_sma200/sma200_slope computed the same way
-    backend/algo/factors/trend.py computes them (a separate
-    factor pipeline, NOT part of compute_daily_features — a real
-    runtime merges both sources into one EvalContext.features
-    dict before evaluation; this test replicates that merge
-    rather than assuming one function emits every feature).
-    Guards the class of bug where a template references a
-    feature key no runtime ever actually populates (KeyError:
-    Feature not in context)."""
+    """Wires the ACTUAL runtime feature-assembly path — the same
+    one backtest/paper/live use (assemble_per_bar_features,
+    backend/algo/features/per_bar.py) — for a well-warmed
+    synthetic uptrend series. bar_feats comes from
+    compute_indicators (the PRIMARY-cadence daily source every
+    1d-schedule strategy actually reads; NOT compute_daily_features,
+    which only feeds the _1d cross-cadence overlay for INTRADAY-
+    primary strategies — the original version of this test got
+    this distinction wrong; see
+    docs/superpowers/plans/2026-09-05-rsi14-trend-pullback-swing.md
+    for the correction history). factor_row supplies
+    distance_from_sma200/sma200_slope, mirroring what the real
+    runner reads from stocks.daily_factors. No daily_overlay is
+    passed, matching how the real backtest/paper/live runners call
+    assemble_per_bar_features for a 1d-primary-cadence strategy.
+    Guards the class of bug where a template references a feature
+    key no runtime ever actually populates for its own cadence
+    (KeyError: Feature not in context)."""
     bars = []
     price = 100.0
     for i in range(260):
@@ -229,39 +237,39 @@ def test_end_to_end_wires_real_computed_features_without_missing_feature_error(
         ))
         price = close_p
 
-    panel = compute_daily_features(bars)
-    ts = sorted(panel.keys())
-    last_ts = ts[-1]
-    feats = dict(panel[last_ts])
+    panel = compute_indicators(bars)
+    last_date = bars[-1].date
+    bar_feats = panel[last_date]
 
-    # distance_from_sma200 / sma200_slope come from the separate
-    # factor pipeline (backend/algo/factors/trend.py: dist =
-    # (close-sma200)/sma200, slope = (sma200[t]-sma200[t-21])/
-    # sma200[t-21]), not from compute_daily_features. Derive them
-    # here from the panel's own sma_200 series (sma_200 IS an
-    # existing compute_daily_features output) to mirror the real
-    # merge without touching daily_engine.py.
-    sma200_last = panel[last_ts]["sma_200"]
-    sma200_21_ago = panel[ts[-1 - 21]]["sma_200"]
+    sma200_last = bar_feats["sma_200"]
+    sma200_21_ago = panel[bars[-1 - 21].date]["sma_200"]
     close_last = bars[-1].close
-    feats["distance_from_sma200"] = (
-        (close_last - sma200_last) / sma200_last
-    )
-    feats["sma200_slope"] = (
-        (sma200_last - sma200_21_ago) / sma200_21_ago
+    factor_row = {
+        "distance_from_sma200": (
+            (close_last - sma200_last) / sma200_last
+        ),
+        "sma200_slope": (
+            (sma200_last - sma200_21_ago) / sma200_21_ago
+        ),
+    }
+
+    feats = assemble_per_bar_features(
+        bar_feats=bar_feats,
+        factor_row=factor_row,
     )
 
     ctx = EvalContext(
         ticker="TEST.NS",
-        bar_date=date(2024, 1, 1) + timedelta(days=259),
+        bar_date=last_date,
         features=feats,
         open_qty=0,
     )
-    # No KeyError -> every feature the template references is
-    # actually present once both real feature sources are
-    # merged. The specific action doesn't matter here (a
-    # monotonic uptrend never dips RSI(14) below 50, so this
-    # lands on "hold", not an entry) — what matters is that
-    # evaluation completes cleanly.
+    # A monotonic uptrend never has a down day, so rsi_14 stays
+    # well above 50 for the whole warmed period -> the pullback
+    # condition (rsi_14 < 50) never fires -> entry fails; and the
+    # exit OR is also false throughout (distance_from_sma200 stays
+    # positive, bars_below_sma50 stays 0 since close never dips
+    # below sma_50) -> the only reachable outcome is hold. This is
+    # a concrete, provable assertion, not a tautology.
     result = Evaluator().eval_node(template_dict["root"], ctx)
-    assert result["type"] in {"set_target_weight", "exit", "hold"}
+    assert result == {"type": "hold"}
