@@ -52,6 +52,7 @@ _OVERRIDES: dict[str, int] = {
     "up_down_vol_ratio_20": 20,
     "ema_20_slope_5bar": 25,
     "golden_cross_bars_ago": 200,
+    "bars_below_sma50": 50,
     "bb_width": 20,
     "range_expansion": 14,
     # 52-week proxies.
@@ -68,6 +69,7 @@ _OVERRIDES: dict[str, int] = {
     "rs_vs_sector_3m": 63,
     "beta_to_nifty": 60,
     "adx_14": 14,
+    "rsi_14_delta_1bar": 15,
     # Market-level / regime / fundamentals — per-ticker warmup 0.
     # Universe-level history is loaded separately at runtime start.
     "regime_label": 0,

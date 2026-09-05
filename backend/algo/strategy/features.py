@@ -443,6 +443,12 @@ FEATURES: list[Feature] = [
         type="int",
         source="intraday_feature_store",
     ),
+    Feature(
+        key="bars_below_sma50",
+        label="Bars below SMA50 (consecutive)",
+        type="int",
+        source="intraday_feature_store",
+    ),
     # Intraday — momentum
     Feature(
         key="rsi_14",
@@ -453,6 +459,12 @@ FEATURES: list[Feature] = [
     Feature(
         key="rsi_5",
         label="RSI(5)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    Feature(
+        key="rsi_14_delta_1bar",
+        label="RSI(14) 1-bar delta",
         type="float",
         source="intraday_feature_store",
     ),
