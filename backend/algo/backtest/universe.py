@@ -74,6 +74,7 @@ def filter_warmup_eligible(
     *,
     period_start: date,
     warmup_days: int,
+    first_bars: dict[str, date] | None = None,
 ) -> list[str]:
     """Drop tickers whose earliest OHLCV bar is too recent.
 
@@ -85,10 +86,19 @@ def filter_warmup_eligible(
     ``warmup_days == 0`` → no-op (every ticker passes; cheaper than
     skipping the call). Tickers absent from the OHLCV table are
     dropped — the runner has no bars to feed indicators anyway.
+
+    ``first_bars`` lets a caller that re-filters the SAME ticker
+    universe against many different ``period_start`` values (e.g.
+    walk-forward CV, one call per window) pass a pre-fetched
+    ``{ticker: first_bar}`` map instead of re-querying Iceberg on
+    every call. Per CLAUDE.md §4.1 #1 (batch reads, never N reads)
+    — see ``backend.algo.backtest.walkforward.run_walkforward_job``.
+    Defaults to fetching internally, unchanged from prior behavior.
     """
     if warmup_days <= 0:
         return list(tickers)
-    first_bars = _load_ticker_first_bars(tickers)
+    if first_bars is None:
+        first_bars = _load_ticker_first_bars(tickers)
     if not first_bars:
         _logger.warning(
             "filter_warmup_eligible: OHLCV first-bar map empty — "

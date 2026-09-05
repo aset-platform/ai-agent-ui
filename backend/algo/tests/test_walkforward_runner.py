@@ -15,7 +15,7 @@ Scenarios:
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import uuid4
@@ -87,9 +87,20 @@ def _make_fake_strategy(strategy_id, schedule_interval: str | None = None):
     class _U:
         scope = "watchlist"
 
+    class _Root:
+        # No FeatureRef nodes -> compute_strategy_warmup_days
+        # returns 0 -> filter_warmup_eligible short-circuits
+        # (no Iceberg call, universe passes through unchanged) —
+        # matches every existing test's assumption of an
+        # unfiltered universe. Tests that need real warmup
+        # filtering pass their own strategy stub instead.
+        @staticmethod
+        def model_dump(by_alias: bool = True) -> dict:
+            return {"type": "hold"}
+
     attrs: dict = {
         "id": strategy_id,
-        "root": None,
+        "root": _Root(),
         "universe": _U(),
     }
     if schedule_interval is not None:
@@ -359,6 +370,126 @@ class TestRunWalkforwardJob:
         mock_runner.assert_not_called()
         # Parent still marks completed (0/0 windows)
         repo.mark_completed.assert_awaited()
+
+
+class TestWalkforwardWarmupFilter:
+    """ASETPLTFRM-433 follow-up — walk-forward never applied the
+    universe warmup filter that job.py's single-backtest path
+    applies, letting tickers still mid-warmup (e.g. a recent IPO
+    without 200 days of OHLCV history) slip through and KeyError
+    on factor-sourced features. This asserts the filter now runs
+    PER WINDOW (not once for the whole range), so a ticker that
+    graduates into eligibility partway through a multi-window
+    range is correctly excluded from earlier windows and included
+    in later ones."""
+
+    @pytest.mark.asyncio
+    async def test_ticker_excluded_then_included_as_it_graduates(self):
+        wf_id = uuid4()
+        strategy_id = uuid4()
+        user_id = uuid4()
+
+        config = WalkForwardConfig(
+            strategy_id=strategy_id,
+            period_start=date(2024, 1, 1),
+            period_end=date(2024, 5, 8),  # 128 days -> 3 windows
+            train_days=30,
+            test_days=30,
+            step_days=30,
+        )
+
+        class _Root:
+            @staticmethod
+            def model_dump(by_alias: bool = True) -> dict:
+                # References distance_from_sma200 -> warmup=200.
+                return {
+                    "type": "compare",
+                    "left": {"feature": "distance_from_sma200"},
+                    "op": ">",
+                    "right": {"literal": 0},
+                }
+
+        class _U:
+            scope = "watchlist"
+
+        fake_strategy = type(
+            "S", (), {
+                "id": strategy_id, "root": _Root(), "universe": _U(),
+            },
+        )()
+
+        repo = _make_repo()
+        child_ids = [uuid4() for _ in range(3)]
+        call_count = 0
+
+        async def _create_pending_se(*args, **kwargs):
+            nonlocal call_count
+            rid = child_ids[call_count]
+            call_count += 1
+            row = MagicMock()
+            row.run_id = rid
+            row.started_at = datetime.now(timezone.utc)
+            return row
+
+        repo.create_pending.side_effect = _create_pending_se
+
+        captured_universes: list[list[str]] = []
+        run_index = 0
+
+        def _fake_run_backtest(**kwargs):
+            nonlocal run_index
+            captured_universes.append(kwargs["universe"])
+            s = _summary(child_ids[run_index], strategy_id)
+            run_index += 1
+            return s
+
+        # Window 0's test_start is 2024-01-31; cutoff = that minus
+        # 200 days. NEW.NS's first bar lands 5 days after that
+        # cutoff -> excluded from window 0, but window 1's
+        # test_start is 30 days later (cutoff also 30 days later),
+        # so NEW.NS becomes eligible from window 1 onward.
+        window0_cutoff = date(2024, 1, 31) - timedelta(days=200)
+        first_bars_rows = [
+            {"ticker": "OLD.NS", "first_bar": date(2015, 1, 1)},
+            {
+                "ticker": "NEW.NS",
+                "first_bar": window0_cutoff + timedelta(days=5),
+            },
+        ]
+
+        with (
+            patch(
+                "backend.algo.backtest.walkforward.BacktestRunsRepo",
+                return_value=repo,
+            ),
+            patch(
+                "backend.algo.backtest.walkforward.run_backtest",
+                side_effect=_fake_run_backtest,
+            ),
+            patch("backend.algo.backtest.walkforward.flush_events"),
+            patch(
+                "backend.algo.backtest.job._session_factory",
+                new=_stub_factory,
+            ),
+            patch(
+                "backend.db.duckdb_engine.query_iceberg_table",
+                return_value=first_bars_rows,
+            ) as q,
+        ):
+            await run_walkforward_job(
+                walkforward_run_id=wf_id,
+                user_id=user_id,
+                config=config,
+                strategy=fake_strategy,
+                universe=["OLD.NS", "NEW.NS"],
+            )
+
+        assert len(captured_universes) == 3
+        assert captured_universes[0] == ["OLD.NS"]
+        assert captured_universes[1] == ["OLD.NS", "NEW.NS"]
+        assert captured_universes[2] == ["OLD.NS", "NEW.NS"]
+        # First-bar map fetched exactly once, not once per window.
+        assert q.call_count == 1
 
 
 class TestWalkforwardIntradayInterval:
