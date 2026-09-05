@@ -67,3 +67,56 @@ def test_rsi_14_delta_1bar_absent_before_warmup():
     panel = compute_daily_features(_bars(closes))
     for feats in panel.values():
         assert "rsi_14_delta_1bar" not in feats
+
+
+def _bars_flat_then_dip(
+    n_flat: int = 60,
+    dip_days: int = 2,
+    tail: int = 5,
+    flat_price: float = 100.0,
+    dip_price: float = 90.0,
+) -> list[BarData]:
+    """n_flat bars at flat_price, then dip_days bars at dip_price,
+    then tail bars back at flat_price. With n_flat=60 the SMA50
+    warms up well before the dip (first non-None sma_50 is at
+    0-indexed bar 49, all still flat_price)."""
+    closes = (
+        [flat_price] * n_flat
+        + [dip_price] * dip_days
+        + [flat_price] * tail
+    )
+    return _bars(closes)
+
+
+def test_bars_below_sma50_zero_while_close_at_or_above_sma():
+    panel = compute_daily_features(_bars_flat_then_dip())
+    ts = sorted(panel.keys())
+    # Bars 49..59 (0-indexed): sma_50 just warmed, close == 100 ==
+    # sma_50 (flat series so far) — not below, streak stays 0.
+    for i in range(49, 60):
+        assert panel[ts[i]]["bars_below_sma50"] == 0
+
+
+def test_bars_below_sma50_increments_across_the_dip():
+    panel = compute_daily_features(_bars_flat_then_dip())
+    ts = sorted(panel.keys())
+    # Bar 60: close=90, sma_50=(49*100+90)/50=99.8 -> below, streak=1.
+    assert panel[ts[60]]["bars_below_sma50"] == 1
+    # Bar 61: close=90, sma_50=(48*100+2*90)/50=99.6 -> below, streak=2.
+    assert panel[ts[61]]["bars_below_sma50"] == 2
+
+
+def test_bars_below_sma50_resets_on_recovery_above_sma():
+    panel = compute_daily_features(_bars_flat_then_dip())
+    ts = sorted(panel.keys())
+    # Bar 62: close=100 back >= sma_50 (99.6) -> streak resets to 0.
+    assert panel[ts[62]]["bars_below_sma50"] == 0
+    assert panel[ts[63]]["bars_below_sma50"] == 0
+
+
+def test_bars_below_sma50_absent_before_sma50_warmup():
+    panel = compute_daily_features(
+        _bars_flat_then_dip(n_flat=10, dip_days=0, tail=0)
+    )
+    for feats in panel.values():
+        assert "bars_below_sma50" not in feats

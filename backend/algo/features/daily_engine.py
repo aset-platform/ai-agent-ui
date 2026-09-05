@@ -58,7 +58,8 @@ def compute_daily_features(
     Emitted features (per FE-15 spec §3):
         - Trend (EMA): ``ema_20``, ``ema_50``, ``ema_20_slope_5bar``
         - Trend (SMA): ``sma_20``, ``sma_50``, ``sma_100``, ``sma_200``
-        - Trend (cross): ``golden_cross_bars_ago``
+        - Trend (cross): ``golden_cross_bars_ago``,
+          ``bars_below_sma50``
         - Momentum: ``rsi_5``, ``rsi_14``, ``roc_5``,
           ``rsi_14_delta_1bar``
         - Volatility: ``atr_14``, ``range_expansion``, ``bb_width``
@@ -95,6 +96,7 @@ def compute_daily_features(
     s50 = sma_by_w.get(50)
     s200 = sma_by_w.get(200)
     last_cross_up_idx: int | None = None
+    bars_below_50_streak = 0
 
     out: TickerFeaturePanel = {}
     for i, bar in enumerate(series):
@@ -105,6 +107,18 @@ def compute_daily_features(
             v = sma_by_w[w][i]
             if v is not None:
                 feats[f"sma_{w}"] = v
+
+        # bars_below_sma50 — consecutive daily closes below SMA50,
+        # resets to 0 the bar close >= SMA50. Absent until SMA50
+        # is warm (mirrors golden_cross_bars_ago's counter shape).
+        if s50 is not None:
+            s50_v = s50[i]
+            if s50_v is not None:
+                if bar.close < s50_v:
+                    bars_below_50_streak += 1
+                else:
+                    bars_below_50_streak = 0
+                feats["bars_below_sma50"] = Decimal(bars_below_50_streak)
 
         # distance_from_sma5 = (close - sma_5) / sma_5.
         # Skip-emit if sma_5 not yet warm.
