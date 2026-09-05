@@ -62,6 +62,19 @@ def test_rsi_14_delta_1bar_matches_consecutive_rsi_difference():
         assert feats["rsi_14_delta_1bar"] == expected
 
 
+def test_rsi_14_delta_1bar_absent_at_first_warm_rsi_bar():
+    """i==14 is where rsi_14 first warms (wilder_rsi's window=14),
+    but rsi_14[13] is still None -> the delta's single-sided-None
+    guard must keep it absent here specifically, not just when
+    BOTH sides are None (the warmup test) or BOTH are present
+    (the arithmetic test above)."""
+    closes = _zigzag_closes(20)
+    panel = compute_daily_features(_bars(closes))
+    ts = sorted(panel.keys())
+    assert "rsi_14" in panel[ts[14]]
+    assert "rsi_14_delta_1bar" not in panel[ts[14]]
+
+
 def test_rsi_14_delta_1bar_absent_before_warmup():
     closes = _zigzag_closes(10)  # fewer than 15 bars, rsi_14 never warm
     panel = compute_daily_features(_bars(closes))

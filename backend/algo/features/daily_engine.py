@@ -55,7 +55,8 @@ def compute_daily_features(
         binary ``volume_spike``). Missing-feature keys are
         simply absent.
 
-    Emitted features (per FE-15 spec §3):
+    Emitted features (per FE-15 spec §3, plus post-FE-15
+    additions: bars_below_sma50, rsi_14_delta_1bar):
         - Trend (EMA): ``ema_20``, ``ema_50``, ``ema_20_slope_5bar``
         - Trend (SMA): ``sma_20``, ``sma_50``, ``sma_100``, ``sma_200``
         - Trend (cross): ``golden_cross_bars_ago``,
