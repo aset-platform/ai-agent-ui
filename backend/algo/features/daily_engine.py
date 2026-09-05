@@ -59,7 +59,8 @@ def compute_daily_features(
         - Trend (EMA): ``ema_20``, ``ema_50``, ``ema_20_slope_5bar``
         - Trend (SMA): ``sma_20``, ``sma_50``, ``sma_100``, ``sma_200``
         - Trend (cross): ``golden_cross_bars_ago``
-        - Momentum: ``rsi_5``, ``rsi_14``, ``roc_5``
+        - Momentum: ``rsi_5``, ``rsi_14``, ``roc_5``,
+          ``rsi_14_delta_1bar``
         - Volatility: ``atr_14``, ``range_expansion``, ``bb_width``
         - Price-action: ``gap_pct``,
           ``dist_from_prev_day_high_pct``,
@@ -123,6 +124,12 @@ def compute_daily_features(
         rsi2_v = rsi_2[i]
         if rsi2_v is not None:
             feats["rsi_2"] = rsi2_v
+
+        # rsi_14_delta_1bar = rsi_14[i] - rsi_14[i-1]. Absent
+        # until both this bar and the prior bar have a warm
+        # rsi_14 (first appears at i == 14, per wilder_rsi).
+        if i > 0 and rsi_v is not None and rsi_14[i - 1] is not None:
+            feats["rsi_14_delta_1bar"] = rsi_v - rsi_14[i - 1]
 
         # EMA family + slope.
         ema20_v = ema_20[i]
