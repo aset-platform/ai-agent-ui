@@ -55,13 +55,11 @@ def compute_daily_features(
         binary ``volume_spike``). Missing-feature keys are
         simply absent.
 
-    Emitted features (per FE-15 spec §3 + RSI14 swing extensions):
+    Emitted features (per FE-15 spec §3):
         - Trend (EMA): ``ema_20``, ``ema_50``, ``ema_20_slope_5bar``
         - Trend (SMA): ``sma_20``, ``sma_50``, ``sma_100``, ``sma_200``
         - Trend (cross): ``golden_cross_bars_ago``,
           ``bars_below_sma50``
-        - Trend (distance): ``distance_from_sma5``, ``distance_from_sma200``,
-          ``sma200_slope``
         - Momentum: ``rsi_5``, ``rsi_14``, ``roc_5``,
           ``rsi_14_delta_1bar``
         - Volatility: ``atr_14``, ``range_expansion``, ``bb_width``
@@ -97,9 +95,6 @@ def compute_daily_features(
 
     s50 = sma_by_w.get(50)
     s200 = sma_by_w.get(200)
-    sma200_slope = (
-        p.series_slope_n_bar(s200, 21) if s200 else None
-    )
     last_cross_up_idx: int | None = None
     bars_below_50_streak = 0
 
@@ -132,21 +127,6 @@ def compute_daily_features(
             feats["distance_from_sma5"] = (
                 Decimal(str(bar.close)) - sma5
             ) / sma5
-
-        # distance_from_sma200 = (close - sma_200) / sma_200.
-        # Skip-emit if sma_200 not yet warm.
-        sma200 = feats.get("sma_200")
-        if sma200 is not None:
-            feats["distance_from_sma200"] = (
-                Decimal(str(bar.close)) - sma200
-            ) / sma200
-
-        # sma200_slope = 21-bar slope of sma_200. Skip-emit if
-        # sma_200 not yet warm.
-        if sma200_slope is not None:
-            sma200_slope_v = sma200_slope[i]
-            if sma200_slope_v is not None:
-                feats["sma200_slope"] = sma200_slope_v
 
         # RSI family.
         rsi_v = rsi_14[i]
