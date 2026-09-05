@@ -1,0 +1,108 @@
+{
+  "id": "00000000-0000-0000-0000-000000000052",
+  "name": "RSI(14) Trend Pullback Swing v1 — Long-only 3-9mo swing",
+  "universe": {
+    "type": "scope",
+    "scope": "discovery",
+    "filter": {
+      "ticker_type": ["stock"],
+      "market": "india"
+    }
+  },
+  "schedule": {
+    "type": "bar_close",
+    "interval": "1d",
+    "time": "15:25 IST"
+  },
+  "rebalance": {
+    "type": "daily",
+    "max_positions": 5
+  },
+  "product": "CNC",
+  "root": {
+    "type": "if",
+    "cond": {
+      "type": "and",
+      "operands": [
+        {
+          "type": "compare",
+          "left": {"feature": "distance_from_sma200"},
+          "op": ">",
+          "right": {"literal": 0.0}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "sma_50"},
+          "op": ">",
+          "right": {"feature": "sma_200"}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "sma200_slope"},
+          "op": ">",
+          "right": {"literal": 0.0}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "rsi_14"},
+          "op": "<",
+          "right": {"literal": 50}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "rsi_14_delta_1bar"},
+          "op": ">",
+          "right": {"literal": 0.0}
+        },
+        {
+          "type": "compare",
+          "left": {"feature": "dist_from_prev_day_high_pct"},
+          "op": ">",
+          "right": {"literal": 0.0}
+        }
+      ]
+    },
+    "then": {"type": "set_target_weight", "weight": 0.20},
+    "else": {
+      "type": "if",
+      "cond": {
+        "type": "or",
+        "operands": [
+          {
+            "type": "compare",
+            "left": {"feature": "distance_from_sma200"},
+            "op": "<",
+            "right": {"literal": 0.0}
+          },
+          {
+            "type": "and",
+            "operands": [
+              {
+                "type": "compare",
+                "left": {"feature": "bars_below_sma50"},
+                "op": ">=",
+                "right": {"literal": 2}
+              },
+              {
+                "type": "compare",
+                "left": {"feature": "rsi_14"},
+                "op": "<",
+                "right": {"literal": 45}
+              }
+            ]
+          }
+        ]
+      },
+      "then": {"type": "exit", "scope": "this_symbol"},
+      "else": {"type": "hold"}
+    }
+  },
+  "risk": {
+    "per_trade": {"stop_loss_pct": 8.0, "max_qty": 10000},
+    "portfolio": {
+      "max_exposure_pct": 100.0,
+      "max_concentration_pct": 25.0
+    },
+    "daily": {"max_loss_pct": 5.0, "max_open_positions": 5}
+  }
+}
