@@ -202,14 +202,17 @@ def test_evaluator_exits_on_soft_trend_weakness(template_dict):
 def test_end_to_end_wires_real_computed_features_without_missing_feature_error(
     template_dict,
 ):
-    """Wires an actual compute_daily_features panel — not
-    hand-set values — into the evaluator for a well-warmed
-    synthetic uptrend series. Guards the class of bug where a
-    template references a feature key the engine doesn't
-    actually emit (KeyError: Feature not in context), which is
-    exactly what daily_engine.py's module docstring's 'step 4'
-    convention ("add a sample backtest case if the feature is
-    non-obvious") exists to catch."""
+    """Wires an actual compute_daily_features panel into the
+    evaluator for a well-warmed synthetic uptrend series, merged
+    with distance_from_sma200/sma200_slope computed the same way
+    backend/algo/factors/trend.py computes them (a separate
+    factor pipeline, NOT part of compute_daily_features — a real
+    runtime merges both sources into one EvalContext.features
+    dict before evaluation; this test replicates that merge
+    rather than assuming one function emits every feature).
+    Guards the class of bug where a template references a
+    feature key no runtime ever actually populates (KeyError:
+    Feature not in context)."""
     bars = []
     price = 100.0
     for i in range(260):
@@ -227,8 +230,26 @@ def test_end_to_end_wires_real_computed_features_without_missing_feature_error(
         price = close_p
 
     panel = compute_daily_features(bars)
-    last_ts = max(panel.keys())
-    feats = panel[last_ts]
+    ts = sorted(panel.keys())
+    last_ts = ts[-1]
+    feats = dict(panel[last_ts])
+
+    # distance_from_sma200 / sma200_slope come from the separate
+    # factor pipeline (backend/algo/factors/trend.py: dist =
+    # (close-sma200)/sma200, slope = (sma200[t]-sma200[t-21])/
+    # sma200[t-21]), not from compute_daily_features. Derive them
+    # here from the panel's own sma_200 series (sma_200 IS an
+    # existing compute_daily_features output) to mirror the real
+    # merge without touching daily_engine.py.
+    sma200_last = panel[last_ts]["sma_200"]
+    sma200_21_ago = panel[ts[-1 - 21]]["sma_200"]
+    close_last = bars[-1].close
+    feats["distance_from_sma200"] = (
+        (close_last - sma200_last) / sma200_last
+    )
+    feats["sma200_slope"] = (
+        (sma200_last - sma200_21_ago) / sma200_21_ago
+    )
 
     ctx = EvalContext(
         ticker="TEST.NS",
@@ -237,9 +258,10 @@ def test_end_to_end_wires_real_computed_features_without_missing_feature_error(
         open_qty=0,
     )
     # No KeyError -> every feature the template references is
-    # actually present in a real computed panel. The specific
-    # action doesn't matter here (a monotonic uptrend never dips
-    # RSI(14) below 50, so this lands on "hold", not an entry) —
-    # what matters is that evaluation completes cleanly.
+    # actually present once both real feature sources are
+    # merged. The specific action doesn't matter here (a
+    # monotonic uptrend never dips RSI(14) below 50, so this
+    # lands on "hold", not an entry) — what matters is that
+    # evaluation completes cleanly.
     result = Evaluator().eval_node(template_dict["root"], ctx)
     assert result["type"] in {"set_target_weight", "exit", "hold"}
