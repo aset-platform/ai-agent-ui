@@ -149,23 +149,14 @@ def _seed_bars(runtime) -> None:
     ]
 
 
-# ── autouse: open the eval-time gate ─────────────────────────────────────────
-
-
-@pytest.fixture(autouse=True)
-def _force_eval_gate_open(monkeypatch):
-    import datetime as _dt
-
-    from backend.algo.live import runtime as _runtime_mod
-
-    monkeypatch.setattr(
-        _runtime_mod,
-        "_MIN_EVAL_TIME_IST",
-        _dt.time(0, 0),
-    )
-
-
 # ── Tests ────────────────────────────────────────────────────────────────────
+#
+# Task 1 (ASETPLTFRM-383 OR-trigger redesign, 2026-08-09) removed the
+# 14:20 eval-time gate this file used to force open via an autouse
+# fixture. These tests only assert on the _ensure_* offload calls
+# and that _on_bar_close completes without raising -- none depend
+# on whether a BUY actually fires, so there is nothing left to hold
+# open.
 
 
 @pytest.mark.asyncio

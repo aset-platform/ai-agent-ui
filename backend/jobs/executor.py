@@ -3838,6 +3838,33 @@ def _job_algo_closed_trades_rollup(
     return result
 
 
+@register_job("algo_entry_labeled_outcomes_rollup")
+def _job_algo_entry_labeled_outcomes_rollup(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Daily rollup of entry-strength candidates (filled + rejected)
+    into algo.entry_labeled_outcomes, the Release-2 entry-strength
+    calibration training set (PRE-6).
+
+    Reads entry_strength_snapshot + signal_rejected events plus
+    algo.closed_trades (trailing 400-day window), joins fills/
+    rejections against their snapshot features, idempotently
+    upserts. Runs 16:00 IST Mon-Fri, after market close.
+    """
+    from backend.algo.jobs.entry_labeled_outcomes_rollup import (
+        run_entry_labeled_outcomes_rollup_job,
+    )
+
+    result = run_entry_labeled_outcomes_rollup_job(payload)
+    _algo_job_success(repo, run_id)
+    return result
+
+
 @register_job("entry_quality_snapshot")
 def _job_entry_quality_snapshot(
     scope: str | None = None,

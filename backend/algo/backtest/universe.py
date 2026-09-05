@@ -244,6 +244,27 @@ async def resolve_universe(
             before, len(filtered),
         )
 
+        # PRE-4 dynamic gate: an F&O/MIS strategy runs on the
+        # intraday execution clock, so a ticker without real 15m
+        # coverage would silently daily-fallback in the two-clock
+        # engine. Require >=95% of trading days covered over a 90d
+        # lookback. Fail-open on an empty coverage read (see
+        # sufficiently_covered) — never nuke the universe.
+        from backend.algo.backtest.coverage import sufficiently_covered
+
+        covered = sufficiently_covered(
+            tickers=filtered,
+            as_of=date.today(),
+            lookback_days=90,
+            min_pct=95.0,
+        )
+        before_cov = len(filtered)
+        filtered = [t for t in filtered if t in covered]
+        _logger.info(
+            "resolve_universe is_fno=True: %d -> %d after 15m-coverage "
+            "gate", before_cov, len(filtered),
+        )
+
     _logger.info(
         "resolve_universe scope=%s filter=(market=%s, "
         "ticker_type=%s, min_adtv_inr=%s) → %d candidates → "

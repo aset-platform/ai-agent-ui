@@ -21,13 +21,16 @@ import {
   useMemo,
   useState,
 } from "react";
+import { useSWRConfig } from "swr";
 import {
   usePortfolio,
   type PortfolioHolding,
 } from "@/hooks/usePortfolio";
 import { useRegistry } from "@/hooks/useDashboardData";
+import { API_URL } from "@/lib/config";
 import { AddStockModal } from "@/components/widgets/AddStockModal";
 import { EditStockModal } from "@/components/widgets/EditStockModal";
+import ClosePositionModal from "@/components/widgets/ClosePositionModal";
 import { PortfolioTransactionsModal } from "@/components/widgets/PortfolioTransactionsModal";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 
@@ -36,6 +39,7 @@ interface PortfolioActionsCtx {
   openEdit: (ticker: string) => void;
   openDelete: (ticker: string) => void;
   openTransactions: (ticker: string) => void;
+  openClose: (ticker: string) => void;
 }
 
 const Ctx =
@@ -53,6 +57,7 @@ export function usePortfolioActions():
       openEdit: () => {},
       openDelete: () => {},
       openTransactions: () => {},
+      openClose: () => {},
     };
   }
   return v;
@@ -65,6 +70,7 @@ export function PortfolioActionsProvider({
 }) {
   const portfolio = usePortfolio();
   const registry = useRegistry();
+  const { mutate } = useSWRConfig();
 
   const registryTickers = useMemo(
     () =>
@@ -85,6 +91,9 @@ export function PortfolioActionsProvider({
     txnId: string;
   } | null>(null);
   const [txnTicker, setTxnTicker] = useState<
+    string | null
+  >(null);
+  const [closeTarget, setCloseTarget] = useState<
     string | null
   >(null);
 
@@ -120,14 +129,26 @@ export function PortfolioActionsProvider({
     [],
   );
 
+  const openClose = useCallback(
+    (ticker: string) => setCloseTarget(ticker),
+    [],
+  );
+
   const ctxValue = useMemo<PortfolioActionsCtx>(
     () => ({
       openAdd,
       openEdit,
       openDelete,
       openTransactions,
+      openClose,
     }),
-    [openAdd, openEdit, openDelete, openTransactions],
+    [
+      openAdd,
+      openEdit,
+      openDelete,
+      openTransactions,
+      openClose,
+    ],
   );
 
   // Lookup existing holding for the Edit modal
@@ -139,6 +160,17 @@ export function PortfolioActionsProvider({
           ) ?? null
         : null,
     [portfolio.holdings, editingTicker],
+  );
+
+  // Lookup existing holding for the Close modal
+  const closeHoldingTarget = useMemo(
+    () =>
+      closeTarget
+        ? portfolio.holdings.find(
+            (h) => h.ticker === closeTarget,
+          ) ?? null
+        : null,
+    [portfolio.holdings, closeTarget],
   );
 
   return (
@@ -172,6 +204,29 @@ export function PortfolioActionsProvider({
                 data,
               );
             }
+          }}
+        />
+      )}
+
+      {closeHoldingTarget && (
+        <ClosePositionModal
+          isOpen={closeTarget !== null}
+          holding={{
+            ticker: closeHoldingTarget.ticker,
+            quantity: closeHoldingTarget.quantity,
+            avg_price: closeHoldingTarget.avg_price,
+            currency: closeHoldingTarget.currency,
+          }}
+          onClose={() => setCloseTarget(null)}
+          onConfirm={async (body) => {
+            await portfolio.closeHolding(
+              closeTarget!,
+              body,
+            );
+            setCloseTarget(null);
+            mutate(
+              `${API_URL}/users/me/portfolio/closed`,
+            );
           }}
         />
       )}

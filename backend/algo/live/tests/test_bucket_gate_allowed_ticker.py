@@ -155,19 +155,6 @@ def _make_runtime():
     return runtime
 
 
-@pytest.fixture(autouse=True)
-def _force_eval_gate_open(monkeypatch):
-    import datetime as _dt
-
-    from backend.algo.live import runtime as _runtime_mod
-
-    monkeypatch.setattr(
-        _runtime_mod,
-        "_MIN_EVAL_TIME_IST",
-        _dt.time(0, 0),
-    )
-
-
 @pytest.mark.asyncio
 async def test_ticker_added_mid_run_still_gets_preloaded():
     """A ticker absent from stocks.universe_snapshot (so absent

@@ -1,0 +1,398 @@
+"""Tests for POST /portfolio/{ticker}/close + GET /portfolio/closed."""
+import pandas as pd
+import pytest
+from fastapi import HTTPException
+from unittest.mock import MagicMock, patch
+
+
+def _holdings_df():
+    return pd.DataFrame([{
+        "ticker": "DLF.NS", "quantity": 45.0, "avg_price": 746.26,
+        "currency": "INR", "market": "india", "invested": 33581.7,
+    }])
+
+
+@pytest.mark.asyncio
+async def test_close_full_position_records_realized_pnl():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    added = {}
+
+    def _add(txn):
+        added.update(txn)
+    stock_repo.add_portfolio_transaction.side_effect = _add
+
+    closed_rows = []
+
+    async def _add_closed(session, data):
+        data = {**data, "id": "c1"}
+        closed_rows.append(data)
+        return data
+
+    user = MagicMock(user_id="u1")
+    close_repo_target = (
+        "auth.repo.portfolio_close_repo.add_closed_position"
+    )
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo), \
+         patch(close_repo_target, _add_closed), \
+         patch.object(tr, "_close_session_scope") as scope, \
+         patch.object(tr, "_invalidate_portfolio_caches") as inval:
+        scope.return_value.__aenter__.return_value = MagicMock()
+        resp = await tr.close_portfolio_position(
+            "DLF.NS",
+            tr.ClosePositionRequest(quantity=45, sell_price=800.0,
+                                    sell_date="2026-08-12"),
+            user=user,
+        )
+
+    assert added["side"] == "SELL" and added["quantity"] == 45
+    # realized = (800 - 746.26) * 45 = 2418.30
+    assert round(resp["realized_pnl"], 2) == 2418.30
+    assert closed_rows[0]["buy_price"] == 746.26
+    assert resp["closed_id"] == "c1"
+    inval.assert_called_once_with("u1")
+
+
+@pytest.mark.asyncio
+async def test_close_partial_position_uses_requested_qty():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    added = {}
+
+    def _add(txn):
+        added.update(txn)
+    stock_repo.add_portfolio_transaction.side_effect = _add
+
+    closed_rows = []
+
+    async def _add_closed(session, data):
+        data = {**data, "id": "c2"}
+        closed_rows.append(data)
+        return data
+
+    user = MagicMock(user_id="u1")
+    close_repo_target = (
+        "auth.repo.portfolio_close_repo.add_closed_position"
+    )
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo), \
+         patch(close_repo_target, _add_closed), \
+         patch.object(tr, "_close_session_scope") as scope, \
+         patch.object(tr, "_invalidate_portfolio_caches"):
+        scope.return_value.__aenter__.return_value = MagicMock()
+        resp = await tr.close_portfolio_position(
+            "DLF.NS",
+            tr.ClosePositionRequest(quantity=20, sell_price=800.0,
+                                    sell_date="2026-08-12"),
+            user=user,
+        )
+
+    assert added["side"] == "SELL" and added["quantity"] == 20
+    # realized = (800 - 746.26) * 20 = 1074.80
+    assert round(resp["realized_pnl"], 2) == 1074.80
+    assert closed_rows[0]["quantity"] == 20
+
+
+@pytest.mark.asyncio
+async def test_close_position_zero_quantity_returns_400():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    user = MagicMock(user_id="u1")
+
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo):
+        with pytest.raises(HTTPException) as exc_info:
+            await tr.close_portfolio_position(
+                "DLF.NS",
+                tr.ClosePositionRequest(quantity=0, sell_price=800.0,
+                                        sell_date="2026-08-12"),
+                user=user,
+            )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_close_position_over_open_qty_returns_400():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    user = MagicMock(user_id="u1")
+
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo):
+        with pytest.raises(HTTPException) as exc_info:
+            await tr.close_portfolio_position(
+                "DLF.NS",
+                tr.ClosePositionRequest(quantity=100, sell_price=800.0,
+                                        sell_date="2026-08-12"),
+                user=user,
+            )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_close_position_realized_pnl_pct_matches_ratio():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    stock_repo.add_portfolio_transaction.side_effect = lambda t: None
+
+    async def _add_closed(session, data):
+        return {**data, "id": "c3"}
+
+    user = MagicMock(user_id="u1")
+    close_repo_target = (
+        "auth.repo.portfolio_close_repo.add_closed_position"
+    )
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo), \
+         patch(close_repo_target, _add_closed), \
+         patch.object(tr, "_close_session_scope") as scope, \
+         patch.object(tr, "_invalidate_portfolio_caches"):
+        scope.return_value.__aenter__.return_value = MagicMock()
+        resp = await tr.close_portfolio_position(
+            "DLF.NS",
+            tr.ClosePositionRequest(quantity=45, sell_price=800.0,
+                                    sell_date="2026-08-12"),
+            user=user,
+        )
+
+    # realized = 2418.30, cost = 746.26 * 45 = 33581.70
+    # Stored/returned as a PERCENTAGE (matches gain_loss_pct
+    # convention), not a raw fraction.
+    expected_pct = 2418.30 / (746.26 * 45) * 100
+    assert resp["realized_pnl_pct"] == pytest.approx(expected_pct)
+    assert resp["realized_pnl_pct"] == pytest.approx(7.2, abs=0.05)
+
+
+@pytest.mark.asyncio
+async def test_close_position_pct_guard_not_hit_for_normal_close():
+    """cost>0 → else None guard must not fire on a normal close."""
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    stock_repo.add_portfolio_transaction.side_effect = lambda t: None
+
+    async def _add_closed(session, data):
+        return {**data, "id": "c4"}
+
+    user = MagicMock(user_id="u1")
+    close_repo_target = (
+        "auth.repo.portfolio_close_repo.add_closed_position"
+    )
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo), \
+         patch(close_repo_target, _add_closed), \
+         patch.object(tr, "_close_session_scope") as scope, \
+         patch.object(tr, "_invalidate_portfolio_caches"):
+        scope.return_value.__aenter__.return_value = MagicMock()
+        resp = await tr.close_portfolio_position(
+            "DLF.NS",
+            tr.ClosePositionRequest(quantity=20, sell_price=800.0,
+                                    sell_date="2026-08-12"),
+            user=user,
+        )
+
+    assert resp["realized_pnl_pct"] is not None
+
+
+@pytest.mark.asyncio
+async def test_close_position_pg_failure_rolls_back_sell():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    added = {}
+
+    def _add(txn):
+        added.update(txn)
+    stock_repo.add_portfolio_transaction.side_effect = _add
+
+    async def _add_closed_fails(session, data):
+        raise RuntimeError("pg insert boom")
+
+    user = MagicMock(user_id="u1")
+    close_repo_target = (
+        "auth.repo.portfolio_close_repo.add_closed_position"
+    )
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo), \
+         patch(close_repo_target, _add_closed_fails), \
+         patch.object(tr, "_close_session_scope") as scope, \
+         patch.object(tr, "_invalidate_portfolio_caches") as inval:
+        scope.return_value.__aenter__.return_value = MagicMock()
+        with pytest.raises(HTTPException) as exc_info:
+            await tr.close_portfolio_position(
+                "DLF.NS",
+                tr.ClosePositionRequest(quantity=45, sell_price=800.0,
+                                        sell_date="2026-08-12"),
+                user=user,
+            )
+
+    assert exc_info.value.status_code == 500
+    sell_txn_id = added["transaction_id"]
+    stock_repo.delete_portfolio_transaction.assert_called_once_with(
+        sell_txn_id, "u1",
+    )
+    inval.assert_not_called()
+
+
+def test_transactions_summary_avg_is_buy_only_after_partial_sell():
+    """avg_price/invested in the modal summary must ignore SELL
+    rows entirely (BUY-only cost basis), matching the Open-tab
+    holding aggregate — a partial SELL must not distort it."""
+    from auth.endpoints import ticker_routes as tr
+
+    txn_df = pd.DataFrame([
+        {
+            "transaction_id": "t1", "ticker": "DLF.NS",
+            "trade_date": pd.Timestamp("2026-01-01"),
+            "side": "BUY", "quantity": 45.0, "price": 746.26,
+            "fees": 0, "notes": "", "currency": "INR",
+            "market": "india",
+        },
+        {
+            "transaction_id": "t2", "ticker": "DLF.NS",
+            "trade_date": pd.Timestamp("2026-08-12"),
+            "side": "SELL", "quantity": 20.0, "price": 800.0,
+            "fees": 0, "notes": "", "currency": "INR",
+            "market": "india",
+        },
+    ])
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_transactions.return_value = txn_df
+    stock_repo.get_ohlcv.return_value = pd.DataFrame()
+    user = MagicMock(user_id="u1")
+
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo):
+        resp = tr.get_portfolio_transactions("DLF.NS", user=user)
+
+    assert len(resp["transactions"]) == 2
+    summary = resp["summary"]
+    # BUY-only avg (matches Open tab), NOT the blended
+    # invested/net_qty figure (~703) that including the SELL
+    # would have produced.
+    assert summary["avg_price"] == pytest.approx(746.26, abs=0.01)
+    assert summary["total_quantity"] == pytest.approx(25.0)
+    assert summary["invested"] == pytest.approx(
+        25.0 * 746.26, abs=0.1,
+    )
+
+
+@pytest.mark.asyncio
+async def test_close_position_malformed_sell_date_returns_400():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    user = MagicMock(user_id="u1")
+
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo):
+        with pytest.raises(HTTPException) as exc_info:
+            await tr.close_portfolio_position(
+                "DLF.NS",
+                tr.ClosePositionRequest(
+                    quantity=10, sell_price=800.0,
+                    sell_date="not-a-date",
+                ),
+                user=user,
+            )
+    assert exc_info.value.status_code == 400
+    stock_repo.add_portfolio_transaction.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_close_position_unknown_ticker_returns_404():
+    from auth.endpoints import ticker_routes as tr
+
+    holdings = _holdings_df()
+    stock_repo = MagicMock()
+    stock_repo.get_portfolio_holdings.return_value = holdings
+    user = MagicMock(user_id="u1")
+
+    with patch.object(tr, "_get_stock_repo", return_value=stock_repo):
+        with pytest.raises(HTTPException) as exc_info:
+            await tr.close_portfolio_position(
+                "NOPE.NS",
+                tr.ClosePositionRequest(quantity=1, sell_price=800.0,
+                                        sell_date="2026-08-12"),
+                user=user,
+            )
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_closed_positions_returns_rows_and_totals():
+    from auth.endpoints import ticker_routes as tr
+
+    rows = [
+        {
+            "id": "c1", "ticker": "DLF.NS",
+            "realized_pnl": 2418.30, "currency": "INR",
+        },
+        {
+            "id": "c2", "ticker": "TCS.NS",
+            "realized_pnl": -100.0, "currency": "INR",
+        },
+    ]
+
+    async def _list(session, user_id):
+        return rows
+
+    user = MagicMock(user_id="u1")
+    with patch("auth.repo.portfolio_close_repo.list_closed_positions",
+               _list), \
+         patch.object(tr, "_close_session_scope") as scope:
+        scope.return_value.__aenter__.return_value = MagicMock()
+        resp = await tr.list_closed_positions(user=user)
+
+    assert resp["closed"] == rows
+    by_ccy = resp["totals"]["realized_pnl_by_currency"]
+    assert round(by_ccy["INR"], 2) == 2318.30
+
+
+@pytest.mark.asyncio
+async def test_list_closed_positions_totals_grouped_by_currency():
+    """Mixed-currency closed rows must NOT be summed together."""
+    from auth.endpoints import ticker_routes as tr
+
+    rows = [
+        {
+            "id": "c1", "ticker": "DLF.NS",
+            "realized_pnl": 1000.0, "currency": "INR",
+        },
+        {
+            "id": "c2", "ticker": "AAPL",
+            "realized_pnl": 50.0, "currency": "USD",
+        },
+        {
+            "id": "c3", "ticker": "TCS.NS",
+            "realized_pnl": 500.0, "currency": "INR",
+        },
+    ]
+
+    async def _list(session, user_id):
+        return rows
+
+    user = MagicMock(user_id="u1")
+    with patch("auth.repo.portfolio_close_repo.list_closed_positions",
+               _list), \
+         patch.object(tr, "_close_session_scope") as scope:
+        scope.return_value.__aenter__.return_value = MagicMock()
+        resp = await tr.list_closed_positions(user=user)
+
+    by_ccy = resp["totals"]["realized_pnl_by_currency"]
+    assert by_ccy == {"INR": 1500.0, "USD": 50.0}
+    # Never silently summed across currencies.
+    assert set(by_ccy.values()) != {1550.0}

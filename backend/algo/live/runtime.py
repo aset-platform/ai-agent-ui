@@ -121,7 +121,7 @@ UTC = timezone.utc
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
-def _parse_ist_time(s: str) -> time:
+def _parse_ist_time(s: str, *, env_name: str = "") -> time:
     """Parse ``HH:MM`` 24-hour string → ``time`` object. Tolerant
     of leading/trailing whitespace; falls back to ``09:30`` on any
     parse failure with a warning so a malformed env var doesn't
@@ -131,22 +131,12 @@ def _parse_ist_time(s: str) -> time:
         return time(int(hh), int(mm))
     except Exception:  # noqa: BLE001
         _logger.warning(
-            "Invalid ALGO_DAILY_MIN_EVAL_TIME_IST=%r — falling "
-            "back to 09:30",
+            "Invalid %s=%r — falling back to 09:30",
+            env_name or "IST time env var",
             s,
         )
         return time(9, 30)
 
-
-# ASETPLTFRM-383 — IST cutoff: before this time BUY decisions use only
-# history[:-1] (yesterday's closed bar). At or after this time the
-# today's still-forming running bar is also eligible for BUY entry.
-# Exits (stop-loss, time-stop, discretionary SELL) are never gated —
-# they always fire on full history regardless of wall-clock.
-# Default 14:20 — 10 min before NSE close; lets the day's trend settle.
-_MIN_EVAL_TIME_IST = _parse_ist_time(
-    os.environ.get("ALGO_DAILY_MIN_EVAL_TIME_IST", "14:20"),
-)
 
 # Earliest wall-clock at which a BUY order may be placed.
 # The NSE opening auction runs 09:07–09:15; the first 15 min of the
@@ -156,7 +146,40 @@ _MIN_EVAL_TIME_IST = _parse_ist_time(
 # Override: ALGO_MIN_BUY_TIME_IST (HH:MM IST).
 _MIN_BUY_TIME_IST = _parse_ist_time(
     os.environ.get("ALGO_MIN_BUY_TIME_IST", "09:30"),
+    env_name="ALGO_MIN_BUY_TIME_IST",
 )
+
+# Earliest wall-clock at which a SIGNAL-based SELL (rebalance / AST
+# ``sell``/``exit``) may be placed. Safety exits — stop-loss,
+# time-stop, STOP_HIT, GTT-triggered, MIS square-off — are all
+# handled EARLIER in _on_bar_close and return before this floor is
+# ever reached, so they are NEVER gated here.
+# Override: ALGO_MIN_SELL_TIME_IST (HH:MM IST).
+_MIN_SELL_TIME_IST = _parse_ist_time(
+    os.environ.get("ALGO_MIN_SELL_TIME_IST", "09:30"),
+    env_name="ALGO_MIN_SELL_TIME_IST",
+)
+
+
+def _env_float(name: str, default: float) -> float:
+    """Parse a float env var, falling back to ``default`` on any
+    parse failure (unset, empty, non-numeric) so a malformed
+    override doesn't crash the runtime constructor."""
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+# Falling-knife veto — hard NO-ENTRY when a name is in free-fall.
+# Prior-3-trading-day return <= _KNIFE_3D_PCT OR entry-day gap-down
+# (today's open vs yesterday's close) <= _KNIFE_GAP_PCT vetoes a
+# fresh BUY regardless of which OR-trigger leg resolved it. Applied
+# in _on_bar_close AFTER the _MIN_BUY_TIME_IST floor, BEFORE the
+# order is submitted. Env-overridable for tuning from shadow data.
+# Overrides: ALGO_ENTRY_FALLING_KNIFE_3D_PCT, _GAP_PCT.
+_KNIFE_3D_PCT = _env_float("ALGO_ENTRY_FALLING_KNIFE_3D_PCT", -10.0)
+_KNIFE_GAP_PCT = _env_float("ALGO_ENTRY_FALLING_KNIFE_GAP_PCT", -4.0)
 
 # PR3 — live-mode events are buffered and flushed on this cadence
 # instead of one Iceberg commit per signal. The terminal flush on
@@ -408,6 +431,10 @@ class LiveRuntime:
         # signal is fixed for the day, so this avoids re-running
         # compute_indicators on every intraday tick-bar while flat.
         self._closed_entry_cache: dict[tuple[str, date], dict | None] = {}
+        # Most-recent computed RSI2 per ticker (.NS-keyed), refreshed
+        # each _on_bar_close eval — powers the shadow breadth
+        # snapshot (Task 5).
+        self._last_rsi2: dict[str, float] = {}
         self._session_id = uuid4()
         self._events: list[dict[str, Any]] = []
         self._in_flight: list[dict[str, Any]] = []
@@ -478,10 +505,14 @@ class LiveRuntime:
         # pattern as PaperRuntime + the backtest runner.
         self._market_regime: dict[Any, Decimal] = {}
         self._market_trend: dict[Any, Decimal] = {}
+        self._market_dist_sma200: dict[Any, Decimal] = {}
         try:
             from datetime import date as _date
             from datetime import timedelta
 
+            from backend.algo.backtest.indicators import (
+                compute_market_distance_from_sma200 as _cmds,
+            )
             from backend.algo.backtest.indicators import (
                 compute_market_regime as _cmr,
             )
@@ -496,11 +527,13 @@ class LiveRuntime:
             window_start = today - timedelta(days=365 * 3)
             self._market_regime = _cmr(window_start, today)
             self._market_trend = _cmts(window_start, today)
+            self._market_dist_sma200 = _cmds(window_start, today)
             _logger.info(
                 "LiveRuntime: regime cache loaded — %d regime "
-                "days, %d trend days",
+                "days, %d trend days, %d dist-sma200 days",
                 len(self._market_regime),
                 len(self._market_trend),
+                len(self._market_dist_sma200),
             )
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
@@ -620,9 +653,8 @@ class LiveRuntime:
                 self._bars_by_ticker.update(preloaded)
                 _logger.info(
                     "LiveRuntime: daily-bar warmup loaded — "
-                    "%d ticker(s), eval_gate=%s IST",
+                    "%d ticker(s)",
                     len(preloaded),
-                    _MIN_EVAL_TIME_IST.strftime("%H:%M"),
                 )
             except Exception as exc:  # noqa: BLE001
                 _logger.warning(
@@ -3604,14 +3636,12 @@ class LiveRuntime:
                 }
             )
 
-        # ASETPLTFRM-383 (revised) — the daily eval-time gate is now
-        # applied to the ENTRY DECISION only (see below, after the AST
-        # eval), NOT as a blanket pre-eval skip. Indicators, features
-        # and exits MUST run on every bar so stop-loss / time-stop fire
-        # on time and a completed-bar entry can be acted on immediately.
-        # The ALGO_DAILY_MIN_EVAL_TIME_IST gate only
-        # defers a BUY that appears solely on today's still-forming
-        # candle; replay is exempt (wall-clock is meaningless there).
+        # ASETPLTFRM-383 (revised) — the daily OR-trigger entry gate
+        # (see below, after the AST eval) never blocks indicators,
+        # features, or exits from running on every bar, only the
+        # ENTRY DECISION — stop-loss / time-stop fire on time and a
+        # completed-bar entry can be acted on immediately. Replay is
+        # exempt (wall-clock is meaningless there).
         ind_map = compute_indicators(history)
         # FE-10 + REGIME-2a — offloaded to a worker thread so the
         # WS tick drain is not blocked by sync Iceberg reads.
@@ -3653,6 +3683,20 @@ class LiveRuntime:
                     for n in range(8)
                     if (bar_date_obj - timedelta(days=n)).weekday() < 5
                     and self._market_trend.get(bar_date_obj - timedelta(days=n))
+                    is not None
+                ),
+                None,
+            ),
+            market_dist_sma200=next(
+                (
+                    self._market_dist_sma200.get(
+                        bar_date_obj - timedelta(days=n)
+                    )
+                    for n in range(8)
+                    if (bar_date_obj - timedelta(days=n)).weekday() < 5
+                    and self._market_dist_sma200.get(
+                        bar_date_obj - timedelta(days=n)
+                    )
                     is not None
                 ),
                 None,
@@ -3906,6 +3950,13 @@ class LiveRuntime:
             (features or {}).get("nifty_30d_return_pct"),
         )
 
+        _rsi2_val = (features or {}).get("rsi_2")
+        if _rsi2_val is not None:
+            try:
+                self._last_rsi2[bar.ticker] = float(_rsi2_val)
+            except (TypeError, ValueError):
+                pass
+
         signal = self._action_to_signal(
             action,
             ticker=bar.ticker,
@@ -3917,11 +3968,10 @@ class LiveRuntime:
         # daily entry is the LAST CLOSED bar: if the strategy fires on
         # history[:-1] (excluding today's still-forming candle) we act
         # immediately, regardless of wall-clock — matches Paper /
-        # backtest and covers a signal already valid 1-2 days back that
-        # still holds. A BUY that appears ONLY on today's forming candle
-        # is premature until _MIN_EVAL_TIME_IST. Exits are
-        # never gated (stop-loss / time-stop handled above; a
-        # discretionary SELL flows through unchanged below).
+        # backtest and covers a signal already valid 1-2 days back
+        # that still holds. Exits are never gated (stop-loss /
+        # time-stop handled above; a discretionary SELL flows through
+        # unchanged below).
         is_flat = existing_pos is None or existing_pos.qty <= 0
         daily_realtime = (
             self._strategy.schedule.interval == "1d"
@@ -3938,10 +3988,39 @@ class LiveRuntime:
         ):
             now_ist = datetime.now(IST).time()
 
-            # Gate A: no BUY before _MIN_BUY_TIME_IST (default 09:30).
-            # Pre-open auction prices are erratic; first 15 min of the
-            # regular session is volatile price discovery.
-            # SELL / GTT exits are never blocked here.
+            # OR-trigger, all day: enter if EITHER today's forming-bar
+            # signal is BUY OR yesterday's CLOSED bar was a BUY. Catches
+            # a brief intraday dip the moment it prints <=5, and still
+            # honours a gap-into-oversold carried from yesterday's
+            # close.
+            closed_entry = self._eval_entry_on_closed_bar(
+                history, bar, last_price,
+            )
+            forming_is_buy = signal is not None and signal.side == "BUY"
+            closed_is_buy = (
+                closed_entry is not None and closed_entry.side == "BUY"
+            )
+            if not forming_is_buy and closed_is_buy:
+                # Yesterday oversold; today's forming bar no longer
+                # says BUY (e.g. RSI2 bounced) — still enter on the
+                # carried signal.
+                _logger.info(
+                    "daily entry on CLOSED bar (OR-trigger) — "
+                    "today's forming bar no longer confirms: "
+                    "ticker=%s",
+                    bar.ticker,
+                )
+                signal = closed_entry
+            # else: forming_is_buy -> `signal` already BUY, flows
+            # through; neither -> signal is hold/None, handled below.
+
+            # Gate A: no BUY before _MIN_BUY_TIME_IST (default 09:30),
+            # regardless of WHICH leg of the OR-trigger resolved it —
+            # applied here, AFTER both legs are resolved, so the
+            # closed-bar leg can't bypass the floor the forming-bar
+            # leg is held to. Pre-open auction prices are erratic;
+            # first 15 min of the regular session is volatile price
+            # discovery. SELL / GTT exits are never blocked here.
             if (
                 signal is not None
                 and signal.side == "BUY"
@@ -3956,72 +4035,131 @@ class LiveRuntime:
                 )
                 return 0
 
-            if now_ist < _MIN_EVAL_TIME_IST:
-                # Before gate — only yesterday's closed bar may trigger
-                # a BUY. Running-bar-only signals are deferred.
-                closed_entry = self._eval_entry_on_closed_bar(
-                    history, bar, last_price,
-                )
-                if closed_entry is not None and closed_entry.side == "BUY":
-                    # Dual-bar confirmation: yesterday was oversold
-                    # (closed_entry says BUY). Also require today's
-                    # running bar to confirm (today's main-eval signal
-                    # == BUY). If today's bar no longer says BUY, SOME
-                    # leg of the strategy's own AND-condition now fails
-                    # on today's running bar — not necessarily RSI2
-                    # recovering. E.g. distance_from_sma50 can flip
-                    # negative if price keeps falling through the
-                    # trend filter, which is a distinct case from RSI2
-                    # rebounding above threshold. Suppress either way
-                    # to avoid entries the strategy's own gate doesn't
-                    # confirm intraday.
-                    if signal is not None and signal.side == "BUY":
-                        _logger.info(
-                            "daily entry on CLOSED bar (pre-gate) — "
-                            "both bars confirm: ticker=%s",
-                            bar.ticker,
-                        )
-                        signal = closed_entry
-                    else:
-                        _logger.info(
-                            "daily closed-bar BUY suppressed by "
-                            "entry timing gate — today's running bar "
-                            "no longer confirms the full entry "
-                            "condition (ticker=%s)",
-                            bar.ticker,
-                        )
-                        self._events.append(
-                            event_row(
-                                session_id=self._session_id,
-                                user_id=self._user_id,
-                                strategy_id=self._strategy.id,
-                                mode="live",
-                                type_="signal_rejected",
-                                payload={
-                                    **(
-                                        {"dry_run": True}
-                                        if self._dry_run else {}
-                                    ),
-                                    "reason": (
-                                        "daily_entry_timing_gate_"
-                                        "unconfirmed"
-                                    ),
-                                    "ticker": bar.ticker,
-                                    "side": "BUY",
-                                },
-                            )
-                        )
-                        return 0
-                elif signal is not None and signal.side == "BUY":
+            # Falling-knife veto — hard NO-ENTRY on a resolved BUY
+            # (either OR-trigger leg) when the name is in free-fall:
+            # prior-3-day return <= _KNIFE_3D_PCT OR entry-day
+            # gap-down <= _KNIFE_GAP_PCT. Runs AFTER the BUY floor
+            # (Gate A) so a deferred-BUY tick never spends the
+            # veto's history read; BEFORE the order is submitted.
+            # Computed once here and reused by later gates via
+            # `_knife` — same rationale as `forming_is_buy` /
+            # `closed_is_buy` above.
+            if signal is not None and signal.side == "BUY":
+                _veto, _knife = self._in_free_fall(history, history[-1])
+                if _veto:
                     _logger.info(
-                        "daily entry premature (today-forming only) "
-                        "— deferring %s until %s IST",
+                        "falling-knife veto — ticker=%s ret_3d=%s "
+                        "gap=%s",
                         bar.ticker,
-                        _MIN_EVAL_TIME_IST.strftime("%H:%M"),
+                        _knife["ret_3d_pct"],
+                        _knife["gap_pct"],
+                    )
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="signal_rejected",
+                            payload={
+                                **(
+                                    {"dry_run": True}
+                                    if self._dry_run
+                                    else {}
+                                ),
+                                "reason": "falling_knife_veto",
+                                "ticker": bar.ticker,
+                                "side": "BUY",
+                                **_knife,
+                            },
+                        )
                     )
                     return 0
-            # After gate — signal from full history (running bar included)
-            # flows through unchanged. No closed-bar override.
+
+                # Shadow entry_strength_snapshot (Release 2
+                # calibration) — non-gating, best-effort. Only
+                # reached for a resolved, non-knife-vetoed BUY (the
+                # veto's own early-return above already sent us out
+                # on a knife), and always runs before order
+                # submission. Never blocks / alters the order path:
+                # the ENTIRE computation (breadth read + trigger +
+                # event build/append) is inside this one try/except
+                # — a failure anywhere in it is caught, logged, and
+                # the BUY continues to _submit_order unchanged.
+                try:
+                    _os, _tot = self._universe_oversold_breadth()
+                    _trigger = (
+                        "both"
+                        if (forming_is_buy and closed_is_buy)
+                        else "intraday_forming" if forming_is_buy
+                        else "yesterday_close"
+                    )
+                    self._events.append(
+                        event_row(
+                            session_id=self._session_id,
+                            user_id=self._user_id,
+                            strategy_id=self._strategy.id,
+                            mode="live",
+                            type_="entry_strength_snapshot",
+                            payload={
+                                **(
+                                    {"dry_run": True}
+                                    if self._dry_run
+                                    else {}
+                                ),
+                                "ticker": bar.ticker,
+                                "trigger": _trigger,
+                                "rsi2_forming": (
+                                    features or {}
+                                ).get("rsi_2"),
+                                "dist_sma50": (features or {}).get(
+                                    "distance_from_sma50"
+                                ),
+                                "dist_sma200": (features or {}).get(
+                                    "distance_from_sma200"
+                                ),
+                                "ret_3d_pct": _knife["ret_3d_pct"],
+                                "gap_pct": _knife["gap_pct"],
+                                "breadth_oversold": _os,
+                                "breadth_total": _tot,
+                            },
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    _logger.warning(
+                        "entry_strength_snapshot emit failed "
+                        "ticker=%s",
+                        bar.ticker,
+                        exc_info=True,
+                    )  # never block the order path
+
+        # Gate S: no SIGNAL-based SELL (rebalance / AST sell/exit)
+        # before _MIN_SELL_TIME_IST (default 09:30). Sits OUTSIDE
+        # the daily_realtime/is_flat block above — a discretionary
+        # SELL always has an open position, so is_flat is False and
+        # that block never runs for it. Safety exits (stop-loss,
+        # time-stop, STOP_HIT, GTT-triggered, MIS square-off) are
+        # handled earlier in this method and already returned before
+        # reaching here — this floor can never gate them.
+        # not self._is_replay mirrors Gate A's daily_realtime guard —
+        # replay wall-clock is meaningless, so a replay/dry-run
+        # rehearsal must not have its SELLs silently dropped by the
+        # real datetime.now(IST) below.
+        if (
+            signal is not None
+            and signal.side == "SELL"
+            and not self._is_replay
+        ):
+            sell_now_ist = datetime.now(IST).time()
+            if sell_now_ist < _MIN_SELL_TIME_IST:
+                _logger.info(
+                    "signal SELL deferred — before %s IST "
+                    "(ticker=%s now=%s IST)",
+                    _MIN_SELL_TIME_IST.strftime("%H:%M"),
+                    bar.ticker,
+                    sell_now_ist.strftime("%H:%M:%S"),
+                )
+                return 0
 
         if signal is None:
             _logger.info(
@@ -5362,10 +5500,10 @@ class LiveRuntime:
         (``history[:-1]`` — excludes today's still-forming candle).
 
         Returns the resulting Signal (typically BUY) or None. Used by
-        the daily eval-time gate to tell a completed-bar entry (act
-        now) from a today-forming-only entry (deferred until
-        _MIN_EVAL_TIME_IST). Always evaluated flat (open_qty=0); callers only invoke
-        it when there is no open position.
+        the daily OR-trigger entry gate as the "yesterday's close was
+        oversold" leg, carried forward even if today's forming bar no
+        longer confirms it. Always evaluated flat (open_qty=0);
+        callers only invoke it when there is no open position.
         """
         from backend.algo.backtest.indicators import compute_indicators
 
@@ -5380,11 +5518,22 @@ class LiveRuntime:
         else:
             newly_computed = True
             ind_map = compute_indicators(closed)
-            # Idempotent lazy cache loads (already warmed for today,
-            # which covers the prior day, but keep them explicit).
-            self._ensure_factor_cache(bar.ticker, closed_date)
-            self._ensure_regime_cache(closed_date)
-            self._ensure_daily_overlay_cache(bar.ticker, closed_date)
+            # Deliberately NOT calling _ensure_factor_cache /
+            # _ensure_regime_cache / _ensure_daily_overlay_cache
+            # here (unlike the pre-Task-1 version of this method).
+            # This method's only caller (_on_bar_close) already
+            # ran them for `bar.ticker` via the asyncio.to_thread
+            # -offloaded _per_bar_sync_reads earlier in the SAME
+            # bar-close, for a 365-day lookback window from TODAY
+            # that already covers closed_date (one day back) — so
+            # they're always already warmed by the time we get
+            # here. Task 1's OR-trigger made this method run on
+            # EVERY bar-close (previously it only ran rarely, pre-
+            # 14:20-gate), so calling these SYNCHRONOUSLY on the
+            # event-loop thread here would reintroduce the exact
+            # per-bar blocking-I/O-on-the-loop-thread risk Task 7.1
+            # (test_per_bar_offload.py) eliminated for the main
+            # per-bar path.
             features = assemble_per_bar_features(
                 bar_feats=ind_map.get(
                     closed_date,
@@ -5409,6 +5558,20 @@ class LiveRuntime:
                         for n in range(8)
                         if (closed_date - timedelta(days=n)).weekday() < 5
                         and self._market_trend.get(closed_date - timedelta(days=n))
+                        is not None
+                    ),
+                    None,
+                ),
+                market_dist_sma200=next(
+                    (
+                        self._market_dist_sma200.get(
+                            closed_date - timedelta(days=n)
+                        )
+                        for n in range(8)
+                        if (closed_date - timedelta(days=n)).weekday() < 5
+                        and self._market_dist_sma200.get(
+                            closed_date - timedelta(days=n)
+                        )
                         is not None
                     ),
                     None,
@@ -5478,6 +5641,60 @@ class LiveRuntime:
                 bar_date=closed_date,
             )
         return sig
+
+    def _in_free_fall(
+        self, history: list, bar: Any,
+    ) -> tuple[bool, dict]:
+        """True if the name is in free-fall (a "falling knife") and
+        a fresh BUY should be hard-vetoed.
+
+        Uses the last THREE CLOSED daily bars (``history[:-1]``,
+        mirroring ``_eval_entry_on_closed_bar``) for the 3-day
+        return, and the gap between today's forming daily candle's
+        open and yesterday's close for the gap check. ``bar`` must
+        be TODAY's forming daily candle (i.e. ``history[-1]``) —
+        NOT the raw per-tick WS ``Bar`` passed into
+        ``_on_bar_close``, whose ``.open`` only equals the day's
+        true opening print on the very first tick of the session.
+
+        Missing/short history -> no veto: both metrics independently
+        default to ``None`` and a ``None`` metric can never satisfy
+        either threshold below.
+        """
+        metrics: dict[str, float | None] = {
+            "ret_3d_pct": None,
+            "gap_pct": None,
+        }
+        if not history:
+            return False, metrics
+        bar_date = getattr(bar, "date", None)
+        closed = (
+            history[:-1]
+            if (bar_date is not None and history[-1].date == bar_date)
+            else history
+        )
+        if len(closed) >= 4:
+            c_now = float(closed[-1].close)
+            c_4 = float(closed[-4].close)
+            if c_4 > 0:
+                metrics["ret_3d_pct"] = (c_now / c_4 - 1.0) * 100.0
+        if closed:
+            c_prev = float(closed[-1].close)
+            if c_prev > 0:
+                metrics["gap_pct"] = (
+                    float(bar.open) / c_prev - 1.0
+                ) * 100.0
+        veto = (
+            (
+                metrics["ret_3d_pct"] is not None
+                and metrics["ret_3d_pct"] <= _KNIFE_3D_PCT
+            )
+            or (
+                metrics["gap_pct"] is not None
+                and metrics["gap_pct"] <= _KNIFE_GAP_PCT
+            )
+        )
+        return veto, metrics
 
     def _evict_stale_closed_entry_cache(self, *, as_of: date) -> None:
         """Drop _closed_entry_cache entries older than
@@ -5609,6 +5826,16 @@ class LiveRuntime:
                 },
             )
         )
+
+    def _universe_oversold_breadth(
+        self, threshold: float = 5.0,
+    ) -> tuple[int, int]:
+        """(count of tracked tickers with RSI2<=threshold, total
+        tracked). Pure count over ``self._last_rsi2`` — powers the
+        shadow breadth snapshot (Task 5)."""
+        vals = list(self._last_rsi2.values())
+        n_oversold = sum(1 for v in vals if v <= threshold)
+        return n_oversold, len(vals)
 
     def _action_to_signal(
         self,

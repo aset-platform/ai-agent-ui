@@ -691,6 +691,45 @@ class EditPortfolioRequest(BaseModel):
     trade_date: str | None = None
 
 
+class ClosePositionRequest(BaseModel):
+    """Close (full/partial) a held position."""
+
+    quantity: float
+    sell_price: float
+    sell_date: str
+    fees: float = 0.0
+    notes: str | None = None
+
+
+def _close_session_scope():
+    """AsyncSession context manager for the closed-positions repo."""
+    from backend.db.engine import get_session_factory
+
+    return get_session_factory()()
+
+
+def _invalidate_portfolio_caches(user_id: str) -> None:
+    """Invalidate all cached portfolio views for a user."""
+    try:
+        from cache import get_cache
+
+        cache = get_cache()
+        cache.invalidate(
+            f"cache:portfolio:{user_id}",
+        )
+        cache.invalidate(
+            f"cache:portfolio:perf:" f"{user_id}:*",
+        )
+        cache.invalidate(
+            f"cache:portfolio:forecast:" f"{user_id}:*",
+        )
+        cache.invalidate(
+            f"cache:portfolio:closed:{user_id}",
+        )
+    except ImportError:
+        pass
+
+
 @router.get("/portfolio")
 def get_portfolio(
     user: UserContext = Depends(get_current_user),
@@ -826,16 +865,23 @@ def get_portfolio_transactions(
             },
         )
 
-    # Aggregate respecting BUY/SELL sign.
+    # Net quantity respects BUY/SELL sign, but avg_price (and
+    # therefore invested) is derived from BUY lots only —
+    # consistent with get_portfolio_holdings. A SELL changes
+    # the remaining quantity, not the cost basis of the shares
+    # still held.
     total_qty = 0.0
-    invested = 0.0
+    buy_qty = 0.0
+    buy_cost = 0.0
     for t in transactions:
-        sign = -1 if t["side"].upper() == "SELL" else 1
+        side = t["side"].upper()
+        sign = -1 if side == "SELL" else 1
         total_qty += sign * t["quantity"]
-        invested += sign * t["quantity"] * t["price"]
-    avg_price = (
-        invested / total_qty if total_qty else 0.0
-    )
+        if side != "SELL":
+            buy_qty += t["quantity"]
+            buy_cost += t["quantity"] * t["price"]
+    avg_price = (buy_cost / buy_qty) if buy_qty else 0.0
+    invested = total_qty * avg_price
 
     current_price: float | None = None
     try:
@@ -930,21 +976,7 @@ async def add_portfolio_holding(
         )
 
     # Invalidate portfolio caches
-    try:
-        from cache import get_cache
-
-        cache = get_cache()
-        cache.invalidate(
-            f"cache:portfolio:{user.user_id}",
-        )
-        cache.invalidate(
-            f"cache:portfolio:perf:" f"{user.user_id}:*",
-        )
-        cache.invalidate(
-            f"cache:portfolio:forecast:" f"{user.user_id}:*",
-        )
-    except ImportError:
-        pass
+    _invalidate_portfolio_caches(user.user_id)
 
     _logger.info(
         "Portfolio: user %s added %s qty=%.2f" " price=%.2f",
@@ -965,6 +997,147 @@ async def add_portfolio_holding(
     return {
         "detail": "added",
         "transaction_id": txn["transaction_id"],
+    }
+
+
+@router.post("/portfolio/{ticker}/close")
+async def close_portfolio_position(
+    ticker: str,
+    body: ClosePositionRequest,
+    user: UserContext = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Close (full/partial) a held position: record realized P&L."""
+    from auth.repo import portfolio_close_repo
+
+    tkr = ticker.upper().strip()
+    stock_repo = _get_stock_repo()
+    holdings = stock_repo.get_portfolio_holdings(user.user_id)
+    row = holdings[holdings["ticker"] == tkr]
+    if row.empty:
+        raise HTTPException(status_code=404, detail="Not held")
+    open_qty = float(row.iloc[0]["quantity"])
+    avg_price = float(row.iloc[0]["avg_price"])
+    ccy = str(row.iloc[0]["currency"])
+    mkt = str(row.iloc[0]["market"])
+    if body.quantity <= 0 or body.quantity > open_qty:
+        raise HTTPException(
+            status_code=400,
+            detail=f"quantity must be 0 < q <= {open_qty}",
+        )
+    cost = avg_price * body.quantity
+    realized = (
+        (body.sell_price - avg_price) * body.quantity - body.fees
+    )
+    # Stored/returned as a percentage (matches gain_loss_pct /
+    # gain_pct convention elsewhere), not a fraction.
+    realized_pct = (realized / cost * 100) if cost > 0 else None
+
+    try:
+        sell_date = date.fromisoformat(body.sell_date)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="invalid sell_date",
+        )
+
+    sell_txn_id = str(uuid.uuid4())
+    stock_repo.add_portfolio_transaction({
+        "transaction_id": sell_txn_id,
+        "user_id": user.user_id,
+        "ticker": tkr,
+        "side": "SELL",
+        "quantity": body.quantity,
+        "price": body.sell_price,
+        "currency": ccy,
+        "market": mkt,
+        "trade_date": sell_date,
+        "fees": body.fees,
+        "notes": body.notes or "",
+    })
+    try:
+        async with _close_session_scope() as session:
+            closed = await portfolio_close_repo.add_closed_position(
+                session,
+                {
+                    "user_id": user.user_id,
+                    "ticker": tkr,
+                    "quantity": body.quantity,
+                    "buy_price": avg_price,
+                    "sell_price": body.sell_price,
+                    "sell_date": body.sell_date,
+                    "fees": body.fees,
+                    "realized_pnl": realized,
+                    "realized_pnl_pct": realized_pct,
+                    "currency": ccy,
+                    "market": mkt,
+                    "sell_transaction_id": sell_txn_id,
+                    "notes": body.notes,
+                },
+            )
+    except Exception as exc:
+        _logger.error(
+            "close_portfolio_position: PG insert failed for "
+            "user=%s ticker=%s qty=%s sell_txn_id=%s; "
+            "rolling back SELL: %s",
+            user.user_id,
+            tkr,
+            body.quantity,
+            sell_txn_id,
+            exc,
+            exc_info=True,
+        )
+        try:
+            stock_repo.delete_portfolio_transaction(
+                sell_txn_id,
+                user.user_id,
+            )
+        except Exception as del_exc:
+            _logger.critical(
+                "close_portfolio_position: compensating delete "
+                "FAILED for user=%s ticker=%s qty=%s "
+                "sell_txn_id=%s — manual reconciliation "
+                "required: %s",
+                user.user_id,
+                tkr,
+                body.quantity,
+                sell_txn_id,
+                del_exc,
+                exc_info=True,
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="close failed; rolled back",
+        )
+    _invalidate_portfolio_caches(user.user_id)
+    return {
+        "detail": "closed",
+        "closed_id": closed["id"],
+        "realized_pnl": realized,
+        "realized_pnl_pct": realized_pct,
+    }
+
+
+@router.get("/portfolio/closed")
+async def list_closed_positions(
+    user: UserContext = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Return closed positions + realized-P&L totals for a user."""
+    from auth.repo import portfolio_close_repo
+
+    async with _close_session_scope() as session:
+        rows = await portfolio_close_repo.list_closed_positions(
+            session,
+            user.user_id,
+        )
+    by_currency: Dict[str, float] = {}
+    for r in rows:
+        ccy = str(r.get("currency") or "USD")
+        by_currency[ccy] = (
+            by_currency.get(ccy, 0) + float(r["realized_pnl"])
+        )
+    return {
+        "closed": rows,
+        "totals": {"realized_pnl_by_currency": by_currency},
     }
 
 

@@ -68,6 +68,10 @@ def compute_indicators(
         - ``rsi_2``             — Wilder RSI(2); Connors mean-rev
         - ``distance_from_sma5``— (close - sma_5) / sma_5; exit
           signal for Connors strategy
+        - ``rsi_14_delta_1bar``  — rsi_14[i] - rsi_14[i-1]
+        - ``bars_below_sma50``  — consecutive closes < sma_50
+        - ``dist_from_prev_day_high_pct`` — (close - prev bar's
+          high) / prev bar's high * 100
     """
     if not bars:
         return {}
@@ -93,6 +97,7 @@ def compute_indicators(
     s50 = sma_series.get(50)
     s200 = sma_series.get(200)
     last_cross_up_idx: int | None = None
+    bars_below_50_streak = 0
 
     out: dict[object, dict[str, Decimal]] = {}
     for i, bar in enumerate(bars):
@@ -104,6 +109,20 @@ def compute_indicators(
             v = sma_series[w][i]
             if v is not None:
                 feats[f"sma_{w}"] = v
+        # bars_below_sma50 — consecutive closes below SMA50,
+        # resets to 0 once close >= SMA50. PRIMARY-cadence version;
+        # same rationale as the primary-cadence rsi_14_delta_1bar
+        # feature below.
+        if s50 is not None:
+            s50_v = s50[i]
+            if s50_v is not None:
+                if bar.close < s50_v:
+                    bars_below_50_streak += 1
+                else:
+                    bars_below_50_streak = 0
+                feats["bars_below_sma50"] = Decimal(
+                    bars_below_50_streak,
+                )
         rsi_v = rsi_series[i]
         if rsi_v is not None:
             feats["rsi"] = rsi_v
@@ -114,6 +133,13 @@ def compute_indicators(
         rsi2_v = rsi_2_series[i]
         if rsi2_v is not None:
             feats["rsi_2"] = rsi2_v
+        # rsi_14_delta_1bar = rsi_14[i] - rsi_14[i-1]. PRIMARY-
+        # cadence (unsuffixed) version a 1d-schedule strategy
+        # actually reads — see per_bar.py's assemble_per_bar_features:
+        # the daily_overlay from daily_engine.py's version of this
+        # same feature is only merged for sub-daily primary cadence.
+        if i > 0 and rsi_v is not None and rsi_series[i - 1] is not None:
+            feats["rsi_14_delta_1bar"] = rsi_v - rsi_series[i - 1]
         # distance_from_sma{N} = (close - sma_N) / sma_N.
         # distance_from_sma5: Connors exit — price crossed back
         # above SMA(5). distance_from_sma20/50: same shape, used
@@ -132,6 +158,22 @@ def compute_indicators(
         vwap_v = vwap_series[i]
         if vwap_v is not None:
             feats["vwap"] = vwap_v
+        # dist_from_prev_day_high_pct = (close - prev bar's high)
+        # / prev bar's high * 100. On the backtest/live daily
+        # paths, bars here are one-per-trading-day (unlike
+        # daily_engine.py's day-bucketing, which handles a
+        # different, intraday-bar input shape), so "prev day" is
+        # simply the immediately preceding bar. NOTE: paper mode
+        # calls this same function with ~375 1-minute bars/day
+        # (pre-existing behavior — sma_50/rsi_14 above are
+        # likewise minute-cadence there, not this diff's concern),
+        # so this key means something different in that context.
+        if i > 0:
+            prev_high = bars[i - 1].high
+            if prev_high != 0:
+                feats["dist_from_prev_day_high_pct"] = (
+                    (bar.close - prev_high) / prev_high * Decimal("100")
+                )
 
         if s50 is not None and s200 is not None and i > 0:
             cur_50 = s50[i]
@@ -267,4 +309,52 @@ def compute_market_regime(
         if s is None:
             continue
         out[bar.date] = Decimal("1") if bar.close > s else Decimal("0")
+    return out
+
+
+# Per-bar percent distance of the regime ticker from its SMA(N):
+# (close - sma) / sma * 100. Strategies reference
+# ``{"feature": "nifty_distance_from_sma200_pct"}`` to gate/size
+# on a continuous regime band instead of the binary
+# ``nifty_above_sma200`` flag (e.g. ``> 5`` for "well above
+# SMA200"; ``between -2 and 2`` for "near the line" chop).
+def compute_market_distance_from_sma200(
+    period_start: object,
+    period_end: object,
+    regime_ticker: str = "^NSEI",
+    sma_window: int = 200,
+    warmup_days: int = DEFAULT_WARMUP_BARS,
+) -> dict[object, Decimal]:
+    """Returns ``{bar_date: Decimal((close - sma) / sma * 100)}``.
+
+    Empty dict if the regime ticker has no OHLCV in the window, or
+    a bar predates the SMA window settling — callers MUST treat
+    missing dates as ``Decimal(0)`` so a strategy gated on this
+    feature falls through to ``hold`` rather than firing without
+    regime data. Mirrors ``compute_market_regime``'s structure,
+    emitting the continuous percent distance instead of the
+    binary 1/0 flag.
+    """
+    # Local import avoids a circular dependency at module load
+    # time — data_source pulls from this module's bar shape.
+    from backend.algo.backtest.data_source import load_ohlcv_window
+
+    bars_by_ticker = load_ohlcv_window(
+        tickers=[regime_ticker],
+        period_start=period_start,
+        period_end=period_end,
+        warmup_days=warmup_days,
+    )
+    blist = bars_by_ticker.get(regime_ticker) or []
+    if not blist:
+        return {}
+    sorted_bars = sorted(blist, key=lambda b: b.date)
+    closes = [b.close for b in sorted_bars]
+    sma = _rolling_sma(closes, sma_window)
+    out: dict[object, Decimal] = {}
+    for i, bar in enumerate(sorted_bars):
+        s = sma[i]
+        if s is None or s == 0:
+            continue
+        out[bar.date] = (bar.close - s) / s * Decimal("100")
     return out

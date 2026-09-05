@@ -127,3 +127,8 @@ def test_v2_rsi2_template_warmup_is_200():
     # nifty_above_sma200, nifty_30d_return_pct, distance_from_sma5
     # → max = 200 (distance_from_sma200).
     assert compute_strategy_warmup_days(root) == 200
+
+
+def test_warmup_for_rsi14_swing_strategy_overrides():
+    assert warmup_for_feature("rsi_14_delta_1bar") == 15
+    assert warmup_for_feature("bars_below_sma50") == 50

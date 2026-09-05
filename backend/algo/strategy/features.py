@@ -165,6 +165,13 @@ FEATURES: list[Feature] = [
         scale="percent",
     ),
     Feature(
+        key="nifty_distance_from_sma200_pct",
+        label="NIFTY distance from SMA200 %",
+        type="float",
+        source="technical",
+        scale="percent",
+    ),
+    Feature(
         key="today_dpc",
         label="Today delivery %",
         type="float",
@@ -436,6 +443,17 @@ FEATURES: list[Feature] = [
         type="int",
         source="intraday_feature_store",
     ),
+    # Also computed at PRIMARY cadence (unsuffixed) by
+    # backend.algo.backtest.indicators.compute_indicators for
+    # 1d-schedule strategies — see per_bar.py's cross-cadence
+    # overlay rule for why a daily-primary strategy never reads
+    # the persisted copy under this same key via daily_overlay.
+    Feature(
+        key="bars_below_sma50",
+        label="Bars below SMA50 (consecutive)",
+        type="int",
+        source="intraday_feature_store",
+    ),
     # Intraday — momentum
     Feature(
         key="rsi_14",
@@ -446,6 +464,17 @@ FEATURES: list[Feature] = [
     Feature(
         key="rsi_5",
         label="RSI(5)",
+        type="float",
+        source="intraday_feature_store",
+    ),
+    # Also computed at PRIMARY cadence (unsuffixed) by
+    # backend.algo.backtest.indicators.compute_indicators for
+    # 1d-schedule strategies — see per_bar.py's cross-cadence
+    # overlay rule for why a daily-primary strategy never reads
+    # the persisted copy under this same key via daily_overlay.
+    Feature(
+        key="rsi_14_delta_1bar",
+        label="RSI(14) 1-bar delta",
         type="float",
         source="intraday_feature_store",
     ),
@@ -507,6 +536,11 @@ FEATURES: list[Feature] = [
         type="float",
         source="intraday_feature_store",
     ),
+    # Also computed at PRIMARY cadence (unsuffixed) by
+    # backend.algo.backtest.indicators.compute_indicators for
+    # 1d-schedule strategies — see per_bar.py's cross-cadence
+    # overlay rule for why a daily-primary strategy never reads
+    # the persisted copy under this same key via daily_overlay.
     Feature(
         key="dist_from_prev_day_high_pct",
         label="Distance from prev day high %",

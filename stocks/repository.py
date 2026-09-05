@@ -4399,9 +4399,8 @@ class StockRepository:
                 _PORTFOLIO,
                 "SELECT * FROM"
                 " portfolio_transactions"
-                " WHERE user_id = ?"
-                " AND side = ?",
-                [user_id, "BUY"],
+                " WHERE user_id = ?",
+                [user_id],
             )
         except Exception as exc:
             _logger.debug(
@@ -4412,24 +4411,20 @@ class StockRepository:
         if df.empty:
             try:
                 from pyiceberg.expressions import (
-                    And,
                     EqualTo,
                 )
 
                 tbl = self._load_table(_PORTFOLIO)
                 df = tbl.scan(
-                    row_filter=And(
-                        EqualTo(
-                            "user_id",
-                            user_id,
-                        ),
-                        EqualTo("side", "BUY"),
+                    row_filter=EqualTo(
+                        "user_id",
+                        user_id,
                     ),
                 ).to_pandas()
             except Exception:
                 df = self._table_to_df(_PORTFOLIO)
                 if not df.empty:
-                    df = df[(df["user_id"] == user_id) & (df["side"] == "BUY")]
+                    df = df[df["user_id"] == user_id]
 
         if df.empty:
             return pd.DataFrame(
@@ -4443,18 +4438,55 @@ class StockRepository:
                 ],
             )
 
-        # Weighted average price per ticker
-        df["invested"] = df["quantity"] * df["price"]
-        grouped = (
-            df.groupby(["ticker", "currency", "market"])
+        # Net BUY-SELL quantity per (ticker, currency, market);
+        # avg_price is derived from BUY lots only.
+        df["signed_qty"] = df.apply(
+            lambda r: (
+                r["quantity"]
+                if str(r["side"]).upper() == "BUY"
+                else -r["quantity"]
+            ),
+            axis=1,
+        )
+        buys = df[df["side"].str.upper() == "BUY"].copy()
+        buys["invested"] = buys["quantity"] * buys["price"]
+        inv = (
+            buys.groupby(["ticker", "currency", "market"])
             .agg(
-                quantity=("quantity", "sum"),
+                buy_qty=("quantity", "sum"),
                 invested=("invested", "sum"),
             )
             .reset_index()
         )
-        grouped["avg_price"] = grouped["invested"] / grouped["quantity"]
-        return grouped[grouped["quantity"] > 0].reset_index(drop=True)
+        net = (
+            df.groupby(["ticker", "currency", "market"])["signed_qty"]
+            .sum()
+            .reset_index(name="quantity")
+        )
+        grouped = inv.merge(
+            net,
+            on=["ticker", "currency", "market"],
+            how="right",
+        )
+        grouped["invested"] = grouped["invested"].fillna(0.0)
+        grouped["buy_qty"] = grouped["buy_qty"].fillna(0.0)
+        grouped["avg_price"] = grouped.apply(
+            lambda r: (
+                (r["invested"] / r["buy_qty"]) if r["buy_qty"] > 0 else 0.0
+            ),
+            axis=1,
+        )
+        grouped = grouped[grouped["quantity"] > 0]
+        return grouped[
+            [
+                "ticker",
+                "quantity",
+                "avg_price",
+                "currency",
+                "market",
+                "invested",
+            ]
+        ].reset_index(drop=True)
 
     def get_portfolio_transactions(
         self,

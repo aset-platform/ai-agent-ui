@@ -73,6 +73,7 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "vwap", label: "VWAP (intraday)", type: "float", source: "technical" },
   { key: "nifty_above_sma200", label: "NIFTY > SMA200 regime (1/0)", type: "int", source: "technical" },
   { key: "nifty_30d_return_pct", label: "NIFTY 30-day return %", type: "float", source: "technical", scale: "percent" },
+  { key: "nifty_distance_from_sma200_pct", label: "NIFTY distance from SMA200 %", type: "float", source: "technical", scale: "percent" },
   { key: "today_dpc", label: "Today delivery %", type: "float", source: "technical", unwired: true },
   // Fundamentals
   { key: "pscore", label: "P-Score (Piotroski)", type: "int", source: "fundamentals", unwired: true },
@@ -117,9 +118,11 @@ export const STRATEGY_FEATURES: StrategyFeature[] = [
   { key: "ema_20_slope_5bar", label: "EMA 20 slope (5-bar)", type: "float", source: "intraday_feature_store" },
   { key: "dist_from_vwap_pct", label: "Distance from VWAP %", type: "float", source: "intraday_feature_store", scale: "percent" },
   { key: "golden_cross_bars_ago", label: "Golden cross (bars ago, intraday)", type: "int", source: "intraday_feature_store" },
+  { key: "bars_below_sma50", label: "Bars below SMA50 (consecutive)", type: "int", source: "intraday_feature_store" },
   // Intraday – momentum
   { key: "rsi_14", label: "RSI(14)", type: "float", source: "intraday_feature_store" },
   { key: "rsi_5", label: "RSI(5)", type: "float", source: "intraday_feature_store" },
+  { key: "rsi_14_delta_1bar", label: "RSI(14) 1-bar delta", type: "float", source: "intraday_feature_store" },
   { key: "roc_5", label: "ROC(5)", type: "float", source: "intraday_feature_store" },
   // Intraday – volatility
   { key: "atr_14", label: "ATR(14)", type: "float", source: "intraday_feature_store" },

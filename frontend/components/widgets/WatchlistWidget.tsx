@@ -7,6 +7,7 @@ import type { DashboardData } from "@/hooks/useDashboardData";
 import type { WatchlistResponse } from "@/lib/types";
 import type { PortfolioHolding } from "@/hooks/usePortfolio";
 import { useLtpBatch } from "@/hooks/useLtpBatch";
+import { useClosedPositions } from "@/hooks/useClosedPositions";
 import { WidgetSkeleton } from "./WidgetSkeleton";
 import { WidgetError } from "./WidgetError";
 import { AlgoPositionsTab } from "./algo/AlgoPositionsTab";
@@ -27,6 +28,7 @@ interface WatchlistWidgetProps {
   onAddStock?: () => void;
   onViewStock?: (ticker: string) => void;
   onDeleteStock?: (ticker: string) => void;
+  onCloseStock?: (ticker: string) => void;
   algoTabEnabled?: boolean;
 }
 
@@ -79,7 +81,11 @@ function Sparkline({
 
 type RefreshState = "idle" | "pending" | "success" | "error";
 
-type WidgetTab = "portfolio" | "watchlist" | "algo";
+type WidgetTab =
+  | "portfolio_open"
+  | "portfolio_closed"
+  | "watchlist"
+  | "algo";
 
 export function WatchlistWidget({
   data,
@@ -91,13 +97,19 @@ export function WatchlistWidget({
   onAddStock,
   onViewStock,
   onDeleteStock,
+  onCloseStock,
   algoTabEnabled = false,
 }: WatchlistWidgetProps) {
   const [activeTab, setActiveTab] =
-    useState<WidgetTab>("portfolio");
+    useState<WidgetTab>("portfolio_open");
   const [page, setPage] = useState(1);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [removeAllOpen, setRemoveAllOpen] = useState(false);
+  const {
+    closed: closedPositions,
+    totals: closedTotals,
+    loading: closedLoading,
+  } = useClosedPositions();
 
   // Per-ticker refresh state
   const [refreshing, setRefreshing] = useState<
@@ -239,8 +251,9 @@ export function WatchlistWidget({
       >
         <div className="inline-flex rounded-lg bg-gray-100 dark:bg-gray-800 p-0.5">
           <button
+            data-testid="tab-portfolio-open"
             onClick={() => {
-              setActiveTab("portfolio");
+              setActiveTab("portfolio_open");
               // Auto-select first portfolio ticker
               if (portfolio.length > 0) {
                 onSelectTicker?.(
@@ -249,12 +262,23 @@ export function WatchlistWidget({
               }
             }}
             className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-              activeTab === "portfolio"
+              activeTab === "portfolio_open"
                 ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
                 : "text-gray-500 dark:text-gray-400"
             }`}
           >
-            Portfolio
+            Portfolio (Open)
+          </button>
+          <button
+            data-testid="tab-portfolio-closed"
+            onClick={() => setActiveTab("portfolio_closed")}
+            className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+              activeTab === "portfolio_closed"
+                ? "bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm"
+                : "text-gray-500 dark:text-gray-400"
+            }`}
+          >
+            Portfolio (Closed)
           </button>
           <button
             onClick={() => {
@@ -289,7 +313,7 @@ export function WatchlistWidget({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {activeTab === "portfolio" && onAddStock && (
+          {activeTab === "portfolio_open" && onAddStock && (
             <button
               data-testid="dashboard-add-stock-btn"
               onClick={onAddStock}
@@ -309,8 +333,10 @@ export function WatchlistWidget({
             />
           )}
           <span className="text-xs text-gray-400 dark:text-gray-500">
-            {activeTab === "portfolio"
+            {activeTab === "portfolio_open"
               ? `${portfolio.length} stock${portfolio.length !== 1 ? "s" : ""}`
+              : activeTab === "portfolio_closed"
+              ? `${closedPositions.length} closed`
               : activeTab === "watchlist"
               ? `${tickers.length} ticker${tickers.length !== 1 ? "s" : ""}`
               : "live"}
@@ -318,8 +344,8 @@ export function WatchlistWidget({
         </div>
       </div>
 
-      {/* Portfolio tab */}
-      {activeTab === "portfolio" && (
+      {/* Portfolio (Open) tab */}
+      {activeTab === "portfolio_open" && (
         portfolioLoading ? (
           <div className="px-5 py-10 text-center">
             <div className="animate-spin h-6 w-6 border-2 border-indigo-500 border-t-transparent rounded-full mx-auto" />
@@ -488,6 +514,24 @@ export function WatchlistWidget({
                         </svg>
                       </button>
                     )}
+                    {onCloseStock && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onCloseStock(h.ticker);
+                        }}
+                        title="Close position"
+                        aria-label="Close position"
+                        data-testid={`portfolio-close-${h.ticker}`}
+                        className="p-1 rounded text-gray-400 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <circle cx="12" cy="12" r="10" />
+                          <line x1="9" y1="9" x2="15" y2="15" />
+                          <line x1="15" y1="9" x2="9" y2="15" />
+                        </svg>
+                      </button>
+                    )}
                     {onDeleteStock && (
                       <button
                         onClick={(e) => {
@@ -507,6 +551,109 @@ export function WatchlistWidget({
                 </div>
               );
             })}
+          </div>
+        )
+      )}
+
+      {/* Portfolio (Closed) tab */}
+      {activeTab === "portfolio_closed" && (
+        closedLoading ? (
+          <div className="px-5 py-10 text-center">
+            <div className="animate-spin h-6 w-6 border-2 border-indigo-500 border-t-transparent rounded-full mx-auto" />
+          </div>
+        ) : closedPositions.length === 0 ? (
+          <div className="px-5 py-10 text-center">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              No closed positions yet.
+            </p>
+          </div>
+        ) : (
+          <div>
+            <div
+              data-testid="closed-total"
+              className="px-5 py-2.5 border-b border-gray-100 dark:border-gray-800"
+            >
+              {Object.entries(
+                closedTotals.realized_pnl_by_currency,
+              ).map(([ccy, amount]) => (
+                <p
+                  key={ccy}
+                  className={`text-xs font-semibold ${
+                    amount >= 0
+                      ? "text-emerald-600 dark:text-emerald-400"
+                      : "text-red-600 dark:text-red-400"
+                  }`}
+                >
+                  Realized P&amp;L ({ccy}):{" "}
+                  {amount >= 0 ? "+" : ""}
+                  {currencySymbol(ccy)}
+                  {amount.toLocaleString("en-US", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </p>
+              ))}
+            </div>
+            <div className="divide-y divide-gray-100 dark:divide-gray-800">
+              {closedPositions.map((c) => {
+                const sym = currencySymbol(c.currency);
+                // API returns Numeric columns as JSON strings (Decimal);
+                // coerce before any toFixed/toLocaleString.
+                const buy = Number(c.buy_price);
+                const sell = Number(c.sell_price);
+                const pnl = Number(c.realized_pnl);
+                const pct =
+                  c.realized_pnl_pct != null
+                    ? Number(c.realized_pnl_pct)
+                    : null;
+                const positive = pnl >= 0;
+                return (
+                  <div
+                    key={c.id}
+                    data-testid={`closed-row-${c.ticker}`}
+                    className="flex items-center gap-3 px-5 py-3"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                        {c.ticker}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {c.quantity} shares &middot; {sym}
+                        {buy.toFixed(2)} &rarr; {sym}
+                        {sell.toFixed(2)}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p
+                        className={`text-sm font-medium font-mono ${
+                          positive
+                            ? "text-emerald-600 dark:text-emerald-400"
+                            : "text-red-600 dark:text-red-400"
+                        }`}
+                      >
+                        {positive ? "+" : ""}
+                        {sym}
+                        {pnl.toLocaleString(
+                          "en-US",
+                          {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          },
+                        )}
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                        {pct != null
+                          ? `${positive ? "+" : ""}${pct.toFixed(2)}%`
+                          : "—"}
+                      </p>
+                    </div>
+                    <span className="text-xs text-gray-400 dark:text-gray-500 shrink-0 w-20 text-right">
+                      {c.sell_date?.slice(0, 10)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )
       )}

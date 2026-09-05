@@ -100,6 +100,39 @@ export function usePortfolio() {
     [mutate],
   );
 
+  const closeHolding = useCallback(
+    async (
+      ticker: string,
+      body: {
+        quantity: number;
+        sell_price: number;
+        sell_date: string;
+        fees?: number;
+        notes?: string;
+      },
+    ) => {
+      const r = await apiFetch(
+        `${API_URL}/users/me/portfolio/${encodeURIComponent(ticker)}/close`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(
+          b.detail || `HTTP ${r.status}`,
+        );
+      }
+      mutate();
+      return r.json();
+    },
+    [mutate],
+  );
+
   const deleteHolding = useCallback(
     async (transactionId: string) => {
       const r = await apiFetch(
@@ -129,6 +162,7 @@ export function usePortfolio() {
     refresh: () => mutate(),
     addHolding,
     editHolding,
+    closeHolding,
     deleteHolding,
   };
 }
