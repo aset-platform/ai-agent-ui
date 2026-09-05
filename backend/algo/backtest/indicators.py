@@ -111,7 +111,8 @@ def compute_indicators(
                 feats[f"sma_{w}"] = v
         # bars_below_sma50 — consecutive closes below SMA50,
         # resets to 0 once close >= SMA50. PRIMARY-cadence version;
-        # same rationale as rsi_14_delta_1bar above.
+        # same rationale as the primary-cadence rsi_14_delta_1bar
+        # feature below.
         if s50 is not None:
             s50_v = s50[i]
             if s50_v is not None:
@@ -158,10 +159,15 @@ def compute_indicators(
         if vwap_v is not None:
             feats["vwap"] = vwap_v
         # dist_from_prev_day_high_pct = (close - prev bar's high)
-        # / prev bar's high * 100. Bars here are already one-per-
-        # trading-day (unlike daily_engine.py's day-bucketing,
-        # which handles a different, intraday-bar input shape) —
-        # "prev day" is simply the immediately preceding bar.
+        # / prev bar's high * 100. On the backtest/live daily
+        # paths, bars here are one-per-trading-day (unlike
+        # daily_engine.py's day-bucketing, which handles a
+        # different, intraday-bar input shape), so "prev day" is
+        # simply the immediately preceding bar. NOTE: paper mode
+        # calls this same function with ~375 1-minute bars/day
+        # (pre-existing behavior — sma_50/rsi_14 above are
+        # likewise minute-cadence there, not this diff's concern),
+        # so this key means something different in that context.
         if i > 0:
             prev_high = bars[i - 1].high
             if prev_high != 0:

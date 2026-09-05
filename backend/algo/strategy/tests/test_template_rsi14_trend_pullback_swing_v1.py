@@ -258,6 +258,25 @@ def test_end_to_end_wires_real_computed_features_without_missing_feature_error(
         factor_row=factor_row,
     )
 
+    # Explicit presence check for every feature the template
+    # references — the AST's short-circuiting and/or means simply
+    # evaluating it does NOT guarantee every operand was looked
+    # up (entry's rsi_14<50 is false here, so rsi_14_delta_1bar
+    # and dist_from_prev_day_high_pct are never reached by
+    # eval_node in THIS scenario). Assert directly instead.
+    required_features = {
+        "distance_from_sma200",
+        "sma_50",
+        "sma_200",
+        "sma200_slope",
+        "rsi_14",
+        "rsi_14_delta_1bar",
+        "dist_from_prev_day_high_pct",
+        "bars_below_sma50",
+    }
+    missing = required_features - feats.keys()
+    assert not missing, f"features missing from real panel: {missing}"
+
     ctx = EvalContext(
         ticker="TEST.NS",
         bar_date=last_date,

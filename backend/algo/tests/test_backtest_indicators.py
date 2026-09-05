@@ -217,8 +217,12 @@ def test_dist_from_prev_day_high_pct():
     dates = sorted(out.keys())
     assert "dist_from_prev_day_high_pct" not in out[dates[0]]
     # bar 1: close=105, prev high = 100+1=101 -> (105-101)/101*100
-    expected_1 = (Decimal("105") - Decimal("101")) / Decimal("101") * Decimal("100")
+    expected_1 = (
+        (Decimal("105") - Decimal("101")) / Decimal("101") * Decimal("100")
+    )
     assert out[dates[1]]["dist_from_prev_day_high_pct"] == expected_1
     # bar 2: close=103, prev high = 105+1=106 -> (103-106)/106*100
-    expected_2 = (Decimal("103") - Decimal("106")) / Decimal("106") * Decimal("100")
+    expected_2 = (
+        (Decimal("103") - Decimal("106")) / Decimal("106") * Decimal("100")
+    )
     assert out[dates[2]]["dist_from_prev_day_high_pct"] == expected_2

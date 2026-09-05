@@ -536,6 +536,11 @@ FEATURES: list[Feature] = [
         type="float",
         source="intraday_feature_store",
     ),
+    # Also computed at PRIMARY cadence (unsuffixed) by
+    # backend.algo.backtest.indicators.compute_indicators for
+    # 1d-schedule strategies — see per_bar.py's cross-cadence
+    # overlay rule for why a daily-primary strategy never reads
+    # the persisted copy under this same key via daily_overlay.
     Feature(
         key="dist_from_prev_day_high_pct",
         label="Distance from prev day high %",
