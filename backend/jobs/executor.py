@@ -2923,11 +2923,24 @@ def execute_iceberg_maintenance(
                     len(tables),
                 )
         else:
-            backup_path = run_backup()
-            _logger.info(
-                "[maint] Backup complete: %s",
-                backup_path,
+            from backend.maintenance.backup import (
+                has_fresh_full_snapshot_today,
             )
+
+            if has_fresh_full_snapshot_today():
+                backup_path = "<fresh-snapshot-today>"
+                _logger.info(
+                    "[maint] Today's full-warehouse snapshot "
+                    "already fresh — skipping redundant rsync "
+                    "(avoids a second ~hours-long run_backup() "
+                    "call in the same pipeline run)",
+                )
+            else:
+                backup_path = run_backup()
+                _logger.info(
+                    "[maint] Backup complete: %s",
+                    backup_path,
+                )
         done += 1
         try:
             repo.update_scheduler_run(

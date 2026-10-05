@@ -9,6 +9,8 @@ slices 1h / 1j changed.
 
 from __future__ import annotations
 
+import shutil
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -225,3 +227,131 @@ def test_rotate_backups_pre_existing_full_snapshots_still_work(
     assert (tmp_path / "backup-2026-05-22").exists()
     assert not (tmp_path / "backup-2026-05-21").exists()
     assert not (tmp_path / "backup-2026-05-20").exists()
+
+
+def test_rotate_backups_tolerates_dir_already_removed(
+    tmp_path, caplog,
+):
+    """A concurrent run_backup() call (e.g. two pipelines'
+    unscoped iceberg_maintenance steps overlapping) can win
+    the race and rmtree the same oldest snapshot first. The
+    loser must treat "already gone" as success, not crash the
+    whole maintenance step (2026-10-03 incident:
+    FileNotFoundError aborted Compact + Backup Iceberg for
+    every table in that run)."""
+    from backend.maintenance.backup import _rotate_backups
+
+    (tmp_path / "backup-2026-05-21").mkdir()
+    (tmp_path / "backup-2026-05-22").mkdir()
+    (tmp_path / "backup-2026-05-23").mkdir()
+
+    real_rmtree = shutil.rmtree
+
+    def _rmtree_race(path, *a, **k):
+        # Simulate another process deleting it first.
+        real_rmtree(path, *a, **k)
+        raise FileNotFoundError(
+            2, "No such file or directory", str(path),
+        )
+
+    with (
+        patch(
+            "backend.maintenance.backup.shutil.rmtree",
+            side_effect=_rmtree_race,
+        ),
+        caplog.at_level("INFO"),
+    ):
+        _rotate_backups(tmp_path, keep=2)  # must not raise
+
+    assert not (tmp_path / "backup-2026-05-21").exists()
+    assert (tmp_path / "backup-2026-05-22").exists()
+    assert (tmp_path / "backup-2026-05-23").exists()
+    assert "already removed" in caplog.text
+
+
+def test_rotate_backups_still_raises_other_os_errors(tmp_path):
+    """Only FileNotFoundError (the race's signature) is
+    swallowed — a genuine permission/disk error must still
+    surface, not be silently eaten."""
+    from backend.maintenance.backup import _rotate_backups
+
+    (tmp_path / "backup-2026-05-21").mkdir()
+    (tmp_path / "backup-2026-05-22").mkdir()
+    (tmp_path / "backup-2026-05-23").mkdir()
+
+    with patch(
+        "backend.maintenance.backup.shutil.rmtree",
+        side_effect=PermissionError("denied"),
+    ):
+        with pytest.raises(PermissionError):
+            _rotate_backups(tmp_path, keep=2)
+
+
+# ────────────────────────────────────────────────────────────────
+# has_fresh_full_snapshot_today
+# ────────────────────────────────────────────────────────────────
+
+
+def test_fresh_snapshot_true_when_manifest_recent(tmp_path):
+    from backend.maintenance.backup import (
+        has_fresh_full_snapshot_today,
+    )
+    from backend.maintenance.backup_manifest import (
+        SCHEMA_VERSION,
+        write_manifest,
+    )
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    root = tmp_path / f"backup-{today}"
+    write_manifest(root, {
+        "schema_version": SCHEMA_VERSION,
+        "snapshot_id": today,
+        "created_at": datetime.now(timezone.utc).isoformat().replace(
+            "+00:00", "Z",
+        ),
+        "created_by": "test",
+        "warehouse_size_mb": 100.0,
+        "catalog_present": True,
+        "tables": [],
+    })
+
+    assert has_fresh_full_snapshot_today(
+        backup_root=str(tmp_path),
+    ) is True
+
+
+def test_fresh_snapshot_false_when_no_manifest(tmp_path):
+    from backend.maintenance.backup import (
+        has_fresh_full_snapshot_today,
+    )
+
+    assert has_fresh_full_snapshot_today(
+        backup_root=str(tmp_path),
+    ) is False
+
+
+def test_fresh_snapshot_false_when_stale(tmp_path):
+    from backend.maintenance.backup import (
+        has_fresh_full_snapshot_today,
+    )
+    from backend.maintenance.backup_manifest import (
+        SCHEMA_VERSION,
+        write_manifest,
+    )
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    root = tmp_path / f"backup-{today}"
+    stale = datetime.now(timezone.utc) - timedelta(hours=30)
+    write_manifest(root, {
+        "schema_version": SCHEMA_VERSION,
+        "snapshot_id": today,
+        "created_at": stale.isoformat().replace("+00:00", "Z"),
+        "created_by": "test",
+        "warehouse_size_mb": 100.0,
+        "catalog_present": True,
+        "tables": [],
+    })
+
+    assert has_fresh_full_snapshot_today(
+        backup_root=str(tmp_path), max_age_h=24.0,
+    ) is False
