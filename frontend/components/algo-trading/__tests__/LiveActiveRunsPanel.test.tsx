@@ -95,6 +95,10 @@ vi.mock("@/hooks/useStrategies", () => ({
     loading: false,
     error: null,
   }),
+  // Identity passthrough — test fixtures don't set `mode`/
+  // `archived_at`, so the real mode-filtering implementation
+  // would filter every fixture strategy out.
+  filterStrategiesByMode: (rows: unknown[]) => rows,
 }));
 
 import { LiveActiveRunsPanel } from "../live/LiveActiveRunsPanel";
@@ -124,7 +128,7 @@ describe("LiveActiveRunsPanel", () => {
     expect(select.options[2].textContent).toBe("Beta");
   });
 
-  it("Start button calls startPaperRun with literal 'live'", async () => {
+  it("Start button opens a typed-confirmation modal, not an immediate call", () => {
     swrData["strategies"] = [{ id: "s1", name: "Alpha" }];
     swrData["broker-status"] = { status: "connected" };
     render(<LiveActiveRunsPanel />);
@@ -134,8 +138,61 @@ describe("LiveActiveRunsPanel", () => {
     ) as HTMLSelectElement;
     fireEvent.change(select, { target: { value: "s1" } });
 
-    const startBtn = screen.getByTestId("live-start-btn");
-    fireEvent.click(startBtn);
+    fireEvent.click(screen.getByTestId("live-start-btn"));
+
+    // A single click must NOT arm real orders — 2026-08-10:
+    // caps.live_orders_enabled left over from earlier testing let
+    // one click on this exact button start a real-money run when
+    // a dry-run rehearsal was intended.
+    expect(startPaperRunMock).not.toHaveBeenCalled();
+    expect(
+      screen.getByTestId("live-start-confirm-modal"),
+    ).toBeTruthy();
+  });
+
+  it("confirm button stays disabled until the typed name matches", () => {
+    swrData["strategies"] = [{ id: "s1", name: "Alpha" }];
+    swrData["broker-status"] = { status: "connected" };
+    render(<LiveActiveRunsPanel />);
+
+    fireEvent.change(
+      screen.getByTestId("live-start-strategy-select"),
+      { target: { value: "s1" } },
+    );
+    fireEvent.click(screen.getByTestId("live-start-btn"));
+
+    const confirmBtn = screen.getByTestId(
+      "live-start-confirm-modal-confirm",
+    ) as HTMLButtonElement;
+    expect(confirmBtn.disabled).toBe(true);
+
+    const nameInput = screen.getByTestId(
+      "live-start-confirm-modal-name-input",
+    );
+    fireEvent.change(nameInput, { target: { value: "wrong" } });
+    expect(confirmBtn.disabled).toBe(true);
+
+    fireEvent.change(nameInput, { target: { value: "Alpha" } });
+    expect(confirmBtn.disabled).toBe(false);
+  });
+
+  it("confirming with the matched name calls startPaperRun with literal 'live'", async () => {
+    swrData["strategies"] = [{ id: "s1", name: "Alpha" }];
+    swrData["broker-status"] = { status: "connected" };
+    render(<LiveActiveRunsPanel />);
+
+    fireEvent.change(
+      screen.getByTestId("live-start-strategy-select"),
+      { target: { value: "s1" } },
+    );
+    fireEvent.click(screen.getByTestId("live-start-btn"));
+    fireEvent.change(
+      screen.getByTestId("live-start-confirm-modal-name-input"),
+      { target: { value: "Alpha" } },
+    );
+    fireEvent.click(
+      screen.getByTestId("live-start-confirm-modal-confirm"),
+    );
 
     // Tick to let the async handler resolve.
     await new Promise((r) => setTimeout(r, 0));
@@ -148,6 +205,26 @@ describe("LiveActiveRunsPanel", () => {
     expect(capital).toBe("100000.00");
     expect(source).toBe("live-ws");
     expect(mode).toBe("live"); // literal "live" — not aliased.
+  });
+
+  it("Cancel closes the modal without starting a run", () => {
+    swrData["strategies"] = [{ id: "s1", name: "Alpha" }];
+    swrData["broker-status"] = { status: "connected" };
+    render(<LiveActiveRunsPanel />);
+
+    fireEvent.change(
+      screen.getByTestId("live-start-strategy-select"),
+      { target: { value: "s1" } },
+    );
+    fireEvent.click(screen.getByTestId("live-start-btn"));
+    fireEvent.click(
+      screen.getByTestId("live-start-confirm-modal-cancel"),
+    );
+
+    expect(
+      screen.queryByTestId("live-start-confirm-modal"),
+    ).toBeNull();
+    expect(startPaperRunMock).not.toHaveBeenCalled();
   });
 
   it("filters the active-runs list to mode=live && !dry_run", () => {

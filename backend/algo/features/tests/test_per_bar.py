@@ -45,6 +45,7 @@ def test_assemble_primary_only_matches_legacy_shape():
         bar_feats=bar_feats,
         market_regime=Decimal("1"),
         market_trend=Decimal("3.2"),
+        market_dist_sma200=Decimal("6.4"),
     )
     assert result == {
         "rsi_14": Decimal("55"),
@@ -52,16 +53,19 @@ def test_assemble_primary_only_matches_legacy_shape():
         "today_ltp": Decimal("99.5"),
         "nifty_above_sma200": Decimal("1"),
         "nifty_30d_return_pct": Decimal("3.2"),
+        "nifty_distance_from_sma200_pct": Decimal("6.4"),
     }
 
 
 def test_assemble_defaults_market_keys_to_zero_when_missing():
-    """If market_regime / market_trend not provided, default to
-    Decimal('0') (legacy ``market_regime.get(bar_date, 0)`` shape).
+    """If market_regime / market_trend / market_dist_sma200 not
+    provided, default to Decimal('0') (legacy
+    ``market_regime.get(bar_date, 0)`` shape).
     """
     result = assemble_per_bar_features(bar_feats={})
     assert result["nifty_above_sma200"] == Decimal("0")
     assert result["nifty_30d_return_pct"] == Decimal("0")
+    assert result["nifty_distance_from_sma200_pct"] == Decimal("0")
 
 
 def test_assemble_factor_row_merges_unsuffixed():
@@ -205,6 +209,7 @@ def test_assemble_full_stack_round_trip():
         bar_feats=bar_feats,
         market_regime=Decimal("1"),
         market_trend=Decimal("4.2"),
+        market_dist_sma200=Decimal("7.5"),
         factor_row={
             "mom_12_1": Decimal("0.18"),
             "f_score": Decimal("8"),
@@ -223,6 +228,7 @@ def test_assemble_full_stack_round_trip():
     assert result["rsi_14"] == Decimal("28")
     assert result["nifty_above_sma200"] == Decimal("1")
     assert result["nifty_30d_return_pct"] == Decimal("4.2")
+    assert result["nifty_distance_from_sma200_pct"] == Decimal("7.5")
     assert result["f_score"] == Decimal("8")
     assert result["realized_vol_60d"] == Decimal("0.22")
     assert result["regime_label"] == "BULL"

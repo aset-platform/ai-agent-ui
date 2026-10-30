@@ -2923,11 +2923,24 @@ def execute_iceberg_maintenance(
                     len(tables),
                 )
         else:
-            backup_path = run_backup()
-            _logger.info(
-                "[maint] Backup complete: %s",
-                backup_path,
+            from backend.maintenance.backup import (
+                has_fresh_full_snapshot_today,
             )
+
+            if has_fresh_full_snapshot_today():
+                backup_path = "<fresh-snapshot-today>"
+                _logger.info(
+                    "[maint] Today's full-warehouse snapshot "
+                    "already fresh — skipping redundant rsync "
+                    "(avoids a second ~hours-long run_backup() "
+                    "call in the same pipeline run)",
+                )
+            else:
+                backup_path = run_backup()
+                _logger.info(
+                    "[maint] Backup complete: %s",
+                    backup_path,
+                )
         done += 1
         try:
             repo.update_scheduler_run(
@@ -3834,6 +3847,33 @@ def _job_algo_closed_trades_rollup(
     )
 
     result = run_closed_trades_rollup_job(payload or {})
+    _algo_job_success(repo, run_id)
+    return result
+
+
+@register_job("algo_entry_labeled_outcomes_rollup")
+def _job_algo_entry_labeled_outcomes_rollup(
+    scope: str | None = None,
+    run_id: str | None = None,
+    repo=None,
+    cancel_event=None,
+    force: bool = False,
+    payload: dict | None = None,
+) -> dict:
+    """Daily rollup of entry-strength candidates (filled + rejected)
+    into algo.entry_labeled_outcomes, the Release-2 entry-strength
+    calibration training set (PRE-6).
+
+    Reads entry_strength_snapshot + signal_rejected events plus
+    algo.closed_trades (trailing 400-day window), joins fills/
+    rejections against their snapshot features, idempotently
+    upserts. Runs 16:00 IST Mon-Fri, after market close.
+    """
+    from backend.algo.jobs.entry_labeled_outcomes_rollup import (
+        run_entry_labeled_outcomes_rollup_job,
+    )
+
+    result = run_entry_labeled_outcomes_rollup_job(payload)
     _algo_job_success(repo, run_id)
     return result
 

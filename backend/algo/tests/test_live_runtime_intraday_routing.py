@@ -151,20 +151,18 @@ def _minute_bar_at(
 
 
 async def _drive(runtime, bar) -> int:
-    """Drive a minute bar through ``_on_bar_close`` with the eval
-    gate held open and the evaluator forced to HOLD (we're
-    exercising bucketing, not signal flow)."""
-    from datetime import time
-    with patch(
-        "backend.algo.live.runtime._MIN_EVAL_TIME_IST", time(0, 0),
+    """Drive a minute bar through ``_on_bar_close`` with the
+    evaluator forced to HOLD (we're exercising bucketing, not
+    signal flow). All strategies in this file are intraday-cadence,
+    so the daily entry-timing block (Gate A + OR-trigger) never
+    applies regardless -- no gate to hold open."""
+    with patch.object(
+        runtime._evaluator, "eval_node",
+        return_value={"type": "hold"},
     ):
-        with patch.object(
-            runtime._evaluator, "eval_node",
-            return_value={"type": "hold"},
-        ):
-            return await runtime._on_bar_close(
-                bar=bar, last_price=Decimal(str(bar.close)),
-            )
+        return await runtime._on_bar_close(
+            bar=bar, last_price=Decimal(str(bar.close)),
+        )
 
 
 # ---------------------------------------------------------------

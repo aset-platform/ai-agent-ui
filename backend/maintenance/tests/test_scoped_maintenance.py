@@ -42,13 +42,18 @@ def _ok_sweep(*_a, **_k) -> dict:
     }
 
 
-def _patch_targets():
+def _patch_targets(fresh_snapshot: bool = False):
     """Common patch context — returns a dict of mocks.
 
     Patches at the source modules per CLAUDE.md hard rule
     #16 — ``execute_iceberg_maintenance`` does a function-
     local import of these names, so patching at the
     importer would be a no-op.
+
+    ``fresh_snapshot`` defaults False so every pre-existing
+    test keeps asserting the legacy "no fresh snapshot ->
+    call run_backup()" behaviour unchanged; tests for the new
+    redundant-backup-skip path pass True explicitly.
     """
     return {
         "run_backup": patch(
@@ -58,6 +63,10 @@ def _patch_targets():
         "backup_table": patch(
             "backend.maintenance.backup.backup_table",
             side_effect=lambda t: f"/tmp/backup-{t}",
+        ),
+        "has_fresh_full_snapshot_today": patch(
+            "backend.maintenance.backup.has_fresh_full_snapshot_today",
+            return_value=fresh_snapshot,
         ),
         "compact_table": patch(
             "backend.maintenance.iceberg_maintenance.compact_table",
@@ -70,15 +79,17 @@ def _patch_targets():
     }
 
 
-def _start(payload=None):
+def _start(payload=None, fresh_snapshot: bool = False):
     repo = MagicMock()
     repo.update_scheduler_run = MagicMock()
     repo.append_scheduler_run = MagicMock()
+    targets = _patch_targets(fresh_snapshot=fresh_snapshot)
     with (
-        _patch_targets()["run_backup"] as rb,
-        _patch_targets()["backup_table"] as bt,
-        _patch_targets()["compact_table"] as ct,
-        _patch_targets()["cleanup_orphans_v2"] as co,
+        targets["run_backup"] as rb,
+        targets["backup_table"] as bt,
+        targets["has_fresh_full_snapshot_today"] as hf,
+        targets["compact_table"] as ct,
+        targets["cleanup_orphans_v2"] as co,
     ):
         execute_iceberg_maintenance(
             scope="india",
@@ -89,6 +100,7 @@ def _start(payload=None):
         return {
             "run_backup": rb,
             "backup_table": bt,
+            "has_fresh_full_snapshot_today": hf,
             "compact_table": ct,
             "cleanup_orphans_v2": co,
             "repo": repo,
@@ -138,6 +150,23 @@ def test_iceberg_maintenance_unscoped_calls_run_backup() -> None:
     calls = _start(payload=None)
     assert calls["run_backup"].call_count == 1
     assert calls["backup_table"].call_count == 0
+
+
+def test_unscoped_skips_redundant_backup_when_fresh() -> None:
+    """2026-10-03 fix: when today's full-warehouse snapshot is
+    already fresh (e.g. the ``backups_daily`` job, an earlier
+    step in the SAME ``Backups Daily`` pipeline run, already
+    wrote one), the unscoped iceberg_maintenance step must NOT
+    do a second ~hours-long run_backup() rsync — that
+    redundancy was what widened the race window for the
+    concurrent-rotation FileNotFoundError crash."""
+    calls = _start(payload=None, fresh_snapshot=True)
+    assert calls["has_fresh_full_snapshot_today"].call_count == 1
+    assert calls["run_backup"].call_count == 0
+    # Compaction/sweep still run — only the redundant backup
+    # rsync is skipped, not the rest of the maintenance pass.
+    compact_args = {c.args[0] for c in calls["compact_table"].call_args_list}
+    assert compact_args == set(_HOT_ICEBERG_TABLES)
 
 
 def test_unknown_table_in_payload_logged_and_skipped() -> None:

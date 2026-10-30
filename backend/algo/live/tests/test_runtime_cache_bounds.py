@@ -203,14 +203,14 @@ async def test_bar_history_capped_at_max(monkeypatch):
     retained bars must be the most-recent ones. List identity must be
     preserved (same object as _bars_by_ticker[ticker]).
     """
-    import datetime as _dt
-
     import backend.algo.live.runtime as _rt_mod
 
     cap = 5
     monkeypatch.setattr(_rt_mod, "_MAX_BAR_HISTORY", cap)
-    # Open eval gate so BUY logic doesn't short-circuit on wall-clock.
-    monkeypatch.setattr(_rt_mod, "_MIN_EVAL_TIME_IST", _dt.time(0, 0))
+    # No eval-time gate to hold open anymore (Task 1 / ASETPLTFRM-383
+    # OR-trigger redesign removed it) -- irrelevant here regardless,
+    # since the new-bucket append + trim this test asserts on always
+    # runs BEFORE the entry-timing gate block in _on_bar_close.
 
     runtime = _make_runtime()
 
@@ -254,13 +254,10 @@ async def test_same_bucket_update_does_not_trim_or_grow(monkeypatch):
     The in-place `else` branch (running-bar model_copy) must never touch
     the length; cap logic must be in the new-bucket branch only.
     """
-    import datetime as _dt
-
     import backend.algo.live.runtime as _rt_mod
 
     cap = 3
     monkeypatch.setattr(_rt_mod, "_MAX_BAR_HISTORY", cap)
-    monkeypatch.setattr(_rt_mod, "_MIN_EVAL_TIME_IST", _dt.time(0, 0))
 
     runtime = _make_runtime()
 

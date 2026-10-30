@@ -45,6 +45,7 @@ def assemble_per_bar_features(
     bar_feats: dict[str, Decimal | str],
     market_regime: Decimal | None = None,
     market_trend: Decimal | None = None,
+    market_dist_sma200: Decimal | None = None,
     factor_row: dict[str, Decimal] | None = None,
     regime_row: dict[str, Any] | None = None,
     daily_overlay: dict[str, Decimal | str] | None = None,
@@ -63,6 +64,9 @@ def assemble_per_bar_features(
             value. Defaults to ``Decimal("0")`` if absent.
         market_trend: ``nifty_30d_return_pct`` daily-derived
             value. Defaults to ``Decimal("0")`` if absent.
+        market_dist_sma200: ``nifty_distance_from_sma200_pct``
+            daily-derived value. Defaults to ``Decimal("0")`` if
+            absent.
         factor_row: ``stocks.daily_factors`` row for this
             ``(ticker, bar_date)``. Keys are factor-library
             names (``mom_12_1``, ``f_score``, etc.) — never
@@ -105,6 +109,11 @@ def assemble_per_bar_features(
     )
     out["nifty_30d_return_pct"] = (
         market_trend if market_trend is not None else Decimal("0")
+    )
+    out["nifty_distance_from_sma200_pct"] = (
+        market_dist_sma200
+        if market_dist_sma200 is not None
+        else Decimal("0")
     )
     if factor_row:
         out.update(factor_row)

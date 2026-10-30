@@ -9,10 +9,15 @@ Covers:
      append, no minute-bar pollution of the daily series).
   3. high/low/close/volume invariants: high broadens up, low
      broadens down, close advances to latest, volume accumulates.
-  4. Eval gate: a minute-bar arriving before MIN_EVAL_TIME_IST
-     returns 0 (no signal eval) but STILL updates today's bar.
-  5. Eval gate: after MIN_EVAL_TIME_IST, eval fires normally
-     (verified by reaching the evaluator call site).
+  4. OR-trigger entry timing (Task 1 / ASETPLTFRM-383 redesign,
+     2026-08-09): a BUY visible ONLY on today's still-forming
+     candle now enters immediately (no more deferral to a later
+     eval-time cutoff) -- the bar is updated regardless either way.
+  5. Eval always runs for both today's bar AND (when flat) the
+     last closed bar -- no eval-time gate holds either back
+     anymore; only the 09:30 BUY floor (_MIN_BUY_TIME_IST) can
+     still defer a resolved BUY, and it applies uniformly to
+     whichever leg of the OR-trigger produced it.
   6. Universe drift: ticker not in caps.allowed_tickers lazy-
      preloads on first bar via asyncio.to_thread.
   7. Day rollover: a bar from a NEW date appends a new running
@@ -192,23 +197,21 @@ def test_init_skips_preload_when_no_allowed_tickers() -> None:
 
 
 async def _drive_bar(runtime, bar) -> int:
-    """Run _on_bar_close with a permissive eval-time gate (so the
-    eval path is reached regardless of wall-clock). Returns the
-    int the method returned (0 = gate hit OR no fill, ≥1 = fill)."""
-    with patch(
-        "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-        _time(0, 0),  # always past — eval gate open
+    """Run _on_bar_close. Returns the int the method returned (0 =
+    no fill, ≥1 = fill). Evaluator forced to HOLD so we don't
+    trigger an actual order submission path (orthogonal to this
+    test) -- with no BUY ever produced, the removed 14:20 eval-time
+    gate (Task 1 / ASETPLTFRM-383 OR-trigger redesign) and the
+    remaining 09:30 BUY floor are both no-ops here; nothing to
+    patch open."""
+    with patch.object(
+        runtime._evaluator, "eval_node",
+        return_value={"type": "hold"},
     ):
-        # Force evaluator to return HOLD so we don't trigger an
-        # actual order submission path (orthogonal to this test).
-        with patch.object(
-            runtime._evaluator, "eval_node",
-            return_value={"type": "hold"},
-        ):
-            return await runtime._on_bar_close(
-                bar=bar,
-                last_price=Decimal(str(bar.close)),
-            )
+        return await runtime._on_bar_close(
+            bar=bar,
+            last_price=Decimal(str(bar.close)),
+        )
 
 
 @pytest.mark.asyncio
@@ -257,16 +260,24 @@ async def test_running_bar_updated_in_place_not_appended() -> None:
 
 
 # ---------------------------------------------------------------
-# 4. Pre-gate: eval skipped, bar still updated.
+# 4. OR-trigger: a forming-only BUY now enters immediately; the
+#    bar is (still) updated either way.
+#
+#    Task 1 (ASETPLTFRM-383 OR-trigger redesign, 2026-08-09) removed
+#    the 14:20/14:30 IST eval-time gate this test used to pin: a BUY
+#    that appeared ONLY on today's still-forming candle was deferred
+#    until the gate opened. The 09:30 BUY floor is the only
+#    remaining wall-clock gate, and it does not care which bar (today
+#    vs. closed) produced the signal -- so a forming-only BUY now
+#    submits immediately, same as a closed-bar BUY always has.
 # ---------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_today_only_entry_gated_pre_cutoff() -> None:
-    """A BUY that appears ONLY on today's still-forming candle is
-    premature before the 14:30 IST cutoff: no order is submitted,
-    though the bar is still updated. (Closed-bar eval = HOLD.)
-    """
+async def test_today_only_entry_enters_immediately() -> None:
+    """A BUY that appears ONLY on today's still-forming candle (the
+    closed bar alone would say HOLD) now submits immediately under
+    the OR-trigger -- no deferral to any later eval-time cutoff."""
     today = date.today()
     payload = {
         "ITC.NS": _series(
@@ -276,6 +287,16 @@ async def test_today_only_entry_gated_pre_cutoff() -> None:
     runtime = _make_runtime(
         allowed_tickers=["ITC.NS"], preload_payload=payload,
     )
+    # This scenario now reaches further downstream (cooldown / MIS
+    # entry-cutoff gates) than it did under the old deferred-BUY
+    # behaviour, since the OR-trigger lets the signal flow straight
+    # through instead of returning 0 at the eval-time gate. The
+    # MagicMock(spec=Strategy) fixture doesn't set these, so pin
+    # them to their "gate disabled" defaults.
+    runtime._strategy.risk.per_trade.cooldown_after_failed_exit_days = (
+        None
+    )
+    runtime._strategy.entry_cutoff_time = None
 
     bar = _minute_bar(
         "ITC.NS", today,
@@ -289,10 +310,20 @@ async def test_today_only_entry_gated_pre_cutoff() -> None:
         return {"type": "hold"}
 
     submit_spy = AsyncMock(return_value=1)
-    # Gate set to 23:59 → effectively closed for the duration.
+    from backend.algo.paper.types import RiskDecision
+
+    # Deterministic regardless of real wall-clock -- the 09:30 BUY
+    # floor is the only gate left; hold it open. pre_trade_check is
+    # a separate real risk-engine call this scenario now reaches
+    # (unlike under the old deferred-BUY behaviour) -- stub it to
+    # accept since the risk engine itself isn't what this test is
+    # about, mirroring test_balance_cap.py's pattern.
     with patch(
-        "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-        _time(23, 59),
+        "backend.algo.live.runtime._MIN_BUY_TIME_IST",
+        _time(0, 0),
+    ), patch(
+        "backend.algo.live.runtime.pre_trade_check",
+        new=AsyncMock(return_value=RiskDecision(outcome="accept")),
     ):
         with patch.object(
             runtime._evaluator, "eval_node", side_effect=_by_date,
@@ -301,9 +332,11 @@ async def test_today_only_entry_gated_pre_cutoff() -> None:
                 bar=bar, last_price=Decimal("301"),
             )
 
-    assert result == 0
-    submit_spy.assert_not_called()
-    # Bar STILL updated despite gate (visible on Live panel).
+    assert result == 1
+    submit_spy.assert_called_once()
+    submitted_signal = submit_spy.call_args.kwargs["signal"]
+    assert submitted_signal.side == "BUY"
+    # Bar updated regardless (visible on Live panel).
     running = runtime._bars_by_ticker["ITC.NS"][-1]
     assert running.date == today
     assert running.close == Decimal("301")
@@ -319,6 +352,10 @@ async def test_evaluator_runs_for_today_and_closed_bar() -> None:
     """Eval is no longer blanket-skipped pre-cutoff: it runs for
     today's bar AND (when flat) the last closed bar, so a completed-
     bar entry can be detected. Both return HOLD here → no order.
+
+    Under the OR-trigger (Task 1) the closed-bar eval is unconditional
+    (no eval-time gate to hold open) whenever flat/daily/last-bar-is-
+    today -- so no gate patch is needed here at all.
     """
     today = date.today()
     payload = {
@@ -333,15 +370,11 @@ async def test_evaluator_runs_for_today_and_closed_bar() -> None:
         "ITC.NS", today, close=301, volume=10,
     )
 
-    with patch(
-        "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-        _time(0, 0),
-    ):
-        eval_spy = MagicMock(return_value={"type": "hold"})
-        with patch.object(runtime._evaluator, "eval_node", eval_spy):
-            result = await runtime._on_bar_close(
-                bar=bar, last_price=Decimal("301"),
-            )
+    eval_spy = MagicMock(return_value={"type": "hold"})
+    with patch.object(runtime._evaluator, "eval_node", eval_spy):
+        result = await runtime._on_bar_close(
+            bar=bar, last_price=Decimal("301"),
+        )
 
     assert result == 0
     # today's bar + the last-closed-bar entry check.
@@ -350,22 +383,19 @@ async def test_evaluator_runs_for_today_and_closed_bar() -> None:
 
 # ---------------------------------------------------------------
 # 5b. ASETPLTFRM-390 — eval-gate carve-out for intraday cadence.
-# Daily strategies keep the 14:30 IST gate so today's running daily
-# candle stabilises before they act. Intraday strategies (5m / 1m)
-# need to fire from market open at 09:15 IST; gating them on the
-# same daily cutoff would silence the entire morning session.
+# The daily entry-timing block (Gate A + OR-trigger) only ever
+# applies to daily-cadence strategies (``daily_realtime`` requires
+# ``interval == "1d"``); intraday strategies (5m / 1m) bypass it
+# entirely and fire from market open at 09:15 IST regardless.
 # ---------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_intraday_strategy_bypasses_pre_gate_skip() -> None:
-    """A 5-min strategy must NOT be silenced by the 14:30 IST gate.
-
-    Pins the carve-out: with the gate fully closed (23:59), the
-    daily-cadence path returns 0 (covered by
-    ``test_pre_gate_skips_eval_but_updates_bar``); the intraday-
-    cadence path must still invoke the evaluator.
-    """
+    """A 5-min strategy must NOT be silenced by the daily-cadence
+    entry-timing block -- it never applies to intraday cadence in
+    the first place (``daily_realtime`` requires ``interval ==
+    "1d"``), independent of any eval-time gate value."""
     today = date.today()
     payload = {
         "ITC.NS": _series(
@@ -383,16 +413,11 @@ async def test_intraday_strategy_bypasses_pre_gate_skip() -> None:
     bar = _minute_bar(
         "ITC.NS", today, close=301, volume=10,
     )
-    # Gate fully closed; the daily path would return 0 here.
-    with patch(
-        "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-        _time(23, 59),
-    ):
-        eval_spy = MagicMock(return_value={"type": "hold"})
-        with patch.object(runtime._evaluator, "eval_node", eval_spy):
-            await runtime._on_bar_close(
-                bar=bar, last_price=Decimal("301"),
-            )
+    eval_spy = MagicMock(return_value={"type": "hold"})
+    with patch.object(runtime._evaluator, "eval_node", eval_spy):
+        await runtime._on_bar_close(
+            bar=bar, last_price=Decimal("301"),
+        )
 
     # Intraday path bypasses the gate → evaluator fires.
     assert eval_spy.call_count == 1, (
@@ -471,17 +496,13 @@ async def test_universe_drift_triggers_lazy_preload() -> None:
         "backend.algo.live.daily_bar_warmup.preload_daily_bars",
         return_value=lazy_payload,
     ):
-        with patch(
-            "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-            _time(0, 0),
-        ):
-            with patch.object(
-                runtime._evaluator, "eval_node",
+        with patch.object(
+            runtime._evaluator, "eval_node",
             return_value={"type": "hold"},
-            ):
-                await runtime._on_bar_close(
-                    bar=bar, last_price=Decimal("4000"),
-                )
+        ):
+            await runtime._on_bar_close(
+                bar=bar, last_price=Decimal("4000"),
+            )
 
     assert "TCS.NS" in runtime._bars_by_ticker
     # 250 preloaded + 1 running today bar.

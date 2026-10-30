@@ -473,6 +473,52 @@ def verify_or_backup(
     }
 
 
+def has_fresh_full_snapshot_today(
+    *,
+    max_age_h: float = 24.0,
+    backup_root: str | None = None,
+) -> bool:
+    """True when today's full-warehouse snapshot manifest
+    exists and is fresh enough to skip a redundant rsync.
+
+    Used by the UNSCOPED ``iceberg_maintenance`` path (the
+    ``Backups Daily`` pipeline's own maintenance step, payload
+    ``{}``) to avoid a second, ~hours-long full-warehouse
+    ``run_backup()`` call immediately after the dedicated
+    ``backups_daily`` job (same pipeline, earlier step)
+    already wrote one. Found 2026-10-03: two ~4h rsync passes
+    back-to-back in the same pipeline run widened the window
+    for a concurrent ``run_backup()`` from another pipeline to
+    race on ``_rotate_backups``'s cleanup (see that function
+    for the other half of this fix — tolerating the loser's
+    FileNotFoundError).
+
+    Mirrors ``verify_or_backup``'s freshness check but without
+    requiring per-table coverage — any recent manifest means
+    the full warehouse was already captured today.
+    """
+    from backend.maintenance.backup_manifest import read_manifest
+
+    root = Path(backup_root or BACKUP_ROOT)
+    today = date.today().isoformat()
+    snapshot_root = root / f"backup-{today}"
+
+    manifest = read_manifest(snapshot_root)
+    if manifest is None:
+        return False
+    created_iso = manifest.get("created_at", "")
+    try:
+        created_at = datetime.fromisoformat(
+            created_iso.replace("Z", "+00:00"),
+        )
+    except ValueError:
+        return False
+    age_h = (
+        datetime.now(timezone.utc) - created_at
+    ).total_seconds() / 3600
+    return age_h <= max_age_h
+
+
 # Match canonical full-snapshot directory names ONLY
 # (``backup-YYYY-MM-DD``).  Per-table fallback dirs created
 # by ``backup_table()`` use the form
@@ -508,7 +554,22 @@ def _rotate_backups(
             "Rotating out old backup: %s",
             old,
         )
-        shutil.rmtree(old)
+        try:
+            shutil.rmtree(old)
+        except FileNotFoundError:
+            # Another concurrent run_backup() call (e.g. two
+            # pipelines' unscoped iceberg_maintenance steps
+            # overlapping) can win the race and rmtree this
+            # same oldest snapshot first. The end state either
+            # way is "gone" — treat that as success instead of
+            # aborting the whole maintenance step (2026-10-03
+            # incident: this crash took down Compact + Backup
+            # Iceberg for every table in that run).
+            _logger.info(
+                "%s already removed (concurrent backup run) — "
+                "treating as already-rotated",
+                old,
+            )
 
 
 def _dir_size_mb(path: Path) -> float:

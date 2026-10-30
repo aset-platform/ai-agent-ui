@@ -67,6 +67,7 @@ def test_dryrun_indistinguishable_from_live_at_helper_level():
         "bar_feats",
         "market_regime",
         "market_trend",
+        "market_dist_sma200",
         "factor_row",
         "regime_row",
         "daily_overlay",

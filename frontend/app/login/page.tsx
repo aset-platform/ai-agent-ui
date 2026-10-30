@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, FormEvent } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { getAccessToken, isTokenExpired, setTokens } from "@/lib/auth";
+import { clearTokens, getAccessToken, isTokenExpired, setTokens } from "@/lib/auth";
 import {
   generateCodeChallenge,
   generateCodeVerifier,
@@ -22,12 +22,24 @@ export default function LoginPage() {
   // Fix #16: abort ref to cancel login request if component unmounts mid-flight
   const loginAbortRef = useRef<AbortController | null>(null);
 
-  // If already authenticated, skip straight to the app.
+  // proxy.ts already redirects an authenticated visitor away from
+  // /login server-side (it checks the access_token/refresh_token
+  // HttpOnly cookie before this component ever mounts) — so this
+  // component only mounts when the server-side cookie gate says
+  // "not authenticated". A non-expired token still sitting in
+  // localStorage at that point is therefore ORPHANED (desynced
+  // from the cookie, e.g. an old session, a cleared cookie, or a
+  // cross-tab logout) rather than evidence of a real session.
+  // Previously this effect trusted that stale token anyway and
+  // navigated to /dashboard, which the proxy's cookie gate then
+  // bounced straight back to /login — an infinite reload loop
+  // (found 2026-10-29: a single tab reloaded /login hundreds of
+  // times a minute). Clear the orphaned token instead of acting
+  // on it, and let the user see the normal login form.
   useEffect(() => {
     const token = getAccessToken();
     if (token && !isTokenExpired(token)) {
-      window.location.href = "/dashboard";
-      return;
+      clearTokens();
     }
     // Fix #15: AbortController so the fetch is cancelled if the component unmounts
     const controller = new AbortController();

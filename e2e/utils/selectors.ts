@@ -125,6 +125,11 @@ export const FE = {
   dashboardAlgoPositionsTable: "dashboard-algo-positions-table",
   dashboardAlgoPositionsEmpty: "dashboard-algo-positions-empty",
   dashboardAlgoPositionsCta: "dashboard-algo-positions-cta",
+  tabPortfolioOpen: "tab-portfolio-open",
+  tabPortfolioClosed: "tab-portfolio-closed",
+  portfolioCloseIcon: (t: string) => `portfolio-close-${t}`,
+  closedTotal: "closed-total",
+  closedRow: (t: string) => `closed-row-${t}`,
 
   // ── Insights ─────────────────────────────────────
   insightsTab: (id: string) => `insights-tab-${id}`,

@@ -242,9 +242,11 @@ class PaperRuntime:
         # wide date window so per-bar lookups are O(1).
         self._market_regime: dict[Any, Decimal] = {}
         self._market_trend: dict[Any, Decimal] = {}
+        self._market_dist_sma200: dict[Any, Decimal] = {}
         try:
             from datetime import date as _date, timedelta
             from backend.algo.backtest.indicators import (
+                compute_market_distance_from_sma200 as _cmds,
                 compute_market_regime as _cmr,
                 compute_market_trend_strength as _cmts,
             )
@@ -257,11 +259,13 @@ class PaperRuntime:
             window_start = today - timedelta(days=365 * 3)
             self._market_regime = _cmr(window_start, today)
             self._market_trend = _cmts(window_start, today)
+            self._market_dist_sma200 = _cmds(window_start, today)
             _logger.info(
                 "PaperRuntime: regime cache loaded — %d regime "
-                "days, %d trend days",
+                "days, %d trend days, %d dist-sma200 days",
                 len(self._market_regime),
                 len(self._market_trend),
+                len(self._market_dist_sma200),
             )
         except Exception as exc:  # noqa: BLE001
             _logger.warning(
@@ -755,6 +759,9 @@ class PaperRuntime:
             ),
             market_regime=self._market_regime.get(bar_date_obj),
             market_trend=self._market_trend.get(bar_date_obj),
+            market_dist_sma200=self._market_dist_sma200.get(
+                bar_date_obj,
+            ),
             factor_row=(
                 self._factor_cache.get((bar.ticker, bar_date_obj))
                 or self._factor_cache.get((bar.ticker, bar_date_obj - timedelta(days=1)))

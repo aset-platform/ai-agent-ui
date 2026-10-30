@@ -164,6 +164,16 @@ class OAuthService:
     _FB_TOKEN_URL = "https://graph.facebook.com/v18.0/oauth/access_token"
     _FB_ME_URL = "https://graph.facebook.com/me"
 
+    # PyJWT defaults to leeway=0 on iat/exp/nbf checks. Found
+    # 2026-10-21: Docker Desktop's VM clock can lag a host's real
+    # time by up to ~1 minute right after the host wakes from
+    # sleep or a container restarts (before the VM's own NTP sync
+    # catches up) — a perfectly valid, freshly-issued Google ID
+    # token then looks "not yet valid (iat)" purely because our
+    # clock is briefly behind Google's. 10s tolerates normal NTP
+    # drift without meaningfully weakening the freshness check.
+    _CLOCK_SKEW_LEEWAY_S = 10
+
     def __init__(
         self,
         settings: Any,
@@ -360,6 +370,7 @@ class OAuthService:
                 signing_key.key,
                 algorithms=["RS256"],
                 audience=self._settings.google_client_id,
+                leeway=self._CLOCK_SKEW_LEEWAY_S,
             )
         except jwt.ExpiredSignatureError:
             raise ValueError("Google ID token has expired.")

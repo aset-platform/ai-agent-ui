@@ -60,11 +60,11 @@
         {
           "type": "compare",
           "left": {
-            "feature": "nifty_above_sma200"
+            "feature": "nifty_distance_from_sma200_pct"
           },
-          "op": ">=",
+          "op": ">",
           "right": {
-            "literal": 1
+            "literal": -5
           }
         },
         {

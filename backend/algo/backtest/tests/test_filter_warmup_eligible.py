@@ -86,6 +86,27 @@ def test_filter_keeps_all_when_iceberg_empty():
     assert kept == ["A.NS", "B.NS"]
 
 
+def test_filter_accepts_prefetched_first_bars_without_hitting_iceberg():
+    # ASETPLTFRM-433 follow-up (walk-forward wiring) — a caller
+    # re-filtering the same universe across many period_starts
+    # (one per walk-forward window) can pass a pre-fetched map to
+    # avoid re-querying Iceberg on every window.
+    with patch(
+        "backend.db.duckdb_engine.query_iceberg_table",
+    ) as q:
+        kept = filter_warmup_eligible(
+            ["OLD.NS", "NEW.NS"],
+            period_start=date(2026, 5, 15),
+            warmup_days=200,
+            first_bars={
+                "OLD.NS": date(2010, 1, 1),
+                "NEW.NS": date(2026, 3, 1),
+            },
+        )
+    assert kept == ["OLD.NS"]
+    assert q.call_count == 0
+
+
 def test_filter_at_exact_boundary_is_inclusive():
     # cutoff = 2026-05-15 - 200d = 2025-10-27.
     # Ticker first-bar exactly on the cutoff is eligible.

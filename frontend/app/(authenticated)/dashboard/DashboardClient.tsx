@@ -117,8 +117,12 @@ export default function DashboardClient({
       ),
     [registryData.value],
   );
-  const { openAdd, openTransactions, openDelete } =
-    usePortfolioActions();
+  const {
+    openAdd,
+    openTransactions,
+    openDelete,
+    openClose,
+  } = usePortfolioActions();
 
   // Single request for all widget data
   const {
@@ -413,6 +417,7 @@ export default function DashboardClient({
             openTransactions(ticker)
           }
           onDeleteStock={(ticker) => openDelete(ticker)}
+          onCloseStock={(ticker) => openClose(ticker)}
           algoTabEnabled={
             profile?.role === "pro"
             || profile?.role === "superuser"

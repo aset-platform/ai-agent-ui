@@ -115,6 +115,23 @@ export class PortfolioCrudPage extends BasePage {
     await this.tid("confirm-dialog-cancel").click();
   }
 
+  // ── Close Position ────────────────────────────────
+
+  /** The close-position row icon for a specific ticker. */
+  closeIcon(ticker: string): Locator {
+    return this.tid(FE.portfolioCloseIcon(ticker));
+  }
+
+  /** Switch to the "Portfolio (Closed)" tab. */
+  async openClosedTab(): Promise<void> {
+    await this.tid(FE.tabPortfolioClosed).click();
+  }
+
+  /** Switch back to the "Portfolio (Open)" tab. */
+  async openOpenTab(): Promise<void> {
+    await this.tid(FE.tabPortfolioOpen).click();
+  }
+
   // ── Watchlist Inspection ──────────────────────────
 
   /** Return the count of rows in the watchlist table. */

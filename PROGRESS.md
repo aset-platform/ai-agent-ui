@@ -2,6 +2,17 @@
 
 ---
 
+### 2026-08-11 — PRE epic: intraday-entry data readiness (branch `feature/algo-intraday-entry-window`)
+
+**Remaining PRE tickets after PRE-1/3/6.** Decisions taken with user: PRE-4 = dynamic coverage+liquidity gate; PRE-2 = standalone 60-day EQD backfill; PRE-5 = monitoring report + fix JBCHEPHARM.
+
+- **Shared primitive** — extended `backend/algo/backtest/coverage.py` with `coverage_gaps()` (per-ticker missing full days + partial days vs a self-derived trading calendar), `sufficiently_covered()` (fail-open eligibility gate), and `coverage_gap_summary()` (monitor view). 5 TDD tests.
+- **PRE-4 (done)** — added a 15m-coverage gate to `resolve_universe()`'s `is_fno` block (≥95% of trading days over 90d lookback), keeping the existing ADTV floor + static-CSV F&O intersect. Real-data check: 209/209 F&O tickers pass (genuine full coverage, not fail-open) — the gate is a safety net for future dropouts. Also fixed pre-existing test rot in `test_universe.py` (`_scoped_tickers` → `_scoped_tickers_for_strategy`).
+- **PRE-5 (report done)** — `coverage_cli.py` on-demand report. Finding: F&O universe is 100% covered over 90d; bars/day is only ever 24 or 25 (a 24-bar day is complete, not a gap). Only real gap: **JBCHEPHARM.NS** — dead at source since 2026-07-23 (yfinance returns frozen price; symbol change/delisting), not in the F&O model universe → data-governance item, not backfillable. Pipeline-check wiring pending (needs scheduler/seed/restart coordination).
+- **PRE-2 (code done, run pending)** — added an `as_of` payload param to `entry_quality_snapshot._run` (bounds both the trailing OHLCV and Nifty fetches to `date <= as_of`; `trade_date` follows the last in-window bar, so the scoped upsert keys correctly; default = today, zero regression). Standalone `scripts/backfill_entry_quality_daily.py` loops the last 60 ^NSEI-derived trading days. 2 new TDD tests (bound + default-no-bound guard); dry-run + read-only `as_of` truncation validated. The actual 60-day write awaits final OK.
+
+---
+
 ### 2026-07-02 — Strategy Performance tab rebuild (branch `feature/algo-strategy-performance`)
 
 **What:** 11-task plan rebuilding the Strategies → Performance page with mode-aware, per-strategy trade analytics.

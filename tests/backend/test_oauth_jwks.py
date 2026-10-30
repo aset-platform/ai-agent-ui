@@ -256,3 +256,85 @@ class TestExchangeInvalidToken:
         ):
             with pytest.raises(ValueError, match="Invalid"):
                 svc.exchange_google_code("code", "v")
+
+
+class TestExchangeClockSkewLeeway:
+    """ID token verification tolerates small clock drift between
+    this host and Google's issuance time — see
+    shared/debugging/oauth-clock-skew-iat (2026-10-21 incident:
+    Docker Desktop's VM clock lagged ~1min after host wake/
+    container restart, PyJWT's default leeway=0 rejected a
+    genuinely valid token with "not yet valid (iat)")."""
+
+    def test_decode_called_with_nonzero_leeway(self):
+        """jwt.decode must be called with a leeway tolerance,
+        not the PyJWT default of 0."""
+        mock_jwks = MagicMock(spec=CachedJWKSClient)
+        mock_jwks.cache_ttl = 3600
+        mock_key = MagicMock()
+        mock_key.key = "test-key"
+        mock_jwks.get_signing_key_with_retry.return_value = mock_key
+
+        svc = OAuthService(_make_settings(), jwks_client=mock_jwks)
+
+        with (
+            patch(
+                "auth.oauth_service.httpx.Client",
+                return_value=_mock_http_post(),
+            ),
+            patch("auth.oauth_service.jwt.decode") as dec,
+        ):
+            dec.return_value = {
+                "sub": "123",
+                "email": "a@b.com",
+                "name": "Test",
+                "picture": None,
+            }
+            svc.exchange_google_code("code", "verifier")
+
+        assert dec.call_args.kwargs["leeway"] > 0
+
+    def test_tolerates_token_issued_slightly_ahead_of_local_clock(
+        self,
+    ):
+        """End-to-end (real jwt.decode, no mock): a token whose
+        iat is a few seconds in the future relative to this
+        process's clock — simulating a container clock lagging
+        behind Google's issuance time — must still verify,
+        because leeway covers iat/nbf/exp alike in PyJWT."""
+        import time as _time
+
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        private_key = rsa.generate_private_key(
+            public_exponent=65537, key_size=2048,
+        )
+        now = int(_time.time())
+        token = pyjwt.encode(
+            {
+                "sub": "123",
+                "email": "a@b.com",
+                "name": "Test",
+                "aud": "test-client-id",
+                "iat": now + 5,
+                "exp": now + 3605,
+            },
+            private_key,
+            algorithm="RS256",
+        )
+
+        mock_jwks = MagicMock(spec=CachedJWKSClient)
+        mock_jwks.cache_ttl = 3600
+        mock_key = MagicMock()
+        mock_key.key = private_key.public_key()
+        mock_jwks.get_signing_key_with_retry.return_value = mock_key
+
+        svc = OAuthService(_make_settings(), jwks_client=mock_jwks)
+
+        with patch(
+            "auth.oauth_service.httpx.Client",
+            return_value=_mock_http_post(id_token=token),
+        ):
+            result = svc.exchange_google_code("code", "verifier")
+
+        assert result["sub"] == "123"

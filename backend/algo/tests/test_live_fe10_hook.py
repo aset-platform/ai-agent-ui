@@ -17,9 +17,6 @@ import sys
 from datetime import (
     date,
     datetime,
-)
-from datetime import time as _time
-from datetime import (
     timedelta,
     timezone,
 )
@@ -173,10 +170,6 @@ async def test_live_runtime_calls_fe10_emitter_on_intraday_bar() -> None:
     bar = _minute_bar("ITC.NS", date.today(), close=301, volume=10)
 
     with (
-        patch(
-            "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-            _time(0, 0),
-        ),
         patch.object(
             runtime._evaluator,
             "eval_node",
@@ -209,10 +202,6 @@ async def test_live_runtime_does_not_call_fe10_for_daily() -> None:
     bar = _minute_bar("ITC.NS", date.today(), close=301, volume=10)
 
     with (
-        patch(
-            "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-            _time(0, 0),
-        ),
         patch.object(
             runtime._evaluator,
             "eval_node",
@@ -239,10 +228,6 @@ async def test_live_runtime_fe10_failure_does_not_break_handler() -> None:
 
     eval_spy = MagicMock(return_value={"type": "hold"})
     with (
-        patch(
-            "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
-            _time(0, 0),
-        ),
         patch.object(runtime._evaluator, "eval_node", eval_spy),
         patch(
             "backend.algo.features.live_emitter." "emit_features_for_bar",

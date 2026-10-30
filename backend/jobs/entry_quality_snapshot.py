@@ -292,6 +292,15 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
         _logger.info("entry_quality_snapshot: no candidate tickers — skip.")
         return {"rows_written": 0}
 
+    # PRE-2 as-of backfill: bound the trailing OHLCV/Nifty window to
+    # ``date <= as_of`` so the snapshot is recomputed as it would have
+    # been on that historical date (``trade_date`` follows the last
+    # in-window bar). Absent → today's behaviour (no upper bound),
+    # zero regression.
+    raw_as_of = payload.get("as_of")
+    as_of = _date_t.fromisoformat(raw_as_of) if raw_as_of else None
+    asof_clause = f" AND date <= '{as_of.isoformat()}'" if as_of else ""
+
     ph = ",".join(f"'{t}'" for t in sorted(candidates))
     ohlcv_df = await query_iceberg_df(
         "stocks.ohlcv",
@@ -300,7 +309,7 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
         "  ROW_NUMBER() OVER ("
         "    PARTITION BY ticker ORDER BY date DESC"
         "  ) AS rn FROM ohlcv "
-        f"  WHERE ticker IN ({ph}) AND close IS NOT NULL"
+        f"  WHERE ticker IN ({ph}) AND close IS NOT NULL{asof_clause}"
         f") WHERE rn <= {_TRAILING_BARS} "
         "ORDER BY ticker, date",
     )
@@ -322,7 +331,8 @@ async def _run(payload: dict[str, Any]) -> dict[str, Any]:
         nifty_df = await query_iceberg_df(
             "stocks.ohlcv",
             "SELECT date, close FROM ohlcv WHERE ticker = '^NSEI' "
-            "AND close IS NOT NULL ORDER BY date DESC LIMIT 300",
+            f"AND close IS NOT NULL{asof_clause} "
+            "ORDER BY date DESC LIMIT 300",
         )
         _nifty_close = nifty_df.sort_values("date")["close"].astype(float)
         nifty_ctx = compute_nifty_market_context(_nifty_close)

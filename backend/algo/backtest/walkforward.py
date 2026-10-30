@@ -623,6 +623,32 @@ async def run_walkforward_job(
             regime_stratified_active,
         )
 
+        # ASETPLTFRM-433's warmup filter (job.py's single-backtest
+        # path) never ran here — walk-forward called run_backtest
+        # directly per window with the raw, unfiltered universe,
+        # letting tickers still mid-warmup (e.g. a recent IPO
+        # without 200 days of OHLCV history yet) slip in and
+        # KeyError on every factor-sourced feature
+        # (distance_from_sma200, sma200_slope, adx_14, ...) a
+        # strategy references. Fetch first-bar dates ONCE (not per
+        # window — CLAUDE.md §4.1 #1, batch reads) and re-filter
+        # per window's own test_start, since a ticker can graduate
+        # into eligibility partway through a multi-year range.
+        from backend.algo.backtest.universe import (
+            _load_ticker_first_bars,
+            filter_warmup_eligible,
+        )
+        from backend.algo.strategy.feature_warmup import (
+            compute_strategy_warmup_days,
+        )
+
+        warmup_days = compute_strategy_warmup_days(
+            strategy.root.model_dump(by_alias=True),
+        )
+        first_bars = (
+            _load_ticker_first_bars(universe) if warmup_days > 0 else {}
+        )
+
         for win in windows:
             # Create a pending child run row
             async with _session_factory() as session:
@@ -668,6 +694,24 @@ async def run_walkforward_job(
                     )
                     await session.commit()
 
+                window_universe = filter_warmup_eligible(
+                    universe,
+                    period_start=win.test_start,
+                    warmup_days=warmup_days,
+                    first_bars=first_bars,
+                )
+                _logger.info(
+                    "walk-forward %s window %d: warmup_filter "
+                    "dropped %d tickers (warmup=%d bars, "
+                    "test_start=%s) → %d remain",
+                    walkforward_run_id,
+                    win.index,
+                    len(universe) - len(window_universe),
+                    warmup_days,
+                    win.test_start.isoformat(),
+                    len(window_universe),
+                )
+
                 request = BacktestRequest(
                     strategy_id=config.strategy_id,
                     period_start=win.test_start,
@@ -679,7 +723,7 @@ async def run_walkforward_job(
                     strategy=strategy,
                     request=request,
                     user_id=user_id,
-                    universe=universe,
+                    universe=window_universe,
                 )
                 # Stamp child_run_id so the summary matches the row
                 summary = summary.model_copy(

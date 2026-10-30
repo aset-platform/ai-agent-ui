@@ -168,7 +168,12 @@ class TestAllowListPicksUpMidRunEdits:
             "backend.algo.live.daily_bar_warmup.preload_daily_bars",
             return_value=lazy_payload,
         ), patch(
-            "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
+            # Task 1 (ASETPLTFRM-383 OR-trigger redesign) removed the
+            # 14:20 eval-time gate this used to disable. The gate this
+            # test needs open is now the 09:30 BUY floor -- otherwise
+            # a real-wall-clock run before 09:30 IST would defer the
+            # BUY before ever reaching the allow-list gate under test.
+            "backend.algo.live.runtime._MIN_BUY_TIME_IST",
             _time(0, 0),
         ), patch.object(
             runtime._evaluator, "eval_node",
@@ -204,7 +209,10 @@ class TestAllowListPicksUpMidRunEdits:
         submit_spy = AsyncMock(return_value=1)
 
         with patch(
-            "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
+            # See test_ticker_added_mid_run_is_no_longer_rejected for
+            # why this is now the 09:30 BUY floor, not the removed
+            # eval-time gate.
+            "backend.algo.live.runtime._MIN_BUY_TIME_IST",
             _time(0, 0),
         ), patch.object(
             runtime._evaluator, "eval_node",
@@ -242,7 +250,7 @@ class TestAllowListPicksUpMidRunEdits:
             "backend.algo.live.daily_bar_warmup.preload_daily_bars",
             return_value=lazy_payload,
         ), patch(
-            "backend.algo.live.runtime._MIN_EVAL_TIME_IST",
+            "backend.algo.live.runtime._MIN_BUY_TIME_IST",
             _time(0, 0),
         ), patch.object(
             runtime._evaluator, "eval_node",

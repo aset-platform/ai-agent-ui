@@ -211,22 +211,6 @@ def _seed_bar_history(runtime, *, ticker: str, close: float) -> None:
     ]
 
 
-@pytest.fixture(autouse=True)
-def _force_eval_gate_open(monkeypatch):
-    """Bypass the daily-cadence eval-time gate (default 14:30 IST).
-    Tests must trigger the stop-loss path regardless of wall-clock
-    time; patch the module-level cutoff to ``00:00``."""
-    import datetime as _dt
-
-    from backend.algo.live import runtime as _runtime_mod
-
-    monkeypatch.setattr(
-        _runtime_mod,
-        "_MIN_EVAL_TIME_IST",
-        _dt.time(0, 0),
-    )
-
-
 @pytest.mark.asyncio
 async def test_live_stop_loss_calls_kite_place_order():
     """Open position breaches stop_loss_pct=5 → _on_bar_close
